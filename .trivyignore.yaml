@@ -1,0 +1,9 @@
+# Trivy allowlist. Every entry needs a statement (why it's acceptable) and an expiry
+# date, so accepted risks get reviewed again.
+# Docs: https://trivy.dev/latest/docs/configuration/filtering/#trivyignoreyaml
+vulnerabilities: []
+#  - id: CVE-0000-00000
+#    paths: ["usr/local/lib/python3.14/site-packages/example"]
+#    statement: Not reachable: we never call the affected API.
+#    expired_at: 2027-01-31
+misconfigurations: []

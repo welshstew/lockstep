@@ -1,0 +1,3 @@
+vaults:
+  - name: Production
+    url: https://vault.example.com

@@ -1,0 +1,130 @@
+{{- include "lockstep.validate" . }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "lockstep.fullname" . }}
+  labels:
+    {{- include "lockstep.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "lockstep.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "lockstep.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "lockstep.serviceAccountName" . }}
+      automountServiceAccountToken: {{ include "lockstep.automountToken" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: lockstep
+          image: {{ include "lockstep.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            {{- with .Values.publicUrl }}
+            - name: LOCKSTEP_PUBLIC_URL
+              value: {{ . | quote }}
+            {{- end }}
+            - name: LOCKSTEP_SESSION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "lockstep.sessionSecretName" . }}
+                  key: {{ include "lockstep.sessionSecretKey" . }}
+            - name: LOCKSTEP_COOKIE_SECURE
+              value: {{ .Values.session.cookieSecure | quote }}
+            - name: LOCKSTEP_SESSION_TTL_SECONDS
+              value: {{ .Values.session.ttlSeconds | quote }}
+            - name: LOCKSTEP_PRESET_CONNECTIONS
+              value: {{ include "lockstep.presets" . | quote }}
+            - name: LOCKSTEP_ALLOW_CUSTOM_CONNECTIONS
+              value: {{ .Values.allowCustomConnections | quote }}
+            - name: LOCKSTEP_CUSTOM_URL_PATTERNS
+              value: {{ toJson .Values.customUrlPatterns | quote }}
+            - name: LOCKSTEP_MAX_TREE_SECRETS
+              value: {{ .Values.maxTreeSecrets | quote }}
+            - name: LOCKSTEP_VAULT_TLS_VERIFY
+              value: {{ .Values.vaultTls.verify | quote }}
+            {{- if or .Values.vaultTls.caBundle.configMap .Values.vaultTls.caBundle.secret }}
+            - name: LOCKSTEP_VAULT_CA_BUNDLE
+              value: /etc/lockstep/ca/{{ .Values.vaultTls.caBundle.key }}
+            {{- end }}
+            - name: LOCKSTEP_K8S_AUTH_ENABLED
+              value: {{ .Values.kubernetesAuth.enabled | quote }}
+            - name: LOCKSTEP_K8S_AUTH_ROLES
+              value: {{ toJson .Values.kubernetesAuth.roles | quote }}
+            - name: LOCKSTEP_K8S_AUTH_MOUNT
+              value: {{ .Values.kubernetesAuth.mount | quote }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          startupProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 20
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            {{- if or .Values.vaultTls.caBundle.configMap .Values.vaultTls.caBundle.secret }}
+            - name: vault-ca
+              mountPath: /etc/lockstep/ca
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}
+        {{- with .Values.vaultTls.caBundle }}
+        {{- if .configMap }}
+        - name: vault-ca
+          configMap: {name: {{ .configMap }}}
+        {{- else if .secret }}
+        - name: vault-ca
+          secret: {secretName: {{ .secret }}}
+        {{- end }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

@@ -1,0 +1,14 @@
+# Values for installing the chart into the dev k3s cluster (make helm-test).
+image:
+  repository: localhost/lockstep   # imported into k3s by make helm-test
+  tag: "0.1.0"
+  pullPolicy: Never
+replicaCount: 2
+vaults:
+  - {name: Vault A, url: http://vault-a:8200}
+  - {name: Vault B, url: http://vault-b:8200}
+session:
+  cookieSecure: false
+kubernetesAuth:
+  enabled: true
+  roles: [lockstep-helm]

@@ -1,0 +1,35 @@
+# Dev-only Dex config. Never use these credentials outside local development.
+issuer: http://dex.localhost:5556/dex
+
+storage:
+  type: memory
+
+web:
+  http: 0.0.0.0:5556
+
+oauth2:
+  skipApprovalScreen: true
+
+staticClients:
+  - id: vault
+    secret: vault-dev-secret
+    name: Vault
+    redirectURIs:
+      # Lockstep's own callback (redirect login flow)
+      - http://localhost:8080/api/auth/oidc/callback
+      # Vault UI and CLI callbacks, handy for manual testing
+      - http://localhost:8200/ui/vault/auth/oidc/oidc/callback
+      - http://localhost:8201/ui/vault/auth/oidc/oidc/callback
+      - http://localhost:8250/oidc/callback
+
+enablePasswordDB: true
+staticPasswords:
+  # password: "password"
+  - email: alice@example.com
+    hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"
+    username: alice
+    userID: 08a8684b-db88-4b73-90a9-3cd1661f5466
+  - email: bob@example.com
+    hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"
+    username: bob
+    userID: 41331323-6f44-45e6-b3b9-2c4b60c02be5

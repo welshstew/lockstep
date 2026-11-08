@@ -1,0 +1,122 @@
+# Public demo of Lockstep: two throwaway dev-mode Vaults, Dex for OIDC sign-in, and the app,
+# behind Caddy (automatic HTTPS). Only Caddy publishes ports (80, 443).
+#
+# Deployed by scripts/deploy-demo.sh, which copies the repository to the server, generates
+# .env (secrets) and dex.yaml on first run, and starts this stack. Demo data is restored
+# every RESEED_INTERVAL seconds, so anything visitors change is temporary.
+name: lockstep-demo
+
+x-common: &common
+  restart: unless-stopped
+  security_opt: [no-new-privileges:true]
+  logging:
+    driver: json-file
+    options: {max-size: 10m, max-file: "3"}
+
+x-vault: &vault
+  <<: *common
+  image: docker.io/hashicorp/vault:1.21.4
+  cap_add: [IPC_LOCK]
+  mem_limit: 384m
+  healthcheck:
+    test: ["CMD", "vault", "status", "-address=http://127.0.0.1:8200"]
+    interval: 5s
+    timeout: 3s
+    retries: 20
+
+services:
+  caddy:
+    <<: *common
+    # Red Hat Hardened Image, Caddy v2.11 (multi-arch digest)
+    image: registry.access.redhat.com/hi/caddy:2@sha256:a6e3943eadee8926586733bb5646c2ea57189b4d0a88ac0a1d7c8d86d8f5c00b
+    environment:
+      DEMO_HOST: ${DEMO_HOST:?}
+      LOGIN_HOST: ${LOGIN_HOST:?}
+      APEX_HOST: ${APEX_HOST:?}
+    ports: ["80:80", "443:443", "443:443/udp"]
+    volumes:
+      - ./deploy/demo/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    mem_limit: 128m
+    networks:
+      default:
+        # The Vaults fetch Dex's discovery document from its public HTTPS address, so
+        # inside the network that name has to reach Caddy too.
+        aliases: ["${LOGIN_HOST:?}"]
+
+  vault-a:
+    <<: *vault
+    environment:
+      SKIP_SETCAP: "true"
+      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+      VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_A_TOKEN:?}
+
+  vault-b:
+    <<: *vault
+    environment:
+      SKIP_SETCAP: "true"
+      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+      VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_B_TOKEN:?}
+
+  dex:
+    <<: *common
+    image: registry.access.redhat.com/hi/dex@sha256:30e0fa914666c5044f7cae8a3e1128f358be499a69c4638ef1ad717b369c2c11
+    user: "65532"
+    command: ["serve", "/etc/dex/config.yaml"]
+    volumes:
+      - ./dex.yaml:/etc/dex/config.yaml:ro   # rendered from deploy/demo/dex.yaml.tmpl
+    mem_limit: 128m
+
+  # Configures both Vaults, then restores the demo data every RESEED_INTERVAL seconds.
+  seed:
+    <<: *common
+    build: ./dev/seed
+    environment:
+      VAULT_A_ADDR: http://vault-a:8200
+      VAULT_A_TOKEN: ${VAULT_A_TOKEN:?}
+      VAULT_B_ADDR: http://vault-b:8200
+      VAULT_B_TOKEN: ${VAULT_B_TOKEN:?}
+      OIDC_DISCOVERY_URL: https://${LOGIN_HOST:?}/dex
+      OIDC_CLIENT_ID: vault
+      OIDC_CLIENT_SECRET: ${DEX_CLIENT_SECRET:?}
+      OIDC_WAIT_ATTEMPTS: "150"   # up to 5 min while Caddy gets its first certificates
+      TOOL_PUBLIC_URL: https://${DEMO_HOST:?}
+      RESEED_INTERVAL: ${RESEED_INTERVAL:-3600}
+    mem_limit: 256m
+    depends_on:
+      vault-a: {condition: service_healthy}
+      vault-b: {condition: service_healthy}
+      caddy: {condition: service_started}
+      dex: {condition: service_started}
+
+  app:
+    <<: *common
+    build: .
+    read_only: true
+    tmpfs: [/tmp]
+    environment:
+      LOCKSTEP_PUBLIC_URL: https://${DEMO_HOST:?}
+      LOCKSTEP_SESSION_KEY: ${LOCKSTEP_SESSION_KEY:?}
+      LOCKSTEP_COOKIE_SECURE: "true"
+      # Visitors can only use the two demo Vaults, never point the server at other hosts.
+      LOCKSTEP_ALLOW_CUSTOM_CONNECTIONS: "false"
+      LOCKSTEP_PRESET_CONNECTIONS: >-
+        [{"name":"Vault A","url":"http://vault-a:8200"},
+         {"name":"Vault B","url":"http://vault-b:8200"}]
+      LOCKSTEP_PROFILES: >-
+        [{"name": "Prod ↔ staging services",
+          "description": "services/<name>/prod in Vault A against services/<name>/staging in Vault B; hosts differ by design",
+          "left_mount": "app-config", "right_mount": "app-config",
+          "rules": {"mappings": [{"left": "services/*/prod/**", "right": "services/*/staging/**"}],
+                    "ignore_keys": [{"key": "host", "path": "services/**"}],
+                    "ignore_paths": ["legacy/**", "retired/**"]}}]
+      LOCKSTEP_DEMO_BANNER: ${DEMO_BANNER:-Public demo with throwaway data, reset every hour. Sign in with userpass alice / bob / carol (password "password"), or OIDC as alice@example.com.}
+    mem_limit: 384m
+    depends_on:
+      vault-a: {condition: service_healthy}
+      vault-b: {condition: service_healthy}
+
+volumes:
+  caddy-data:
+  caddy-config:

@@ -1,0 +1,39 @@
+image:
+  repository: registry.example.com/lockstep
+  digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+publicUrl: https://lockstep.example.com
+replicaCount: 3
+vaults:
+  - {name: Production, url: https://vault.prod.example.com, browserUrl: https://vault.prod.example.com}
+  - {name: Staging, url: https://vault.staging.example.com, namespace: team-a}
+allowCustomConnections: true
+customUrlPatterns: ['https://vault\.[a-z]+\.example\.com']
+vaultTls:
+  caBundle: {configMap: corporate-ca, key: ca.crt}
+kubernetesAuth:
+  enabled: true
+  roles: [lockstep-read]
+serviceAccount:
+  annotations: {example.com/owner: platform}
+extraEnv:
+  - {name: TZ, value: UTC}
+ingress:
+  enabled: true
+  className: nginx
+  hosts:
+    - host: lockstep.example.com
+      paths: [{path: /, pathType: Prefix}]
+  tls:
+    - {secretName: lockstep-tls, hosts: [lockstep.example.com]}
+networkPolicy:
+  enabled: true
+  ingressFrom:
+    - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ingress-nginx}}
+  vaultEgress:
+    - to: [{ipBlock: {cidr: 10.0.0.0/8}}]
+      ports: [{port: 8200, protocol: TCP}]
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: ScheduleAnyway
+    labelSelector: {matchLabels: {app.kubernetes.io/name: lockstep}}

@@ -1,0 +1,3 @@
+# pip-audit allowlist: one vulnerability ID per line, then a reason and a review date.
+# Example:
+# GHSA-xxxx-xxxx-xxxx  not reachable: we never call the affected API (review 2027-01-31)

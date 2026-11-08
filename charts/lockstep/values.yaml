@@ -1,0 +1,124 @@
+# Lockstep Helm chart values. Every setting maps to a LOCKSTEP_* environment variable;
+# see docs/configuration.md for details.
+
+image:
+  repository: lockstep              # set to where you publish the image, e.g. ghcr.io/<you>/lockstep (build it from github.com/welshstew/lockstep)
+  tag: ""                           # defaults to the chart's appVersion
+  digest: ""                        # optional: sha256:… (takes precedence over tag)
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+replicaCount: 2
+
+nameOverride: ""
+fullnameOverride: ""
+
+# The URL users open (behind the ingress). Required for OIDC sign-in: the callback is
+# <publicUrl>/api/auth/oidc/callback and must be in the Vault role's allowed_redirect_uris.
+publicUrl: ""
+
+session:
+  # Encrypts the session cookie, which holds Vault tokens. All replicas must share it.
+  # Either reference your own Secret, or let the chart generate one; a generated key is
+  # kept across upgrades, and removing the release removes it.
+  existingSecret: ""
+  existingSecretKey: session-key
+  ttlSeconds: 28800
+  cookieSecure: true                # keep true behind TLS
+
+# Vaults offered in the UI. `url` is how the pods reach Vault (never shown to browsers);
+# `browserUrl` is only for display.
+vaults: []
+#  - name: Production
+#    url: https://vault.prod.example.com
+#    browserUrl: https://vault.prod.example.com
+#    namespace: ""                   # Vault Enterprise namespace (optional)
+
+allowCustomConnections: false       # let users type any Vault address (SSRF risk; see docs)
+customUrlPatterns: []               # regexes a custom address must fully match
+maxTreeSecrets: 5000
+
+vaultTls:
+  verify: true
+  # A PEM CA bundle for Vaults with a private CA, from a ConfigMap or Secret you manage.
+  caBundle:
+    configMap: ""
+    secret: ""
+    key: ca.crt
+
+# Sign in to Vault as this pod's service account (Vault's kubernetes auth method).
+# Anyone who can open Lockstep can then act with that account's Vault access:
+# keep it off unless you mean it, and pin the roles. See docs/authentication.md.
+kubernetesAuth:
+  enabled: false
+  roles: []                         # Vault role names users may pick; empty = any
+  mount: kubernetes
+
+serviceAccount:
+  create: true
+  name: ""                          # defaults to the release's full name
+  annotations: {}
+  # Mount the token only when Kubernetes auth needs it ("auto"), or force true/false.
+  automountToken: auto
+
+extraEnv: []                        # additional env vars (name/value or valueFrom)
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  privileged: false
+  capabilities:
+    drop: [ALL]
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    memory: 512Mi
+
+service:
+  type: ClusterIP
+  port: 80
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: lockstep.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+  #  - secretName: lockstep-tls
+  #    hosts: [lockstep.example.com]
+
+podDisruptionBudget:
+  enabled: true                     # only created when replicaCount > 1
+  minAvailable: 1
+
+# Restrict traffic to and from the pods. Egress must allow DNS and your Vaults.
+networkPolicy:
+  enabled: false
+  ingressFrom: []                   # peers allowed to reach the pods (e.g. the ingress controller)
+  vaultEgress: []                   # egress rules to your Vaults (ipBlock/namespaceSelector + ports)
+  allowDns: true
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []
+priorityClassName: ""

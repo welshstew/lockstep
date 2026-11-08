@@ -1,0 +1,12 @@
+# gitleaks config: default rules, plus an allowlist for dev-only fixtures that are
+# meant to be public (dev Vault root tokens, Dex dev client secret, seeded test
+# passwords). Keep allowlist entries narrow: match exact values, not whole files.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Dev seed fixtures: fake values used to test diffs, never real credentials"
+regexTarget = "match"
+regexes = [
+  '''ak_live_1234567890''',
+]

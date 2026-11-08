@@ -1,0 +1,190 @@
+# Local development stack for Lockstep.
+#   podman compose up --build
+# Tool:     http://localhost:8080
+# Vault A:  http://localhost:8200  (root token: root-a)
+# Vault B:  http://localhost:8201  (root token: root-b)
+# Dex:      http://dex.localhost:5556/dex  (alice@example.com / password)
+name: lockstep
+
+
+x-vault: &vault
+  # No Red Hat Hardened Image exists for Vault (or OpenBao). Dev stack only: in Kubernetes
+  # the tool connects to your existing Vaults.
+  image: docker.io/hashicorp/vault:1.21.4
+  cap_add: [IPC_LOCK]
+  environment: &vault-env
+    SKIP_SETCAP: "true"
+    VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+  healthcheck:
+    test: ["CMD", "vault", "status", "-address=http://127.0.0.1:8200"]
+    interval: 3s
+    timeout: 3s
+    retries: 20
+
+services:
+  vault-a:
+    <<: *vault
+    environment:
+      <<: *vault-env
+      VAULT_DEV_ROOT_TOKEN_ID: root-a
+    ports: ["8200:8200"]
+
+  vault-b:
+    <<: *vault
+    environment:
+      <<: *vault-env
+      VAULT_DEV_ROOT_TOKEN_ID: root-b
+    ports: ["8201:8200"]
+
+  # OIDC identity provider used by both Vaults' oidc auth method.
+  # The issuer hostname must resolve both from the browser (*.localhost -> 127.0.0.1)
+  # and from inside the network (network alias -> dex container), on the same port.
+  dex:
+    # Red Hat Hardened Image (distroless, entrypoint /usr/bin/dex), Dex v2.46.1
+    build: ./dev/dex   # pinned hi/dex image + dev/dex/config.yaml
+    command: ["serve", "/etc/dex/config.yaml"]
+    ports: ["5556:5556"]
+    networks:
+      default:
+        aliases: [dex.localhost]
+
+  # One-shot: configures mounts, policies, auth methods and test data in both Vaults.
+  seed:
+    build: ./dev/seed
+    environment:
+      VAULT_A_ADDR: http://vault-a:8200
+      VAULT_A_TOKEN: root-a
+      VAULT_B_ADDR: http://vault-b:8200
+      VAULT_B_TOKEN: root-b
+      OIDC_DISCOVERY_URL: http://dex.localhost:5556/dex
+      OIDC_CLIENT_ID: vault
+      OIDC_CLIENT_SECRET: vault-dev-secret
+      TOOL_PUBLIC_URL: http://localhost:8080
+    depends_on:
+      vault-a: {condition: service_healthy}
+      vault-b: {condition: service_healthy}
+      dex: {condition: service_started}
+    restart: "no"
+
+  app:
+    build: .
+    environment:
+      LOCKSTEP_PUBLIC_URL: http://localhost:8080
+      # Dev only. In Kubernetes this comes from a Secret.
+      LOCKSTEP_SESSION_KEY: dev-only-session-key-change-me-0123456789abcdef
+      LOCKSTEP_COOKIE_SECURE: "false"
+      # Pre-defined connections offered in the UI (JSON). Users may also add their own.
+      LOCKSTEP_PRESET_CONNECTIONS: >-
+        [{"name":"Vault A","url":"http://vault-a:8200","browser_url":"http://localhost:8200"},
+         {"name":"Vault B","url":"http://vault-b:8200","browser_url":"http://localhost:8201"}]
+      # A shared comparison profile, offered read-only to everyone.
+      LOCKSTEP_PROFILES: >-
+        [{"name": "Prod ↔ staging services",
+          "description": "services/<name>/prod in Vault A against services/<name>/staging in Vault B; hosts differ by design",
+          "left_mount": "app-config", "right_mount": "app-config",
+          "rules": {"mappings": [{"left": "services/*/prod/**", "right": "services/*/staging/**"}],
+                    "ignore_keys": [{"key": "host", "path": "services/**"}],
+                    "ignore_paths": ["legacy/**", "retired/**"]}}]
+      # Kubernetes auth: only usable when the token file exists, i.e. with --profile k8s.
+      LOCKSTEP_K8S_AUTH_ENABLED: "true"
+    volumes:
+      # Same path a pod's service account token is mounted at. Empty without the k8s profile.
+      - k8s-sa:/var/run/secrets/kubernetes.io/serviceaccount:ro
+    ports: ["8080:8080"]
+    networks:
+      default:
+        # Browsers in the compose network use this name: Chromium forces HTTPS for a bare
+        # "app" host, because .app is an HSTS-preloaded TLD.
+        aliases: [lockstep]
+    depends_on:
+      seed: {condition: service_completed_successfully}
+
+  # Backend test suite against the seeded Vaults:
+  #   podman compose --profile test run --rm --build tests
+  tests:
+    profiles: [test]
+    build: {context: ., target: test}
+    environment:
+      VAULT_A_ADDR: http://vault-a:8200
+      VAULT_B_ADDR: http://vault-b:8200
+      LOCKSTEP_K8S_AUTH_ENABLED: "true"
+    volumes:
+      - k8s-sa:/var/run/secrets/kubernetes.io/serviceaccount:ro
+    depends_on:
+      seed: {condition: service_completed_successfully}
+
+  # README screenshots, generated from the running app: make screenshots
+  screenshots:
+    profiles: [docs]
+    build: ./dev/e2e
+    command: ["python", "/e2e/screenshots.py"]
+    environment:
+      APP_URL: http://lockstep:8080
+      OUT_DIR: /out
+    volumes:
+      - ./docs/images:/out:Z
+    depends_on:
+      app: {condition: service_started}
+
+  # Browser end-to-end tests: make e2e (results in reports/e2e). Runs in CI too, so no
+  # bind mounts and no published ports are needed.
+  e2e:
+    profiles: [e2e]
+    build: ./dev/e2e
+    environment:
+      APP_URL: http://localhost:8080          # mapped to the app by Chromium host rules
+      HOST_RULES: "MAP dex.localhost dex, MAP localhost lockstep"
+      VAULT_A_ADDR: http://vault-a:8200
+      VAULT_B_ADDR: http://vault-b:8200
+    depends_on:
+      app: {condition: service_healthy}
+      dex: {condition: service_started}
+
+  # ---- Kubernetes auth (optional): podman compose --profile k8s up -d
+  # A real k3s API server, so Vault's kubernetes auth does genuine TokenReview calls.
+  k3s:
+    profiles: [k8s]
+    image: docker.io/rancher/k3s:v1.37.2-k3s1@sha256:21ea6e0fac4e3930c2ce8aa40ddd41a8b18cb3e9a0222c030dc005e7e88c4332
+    privileged: true
+    command: ["server", "--disable=traefik,servicelb,metrics-server,local-storage", "--tls-san=k3s",
+              "--write-kubeconfig-mode=644", "--write-kubeconfig=/k3s-out/kubeconfig.yaml"]
+    tmpfs: [/run, /var/run]
+    volumes: [k3s-out:/k3s-out]
+    healthcheck:
+      test: ["CMD", "kubectl", "get", "--raw", "/readyz"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+
+  k8s-setup:
+    profiles: [k8s]
+    image: docker.io/rancher/k3s:v1.37.2-k3s1@sha256:21ea6e0fac4e3930c2ce8aa40ddd41a8b18cb3e9a0222c030dc005e7e88c4332
+    entrypoint: ["sh", "/setup.sh"]
+    volumes:
+      - ./dev/k8s/setup.sh:/setup.sh:ro,Z
+      - k3s-out:/k3s-out:ro
+      - k8s-sa:/out/sa
+      - k8s-priv:/out/priv
+    depends_on:
+      k3s: {condition: service_healthy}
+    restart: "no"
+
+  k8s-vault:
+    profiles: [k8s]
+    build: ./dev/seed
+    entrypoint: ["python", "/seed/seed_k8s.py"]
+    environment:
+      VAULT_A_ADDR: http://vault-a:8200
+      VAULT_A_TOKEN: root-a
+      VAULT_B_ADDR: http://vault-b:8200
+      VAULT_B_TOKEN: root-b
+    volumes: [k8s-priv:/k8s:ro]
+    depends_on:
+      k8s-setup: {condition: service_completed_successfully}
+      seed: {condition: service_completed_successfully}
+    restart: "no"
+
+volumes:
+  k3s-out:
+  k8s-sa:
+  k8s-priv:

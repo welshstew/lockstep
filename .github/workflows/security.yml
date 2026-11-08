@@ -1,0 +1,100 @@
+# Security scan on every PR (and on main). Runs the same scripts/scan.sh as `make scan`,
+# with natively installed tools, because bind mounts into sibling containers don't work
+# from inside a runner job.
+# Fails on: unsigned Red Hat base images, HIGH/CRITICAL fixable CVEs (Grype, Trivy, npm prod), any fixable pip-audit vuln,
+# HIGH bandit findings, HIGH/CRITICAL misconfigurations, any gitleaks finding.
+# Reports (JSON, SARIF, table, summary.md) are uploaded as the "security-reports" artifact,
+# and the SARIF files to GitHub code scanning. (.gitea/workflows/security.yml is the Gitea copy.)
+name: security-scan
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write   # SARIF upload to code scanning
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # gitleaks scans the full history
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install scanners (pinned)
+        run: |
+          set -euo pipefail
+          source scan/versions.env
+          # Copy the binaries out of the digest-pinned images that local runs use.
+          for spec in "$TRIVY_IMG:/usr/local/bin/trivy" "$GITLEAKS_IMG:/usr/bin/gitleaks" \
+                      "$GRYPE_IMG:/grype" "$COSIGN_IMG:/usr/bin/cosign" \
+                      "$HELM_IMG:/usr/bin/helm" "$KUBECONFORM_IMG:/kubeconform"; do
+            img=${spec%:/*}; bin=/${spec##*:/}
+            cid=$(docker create "$img")
+            docker cp "$cid:$bin" /usr/local/bin/
+            docker rm "$cid" >/dev/null
+          done
+          python -m pip install --quiet "pip-audit==$PIP_AUDIT_VERSION" "bandit[sarif,toml]==$BANDIT_VERSION"
+          trivy --version | head -1; gitleaks version; helm version --short; kubeconform -v; grype version | head -2; cosign version | head -3; pip-audit --version; bandit --version | head -1
+
+      - name: Cache scanner DBs
+        uses: actions/cache@v4
+        with:
+          path: |
+            reports/.cache/trivy
+            reports/.cache/grype
+          key: scanner-db-${{ github.run_id }}
+          restore-keys: scanner-db-
+
+      - name: Scan
+        env:
+          SCAN_NATIVE: "1"
+          CONTAINER_ENGINE: docker
+        run: ./scripts/scan.sh
+
+      - name: Helm chart checks (lint, Kubernetes schemas, guards)
+        env:
+          SCAN_NATIVE: "1"
+        run: ./scripts/chart-check.sh
+
+      - name: Job summary
+        if: always()
+        run: |
+          if [ -f reports/summary.md ]; then
+            if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then cat reports/summary.md >> "$GITHUB_STEP_SUMMARY"; else cat reports/summary.md; fi
+          fi
+
+      - name: Upload reports and SARIF
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-reports
+          path: |
+            reports/*.sarif
+            reports/*.json
+            reports/*.txt
+            reports/summary.md
+          retention-days: 30
+
+      - name: Upload SARIF to code scanning
+        # Pull requests from forks get a read-only token, so they skip this step.
+        if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        uses: github/codeql-action/upload-sarif@v3
+        continue-on-error: true   # e.g. code scanning not enabled on the repository
+        with:
+          sarif_file: reports
+          category: lockstep-scan

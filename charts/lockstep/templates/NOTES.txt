@@ -1,0 +1,30 @@
+Lockstep {{ .Chart.AppVersion }} is installed as "{{ include "lockstep.fullname" . }}" in namespace {{ .Release.Namespace }}.
+
+{{- if .Values.ingress.enabled }}
+Open: {{ range .Values.ingress.hosts }}http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}/ {{ end }}
+{{- else }}
+Open it locally:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "lockstep.fullname" . }} 8080:{{ .Values.service.port }}
+  then browse to http://localhost:8080 (use session.cookieSecure=false for plain HTTP).
+{{- end }}
+
+Vaults offered: {{ len .Values.vaults }}{{ if .Values.allowCustomConnections }}, plus any address users type{{ end }}.
+{{- if not .Values.publicUrl }}
+
+NOTE: publicUrl is not set. OIDC sign-in needs it: set it to the URL users open, and add
+      <publicUrl>/api/auth/oidc/callback to the Vault role's allowed_redirect_uris.
+{{- end }}
+{{- if .Values.kubernetesAuth.enabled }}
+
+KUBERNETES AUTH IS ON: anyone who can open Lockstep can sign in to Vault as the service
+account "{{ .Release.Namespace }}/{{ include "lockstep.serviceAccountName" . }}"
+{{- if .Values.kubernetesAuth.roles }} with the roles: {{ join ", " .Values.kubernetesAuth.roles }}.
+{{- else }} with ANY Vault role bound to it (pin kubernetesAuth.roles).{{ end }}
+Bind it in Vault with bound_service_account_names={{ include "lockstep.serviceAccountName" . }} and
+bound_service_account_namespaces={{ .Release.Namespace }}.
+{{- end }}
+{{- if .Values.allowCustomConnections }}
+
+NOTE: allowCustomConnections is on: the pods will call any Vault address users type.
+      Restrict it with customUrlPatterns, or turn it off.
+{{- end }}

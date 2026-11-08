@@ -1,0 +1,54 @@
+# Browser end-to-end tests on every PR (and on main): the whole demo stack (two Vaults,
+# Dex, seed, app) plus Playwright, in an isolated compose project with no published ports.
+# Results (JUnit + screenshots of failures) are uploaded as the "e2e-reports" artifact.
+name: e2e
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    env:
+      COMPOSE_PROJECT_NAME: lockstep-ci-${{ github.run_id }}-${{ github.run_attempt }}
+      COMPOSE: docker compose -f compose.yaml -f compose.ci.yaml
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tooling
+        run: docker version --format 'docker {{.Server.Version}}' && docker compose version
+
+      - name: Start the demo stack
+        run: $COMPOSE up --build -d
+
+      - name: Run browser tests
+        run: |
+          $COMPOSE --profile e2e build e2e
+          $COMPOSE --profile e2e run --name "$COMPOSE_PROJECT_NAME-e2e" e2e
+
+      - name: Collect reports
+        if: always()
+        run: |
+          mkdir -p reports/e2e
+          docker cp "$COMPOSE_PROJECT_NAME-e2e:/reports/." reports/e2e/ || true
+          $COMPOSE logs --no-color app seed > reports/e2e/stack.log 2>&1 || true
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-reports
+          path: reports/e2e
+          retention-days: 14
+
+      - name: Tear down
+        if: always()
+        run: |
+          docker rm -f "$COMPOSE_PROJECT_NAME-e2e" >/dev/null 2>&1 || true
+          $COMPOSE --profile e2e down -v --remove-orphans

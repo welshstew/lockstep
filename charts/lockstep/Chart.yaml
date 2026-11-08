@@ -1,0 +1,13 @@
+apiVersion: v2
+name: lockstep
+description: Compare, inspect and sync KV secrets across HashiCorp Vault clusters.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.27.0-0"
+keywords: [vault, hashicorp-vault, secrets, kv, compare, sync, certificates]
+annotations:
+  artifacthub.io/license: MIT
+home: https://github.com/welshstew/lockstep
+sources:
+  - https://github.com/welshstew/lockstep

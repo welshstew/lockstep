@@ -1,0 +1,32 @@
+# Lockstep public demo. Hostnames come from the environment (see compose.yaml).
+(security) {
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		-Server
+	}
+}
+
+{$DEMO_HOST} {
+	import security
+	header {
+		Content-Security-Policy "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+		X-Frame-Options DENY
+	}
+	request_body {
+		max_size 4MB
+	}
+	reverse_proxy app:8080
+}
+
+{$LOGIN_HOST} {
+	import security
+	reverse_proxy dex:5556
+}
+
+{$APEX_HOST}, www.{$APEX_HOST} {
+	import security
+	redir https://{$DEMO_HOST}{uri} permanent
+}

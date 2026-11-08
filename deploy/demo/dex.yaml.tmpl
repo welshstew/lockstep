@@ -1,0 +1,18 @@
+# Public-demo Dex config. Dex doesn't expand ${VARS} itself, so scripts/deploy-demo.sh
+# renders this on the server (envsubst-style) with the real hosts and generated secret.
+issuer: https://${LOGIN_HOST}/dex
+storage: {type: memory}
+web: {http: 0.0.0.0:5556}
+oauth2: {skipApprovalScreen: true}
+staticClients:
+  - id: vault
+    secret: ${DEX_CLIENT_SECRET}
+    name: Vault
+    redirectURIs: ["https://${DEMO_HOST}/api/auth/oidc/callback"]
+enablePasswordDB: true
+staticPasswords:
+  # password: "password" (demo users, shown on the login page hint)
+  - email: alice@example.com
+    hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"
+    username: alice
+    userID: 08a8684b-db88-4b73-90a9-3cd1661f5466

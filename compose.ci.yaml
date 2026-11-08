@@ -1,0 +1,9 @@
+# CI override: no published ports, so parallel runs (and other services on the CI host)
+# can't clash. Everything talks over the compose network; the e2e browser maps
+# localhost/dex.localhost to the services itself.
+#   docker compose -f compose.yaml -f compose.ci.yaml -p lockstep-ci-<run> ...
+services:
+  vault-a: {ports: !reset []}
+  vault-b: {ports: !reset []}
+  dex: {ports: !reset []}
+  app: {ports: !reset []}
