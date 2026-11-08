@@ -93,7 +93,7 @@ jobs:
       - name: Upload SARIF to code scanning
         # Pull requests from forks get a read-only token, so they skip this step.
         if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         continue-on-error: true   # e.g. code scanning not enabled on the repository
         with:
           sarif_file: reports
