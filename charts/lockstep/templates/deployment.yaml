@@ -77,6 +77,10 @@ spec:
               value: {{ toJson .Values.kubernetesAuth.roles | quote }}
             - name: LOCKSTEP_K8S_AUTH_MOUNT
               value: {{ .Values.kubernetesAuth.mount | quote }}
+            {{- if .Values.profiles }}
+            - name: LOCKSTEP_PROFILES
+              value: {{ include "lockstep.profiles" . | quote }}
+            {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

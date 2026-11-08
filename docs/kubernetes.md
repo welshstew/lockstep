@@ -41,8 +41,9 @@ The [chart README](../charts/lockstep/README.md) has every value and more exampl
 4. **Private CA:** if your Vaults use one, put the bundle in a ConfigMap or Secret and set `vaultTls.caBundle`.
 5. **OIDC (optional):** set `publicUrl` and add `<publicUrl>/api/auth/oidc/callback` to the Vault role's `allowed_redirect_uris` ([details](authentication.md#oidc-redirect)).
 6. **Kubernetes auth (optional):** decide whether users may act as the release's service account. If so, set `kubernetesAuth.enabled: true`, pin `kubernetesAuth.roles`, and bind the roles in Vault to `<namespace>/<release name>` ([details](authentication.md#kubernetes-service-account)). Without it, the service account token isn't mounted at all.
-7. **Restrict access** to the UI (ingress authentication, `networkPolicy`). That matters most with Kubernetes auth on, since reaching the UI is enough to use the service account.
-8. **Session key:** the chart generates one and keeps it across upgrades. To manage it yourself (e.g. from an external secret store), set `session.existingSecret`. Every replica must use the same key; changing it signs everyone out.
+7. **Shared comparison profiles (optional):** list the team's path mappings and ignore rules in `profiles`, so everyone compares environments the same way.
+8. **Restrict access** to the UI (ingress authentication, `networkPolicy`). That matters most with Kubernetes auth on, since reaching the UI is enough to use the service account.
+9. **Session key:** the chart generates one and keeps it across upgrades. To manage it yourself (e.g. from an external secret store), set `session.existingSecret`. Every replica must use the same key; changing it signs everyone out.
 
 ## Audit log
 

@@ -55,6 +55,7 @@ vaults:
 | `serviceAccount.name` | release full name | |
 | `serviceAccount.annotations` | `{}` | |
 | `serviceAccount.automountToken` | `auto` | `auto` = only with Kubernetes auth; or `true`/`false` |
+| `profiles` | `[]` | Shared [comparison profiles](../../docs/usage.md#comparison-profiles), read-only for users: `name`, optional `description`, `leftMount`/`leftPrefix`/`rightMount`/`rightPrefix`, and `rules` (`mappings[].left/right`, `ignoreKeys[].key/path`, `ignorePaths[]`). See the example below |
 | `extraEnv` | `[]` | Extra container env vars |
 | `podAnnotations`, `podLabels` | `{}` | |
 | `podSecurityContext`, `securityContext` | hardened | See `values.yaml` |
@@ -99,6 +100,23 @@ kubectl -n lockstep create configmap corporate-ca --from-file=ca.crt=corporate-c
 ```yaml
 vaultTls:
   caBundle: {configMap: corporate-ca, key: ca.crt}
+```
+
+**Shared comparison profile:** pair each service's prod secrets in one Vault with its staging secrets in another, and ignore keys that differ by design. Users pick it from the profile list; the server checks the rules at startup, so a bad pattern stops the pod with a clear message in its log.
+
+```yaml
+profiles:
+  - name: Prod vs staging services
+    description: services/<name>/prod against services/<name>/staging
+    leftMount: app-config
+    rightMount: app-config
+    rules:
+      mappings:
+        - {left: "services/*/prod/**", right: "services/*/staging/**"}
+      ignoreKeys:
+        - {key: host, path: "services/**"}
+        - {key: "*_url"}
+      ignorePaths: ["legacy/**"]
 ```
 
 **Locked-down network:**

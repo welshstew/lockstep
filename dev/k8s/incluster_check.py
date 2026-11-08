@@ -1,6 +1,6 @@
 """Run inside the k3s cluster against the Helm release (make helm-test): signs in with
 Kubernetes auth as the chart's service account, checks that the replicas share sessions,
-runs a comparison, and checks the role allowlist. Exits non-zero on any failure."""
+runs a comparison (also with the chart's profile), and checks the role allowlist. Exits non-zero on any failure."""
 import urllib.error
 import http.cookiejar, json, urllib.request
 base = "http://lockstep.lockstep-helm.svc"
@@ -25,6 +25,13 @@ assert seen == {2}, "replicas don't share the session key"
 r = call("POST", "/api/compare", {"left": {"conn_id": a["id"], "mount": "app-config"}, "right": {"conn_id": b["id"], "mount": "app-config"}})
 print("compare summary:", r["summary"])
 assert r["summary"]["total"] > 0 and r["summary"]["error"] == 0
+profiles = call("GET", "/api/profiles")
+print("profiles from the chart:", [p["name"] for p in profiles])
+assert len(profiles) == 1 and profiles[0]["rules"]["mappings"], profiles
+r = call("POST", "/api/compare", {"left": {"conn_id": a["id"], "mount": "app-config"}, "right": {"conn_id": b["id"], "mount": "app-config"},
+                                  "rules": profiles[0]["rules"]})
+print("compare with profile:", r["summary"])
+assert r["summary"]["mapped"] > 0 and r["summary"]["ignored_paths"] > 0 and r["summary"]["error"] == 0
 try:
     call("POST", "/api/connections", {"preset_id": 0, "auth": {"method": "kubernetes", "role": "lockstep-admin"}})
     raise AssertionError("a role outside the allowlist was accepted")

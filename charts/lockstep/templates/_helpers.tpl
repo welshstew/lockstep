@@ -71,6 +71,25 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- toJson $out }}
 {{- end }}
 
+{{/* Shared comparison profiles as the JSON the app expects (camelCase values -> snake_case). */}}
+{{- define "lockstep.profiles" -}}
+{{- $out := list }}
+{{- range .Values.profiles }}
+{{- $p := dict "name" .name }}
+{{- with .description }}{{ $_ := set $p "description" . }}{{ end }}
+{{- with .leftMount }}{{ $_ := set $p "left_mount" . }}{{ end }}
+{{- with .leftPrefix }}{{ $_ := set $p "left_prefix" . }}{{ end }}
+{{- with .rightMount }}{{ $_ := set $p "right_mount" . }}{{ end }}
+{{- with .rightPrefix }}{{ $_ := set $p "right_prefix" . }}{{ end }}
+{{- $r := .rules | default dict }}
+{{- $keys := list }}
+{{- range $r.ignoreKeys }}{{ $keys = append $keys (dict "key" .key "path" (.path | default "**")) }}{{ end }}
+{{- $_ := set $p "rules" (dict "mappings" ($r.mappings | default list) "ignore_keys" $keys "ignore_paths" ($r.ignorePaths | default list)) }}
+{{- $out = append $out $p }}
+{{- end }}
+{{- toJson $out }}
+{{- end }}
+
 {{/* Sanity checks that would otherwise only show up at runtime. */}}
 {{- define "lockstep.validate" -}}
 {{- if and .Values.kubernetesAuth.enabled (eq (include "lockstep.automountToken" .) "false") }}
@@ -78,6 +97,11 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 {{- if and (not .Values.vaults) (not .Values.allowCustomConnections) }}
 {{- fail "configure at least one entry in vaults, or set allowCustomConnections: true" }}
+{{- end }}
+{{- $names := list }}
+{{- range .Values.profiles }}
+{{- if has .name $names }}{{ fail (printf "profiles: the name %q is used twice" .name) }}{{ end }}
+{{- $names = append $names .name }}
 {{- end }}
 {{- if and .Values.vaultTls.caBundle.configMap .Values.vaultTls.caBundle.secret }}
 {{- fail "vaultTls.caBundle: set configMap or secret, not both" }}

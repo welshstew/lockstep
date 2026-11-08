@@ -46,4 +46,19 @@ expect_fail "does not match pattern" -f "$CHART/ci/minimal-values.yaml" --set 'v
 expect_fail "additional properties" -f "$CHART/ci/minimal-values.yaml" --set typo=1
 expect_fail "not both" -f "$CHART/ci/minimal-values.yaml" --set vaultTls.caBundle.configMap=a --set vaultTls.caBundle.secret=b
 
+expect_fail "is used twice" -f "$CHART/ci/minimal-values.yaml" --set 'profiles[0].name=p' --set 'profiles[1].name=p'
+expect_fail "additional properties" -f "$CHART/ci/minimal-values.yaml" --set 'profiles[0].name=p' --set 'profiles[0].rules.ignore_paths[0]=x'
+expect_fail "missing property 'right'" -f "$CHART/ci/minimal-values.yaml" --set 'profiles[0].name=p' --set 'profiles[0].rules.mappings[0].left=a/*'
+
+# The rendered profiles must be exactly what the app parses (snake_case keys, defaults filled in).
+want='[{"left_mount":"app-config","name":"Prod vs staging","description":"services/<name>/prod against services/<name>/staging","right_mount":"app-config","rules":{"ignore_keys":[{"key":"host","path":"services/**"},{"key":"*_url","path":"**"}],"ignore_paths":["legacy/**"],"mappings":[{"left":"services/*/prod/**","right":"services/*/staging/**"}]}},{"name":"Whole mount, nothing ignored","rules":{"ignore_keys":[],"ignore_paths":[],"mappings":[]}}]'
+got=$(helm template t "$CHART" -f "$CHART/ci/full-values.yaml" --show-only templates/deployment.yaml \
+  | grep -A1 -- "- name: LOCKSTEP_PROFILES" | sed -n 's/^ *value: //p' \
+  | python3 -c 'import sys,json; print(json.dumps(json.loads(json.loads(sys.stdin.read())),sort_keys=True))')
+if [[ $got == "$(python3 -c 'import json,sys; print(json.dumps(json.loads(sys.argv[1]),sort_keys=True))' "$want")" ]]; then
+  echo "ok profiles render as the app expects"
+else
+  echo "!! LOCKSTEP_PROFILES rendered as: $got"; fail=1
+fi
+
 [[ $fail == 0 ]] && echo "CHART CHECK: PASS" || { echo "CHART CHECK: FAIL"; exit 1; }

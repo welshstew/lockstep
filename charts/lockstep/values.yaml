@@ -61,6 +61,22 @@ serviceAccount:
   # Mount the token only when Kubernetes auth needs it ("auto"), or force true/false.
   automountToken: auto
 
+# Shared comparison profiles, offered read-only to every user (see docs/usage.md).
+# Patterns are globs over secret paths: * = one path segment, ** = any depth.
+profiles: []
+#  - name: Prod vs staging services
+#    description: services/<name>/prod against services/<name>/staging
+#    leftMount: app-config           # optional: preselect each side's mount and prefix
+#    leftPrefix: ""
+#    rightMount: app-config
+#    rightPrefix: ""
+#    rules:
+#      mappings:                     # both sides need the same wildcards, in the same order
+#        - {left: "services/*/prod/**", right: "services/*/staging/**"}
+#      ignoreKeys:                   # key globs, optionally only under a path glob
+#        - {key: host, path: "services/**"}
+#      ignorePaths: ["legacy/**"]
+
 extraEnv: []                        # additional env vars (name/value or valueFrom)
 
 podAnnotations: {}

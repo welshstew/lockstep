@@ -2,8 +2,14 @@ apiVersion: v1
 kind: Pod
 metadata:
   name: {{ include "lockstep.fullname" . }}-test
+  # Not the app's selector labels: with them, the Service would route requests to this pod
+  # (and the NetworkPolicy would apply to it).
   labels:
-    {{- include "lockstep.labels" . | nindent 4 }}
+    helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
+    app.kubernetes.io/name: {{ include "lockstep.name" . }}-test
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: test
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
   annotations:
     helm.sh/hook: test
     helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
@@ -22,10 +28,22 @@ spec:
       command: ["python", "-c"]
       args:
         - |
-          import json, urllib.request
+          import json, time, urllib.request
           base = "http://{{ include "lockstep.fullname" . }}:{{ .Values.service.port }}"
-          assert urllib.request.urlopen(base + "/healthz", timeout=10).status == 200
-          cfg = json.load(urllib.request.urlopen(base + "/api/config", timeout=10))
+          def get(path):
+              # Right after an upgrade the Service's routing can lag the new pods by a few seconds.
+              for attempt in range(10):
+                  try:
+                      with urllib.request.urlopen(base + path, timeout=3) as r:
+                          assert r.status == 200, r.status
+                          return r.read()
+                  except Exception as e:
+                      if attempt == 9:
+                          raise
+                      print("retrying", path, "-", e)
+                      time.sleep(3)
+          get("/healthz")
+          cfg = json.loads(get("/api/config"))
           assert len(cfg["presets"]) == {{ len .Values.vaults }}, cfg
           assert cfg["k8s_auth"]["available"] is {{ if .Values.kubernetesAuth.enabled }}True{{ else }}False{{ end }}, cfg
           print("ok:", [p["name"] for p in cfg["presets"]])

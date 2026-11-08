@@ -15,6 +15,16 @@ kubernetesAuth:
   roles: [lockstep-read]
 serviceAccount:
   annotations: {example.com/owner: platform}
+profiles:
+  - name: Prod vs staging
+    description: services/<name>/prod against services/<name>/staging
+    leftMount: app-config
+    rightMount: app-config
+    rules:
+      mappings: [{left: "services/*/prod/**", right: "services/*/staging/**"}]
+      ignoreKeys: [{key: host, path: "services/**"}, {key: "*_url"}]
+      ignorePaths: ["legacy/**"]
+  - name: Whole mount, nothing ignored
 extraEnv:
   - {name: TZ, value: UTC}
 ingress:

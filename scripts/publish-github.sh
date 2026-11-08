@@ -23,7 +23,7 @@ if git grep -nI -E "100\.123\.|tailec806|/Users/" -- . ':!scripts/publish-github
 fi
 
 tree=$(git rev-parse "HEAD^{tree}")
-parent=()
+parent=()  # bash 3.2 (macOS) treats an empty array as unset under set -u, hence the ${x[@]+...} form below
 if git fetch -q "$REMOTE" main 2>/dev/null; then
   parent=(-p FETCH_HEAD)
   [[ $(git rev-parse "FETCH_HEAD^{tree}") == "$tree" ]] && { echo "GitHub already has this tree"; exit 0; }
@@ -33,6 +33,6 @@ else
 fi
 
 commit=$(GIT_AUTHOR_NAME="$NAME" GIT_AUTHOR_EMAIL="$EMAIL" GIT_COMMITTER_NAME="$NAME" GIT_COMMITTER_EMAIL="$EMAIL" \
-  git commit-tree "$tree" "${parent[@]}" -m "$MSG")
+  git commit-tree "$tree" ${parent[@]+"${parent[@]}"} -m "$MSG")
 echo "pushing $commit (tree of $(git rev-parse --short HEAD)) to $REMOTE main"
 git push "$REMOTE" "$commit:refs/heads/main"

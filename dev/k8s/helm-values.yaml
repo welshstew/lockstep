@@ -12,3 +12,11 @@ session:
 kubernetesAuth:
   enabled: true
   roles: [lockstep-helm]
+profiles:
+  - name: Prod vs staging services
+    leftMount: app-config
+    rightMount: app-config
+    rules:
+      mappings: [{left: "services/*/prod/**", right: "services/*/staging/**"}]
+      ignoreKeys: [{key: host, path: "services/**"}]
+      ignorePaths: ["legacy/**", "retired/**"]

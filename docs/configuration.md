@@ -20,7 +20,7 @@ All configuration comes from environment variables prefixed `LOCKSTEP_`. Lists a
 | `LOCKSTEP_CUSTOM_URL_PATTERNS` | `[]` | If set, a custom address must fully match one of these regular expressions (e.g. `https://vault\.[a-z]+\.example\.com(:8200)?`). Limits which hosts the server will call (SSRF) |
 | `LOCKSTEP_VAULT_TLS_VERIFY` | `true` | Verify Vault's TLS certificate. Don't turn off outside development |
 | `LOCKSTEP_VAULT_CA_BUNDLE` | — | Path to a PEM bundle, for Vaults with a private CA |
-| `LOCKSTEP_PROFILES` | `[]` | Shared [comparison profiles](usage.md#comparison-profiles), JSON: `[{"name", "description"?, "left_mount"?, "left_prefix"?, "right_mount"?, "right_prefix"?, "rules": {"mappings": [{"left", "right"}], "ignore_keys": [{"key", "path"?}], "ignore_paths": [...]}}]`. Validated at startup: a malformed profile stops the server with a clear message |
+| `LOCKSTEP_PROFILES` | `[]` | Shared [comparison profiles](usage.md#comparison-profiles), JSON: `[{"name", "description"?, "left_mount"?, "left_prefix"?, "right_mount"?, "right_prefix"?, "rules": {"mappings": [{"left", "right"}], "ignore_keys": [{"key", "path"?}], "ignore_paths": [...]}}]`. Validated at startup: a malformed profile stops the server with a clear message. With the Helm chart, set the `profiles` value instead ([example](../charts/lockstep/README.md#examples)) |
 | `LOCKSTEP_MAX_TREE_SECRETS` | `5000` | Per side, the most secrets a comparison will list before reporting it as truncated. Use a path prefix for bigger mounts |
 
 ## Kubernetes auth
