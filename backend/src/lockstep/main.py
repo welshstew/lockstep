@@ -8,7 +8,7 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .api import analyze, auth, compare, connections, expiry, sync
+from .api import analyze, auth, compare, connections, expiry, plans, sync
 from .config import Settings, get_settings
 from .session import SessionTooLarge
 
@@ -88,6 +88,7 @@ def create_app() -> FastAPI:
     app.include_router(analyze.router)
     app.include_router(auth.router)
     app.include_router(expiry.router)
+    app.include_router(plans.router)
 
     if settings.static_dir and Path(settings.static_dir).is_dir():
         app.mount("/", StaticFiles(directory=settings.static_dir, html=True), name="spa")

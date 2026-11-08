@@ -49,6 +49,18 @@ The web UI uses this API, and you can script against it too. Interactive documen
 | `POST /api/sync/preview` | `{"left","right","changes":[{"path","right_path"?,"direction":"left_to_right"\|"right_to_left","keys": [...]\|null,"expected_target_version","expected_source_version"}],"reveal"?}` returns a plan per secret |
 | `POST /api/sync/apply` | The same body plus `"confirm": true`; returns a result per secret and a summary |
 
+## Sync plans
+
+A plan is a signed JSON file (format `lockstep.sync-plan`, version 1) with no values. See [usage](usage.md#sync-plans).
+
+| Method & path | Purpose |
+|---|---|
+| `POST /api/plans` | The `/api/sync/preview` body (without `reveal`) plus optional `"note"` and `"profile"`; returns the signed plan. 409 if a change conflicts or can't be read, 400 if nothing would change |
+| `POST /api/plans/verify` | `{"plan"}`: returns `{"plan"}` if the signature is valid, else 400. No Vault access |
+| `POST /api/plans/report` | `{"plan"}`: the plan as Markdown |
+| `POST /api/plans/check` | `{"plan","left_conn_id","right_conn_id"}`: `{"status": "ready"\|"stale"\|"denied"\|"error","message","changes"}`. 409 if a connection isn't the Vault the plan names |
+| `POST /api/plans/apply` | The same body plus `"confirm": true`; like `/api/sync/apply` plus `"plan_id"`. 409, with nothing written, unless the check is `ready` |
+
 ## Value tools
 
 | Method & path | Purpose |

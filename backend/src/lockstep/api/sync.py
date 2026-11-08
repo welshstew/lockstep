@@ -241,7 +241,7 @@ async def evaluate(ctx: _Ctx, change: Change, reveal: bool) -> tuple[ChangePlan,
     return plan("ready", key_plans, can_write), new_data, actual
 
 
-def _audit(ctx: _Ctx, plan: ChangePlan, result: ChangeResult) -> None:
+def _audit(ctx: _Ctx, plan: ChangePlan, result: ChangeResult, plan_id: str | None = None) -> None:
     (sconn, *_), (tconn, *_) = ctx.ends(plan.direction)
     audit.info(json.dumps({
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -256,6 +256,7 @@ def _audit(ctx: _Ctx, plan: ChangePlan, result: ChangeResult) -> None:
                    "new_version": result.new_version},
         "keys": result.keys,
         "message": result.message,
+        **({"plan_id": plan_id} if plan_id else {}),
     }, sort_keys=True))
 
 
@@ -278,32 +279,37 @@ async def preview(body: SyncRequest, session: Sess, settings: Conf):
 async def apply(body: ApplyRequest, session: Sess, settings: Conf):
     if not body.confirm:
         raise HTTPException(400, detail={"message": "Applying changes requires confirm=true"})
-    results: list[ChangeResult] = []
     async with _Ctx(body, session, settings) as ctx:
-        for c in body.changes:  # one at a time: predictable order, simple audit trail
-            plan, new_data, cas = await evaluate(ctx, c, reveal=False)
-            (_, _, _, _), (tconn, tv, tmount, _) = ctx.ends(c.direction)
-            changed = [k.key for k in plan.keys if k.action != "unchanged"]
-            res = ChangeResult(path=c.path, right_path=c.right_path or c.path, direction=c.direction,
-                               target=f"{tconn.name} · {tmount}/{plan.target.path}",
-                               # "ready" becomes applied/conflict/denied/error once the write is attempted
-                               status="error" if plan.status == "ready" else plan.status,  # type: ignore[arg-type]
-                               old_version=plan.target.version, keys=changed,
-                               message="; ".join(plan.problems))
-            if plan.status == "ready":
-                try:
-                    res.new_version = await tv.kv_write(tmount, plan.target.path, new_data or {}, cas=cas)
-                    res.status = "applied"
-                except VaultError as e:
-                    if e.status == 400 and "check-and-set" in e.message:
-                        res.status, res.message = "conflict", "The target changed while applying; nothing written."
-                    elif e.denied:
-                        res.status, res.message = "denied", e.message
-                    else:
-                        res.status, res.message = "error", e.message
-            results.append(res)
-            if res.status != "noop":
-                _audit(ctx, plan, res)
+        return await apply_changes(ctx, body.changes)
+
+
+async def apply_changes(ctx: _Ctx, changes: list[Change], plan_id: str | None = None) -> ApplyOut:
+    """Re-check and write each change in turn (CAS), audit-logging every attempt."""
+    results: list[ChangeResult] = []
+    for c in changes:  # one at a time: predictable order, simple audit trail
+        plan, new_data, cas = await evaluate(ctx, c, reveal=False)
+        (_, _, _, _), (tconn, tv, tmount, _) = ctx.ends(c.direction)
+        changed = [k.key for k in plan.keys if k.action != "unchanged"]
+        res = ChangeResult(path=c.path, right_path=c.right_path or c.path, direction=c.direction,
+                           target=f"{tconn.name} · {tmount}/{plan.target.path}",
+                           # "ready" becomes applied/conflict/denied/error once the write is attempted
+                           status="error" if plan.status == "ready" else plan.status,  # type: ignore[arg-type]
+                           old_version=plan.target.version, keys=changed,
+                           message="; ".join(plan.problems))
+        if plan.status == "ready":
+            try:
+                res.new_version = await tv.kv_write(tmount, plan.target.path, new_data or {}, cas=cas)
+                res.status = "applied"
+            except VaultError as e:
+                if e.status == 400 and "check-and-set" in e.message:
+                    res.status, res.message = "conflict", "The target changed while applying; nothing written."
+                elif e.denied:
+                    res.status, res.message = "denied", e.message
+                else:
+                    res.status, res.message = "error", e.message
+        results.append(res)
+        if res.status != "noop":
+            _audit(ctx, plan, res, plan_id)
     summary = {s: sum(r.status == s for r in results)
                for s in ("applied", "noop", "conflict", "denied", "invalid", "error")}
     return ApplyOut(results=results, summary=summary)

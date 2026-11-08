@@ -3,7 +3,7 @@
     make screenshots     # → docs/images/<scene>-<theme>.png (dark and light)
 
 Everything shown is dev fixture data from dev/seed. The script only reads, except for
-staging a copy, which it never applies.
+staging a copy and saving it as a plan, which it never applies.
 """
 
 from __future__ import annotations
@@ -108,7 +108,21 @@ def scenes(page: Page, theme: str) -> None:
     dialog = page.locator("dialog.review")
     expect(dialog.locator(".plan").first).to_be_visible()
     shot(page, "04-review", theme)
+
+    # 12. The same changes saved as a plan, then opened and checked in the Sync plans tab (never applied).
+    dialog.get_by_label("Plan note").fill("Rotate the payments database password in Vault B")
+    with page.expect_download() as dl:
+        dialog.get_by_role("button", name="Save as plan").click()
+    plan_file = Path("/tmp") / dl.value.suggested_filename
+    dl.value.save_as(plan_file)
     dialog.get_by_role("button", name="Cancel").click()
+    page.get_by_role("tab", name="Sync plans").click()
+    page.get_by_label("Plan file").set_input_files(plan_file)
+    page.get_by_role("button", name="Check plan").click()
+    expect(page.get_by_role("status")).to_contain_text("exactly as they were")
+    scroll_to(page.locator("nav.tabs"))
+    shot(page, "12-sync-plan", theme)
+    page.get_by_role("tab", name="Compare").click()
 
     # 9. A comparison profile: prod paths in A paired with staging paths in B, host ignored.
     page.locator("section.profile-bar").get_by_role("combobox").select_option(label="Prod ↔ staging services")

@@ -478,3 +478,22 @@ textarea { width: 100%; padding: 8px 10px; background: var(--surface); border: 1
 
 .demo-banner { margin: 10px 0 0; padding: 8px 12px; border-radius: var(--radius-sm); font-size: 13px;
   background: var(--left-soft); color: var(--text); border: 1px solid var(--border); }
+
+/* ---- Sync plans */
+.plans { padding: 16px 18px; }
+.plans h2 { margin: 0 0 4px; font-size: 16px; }
+.plans .plan-table { border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.plan-meta { display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: center; font-size: 13px; margin: 6px 0 10px; }
+.plan-meta .subtle { margin-right: 4px; }
+.plan-note { margin: 0 0 12px; padding: 8px 12px; border-left: 3px solid var(--border); color: var(--text-2); white-space: pre-wrap; }
+.plan-sides { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin-bottom: 14px; }
+.plan-side { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 12px; font-size: 13px; overflow-wrap: anywhere; }
+.plan-side.left { border-top: 3px solid var(--left); }
+.plan-side.right { border-top: 3px solid var(--right); }
+.plan-side .side-label { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-2); margin-bottom: 2px; }
+.plan-side .notice { margin: 6px 0 0; }
+.plan-table .action { margin-left: 4px; }
+.plan-table .small { font-size: 12px; margin-top: 4px; }
+.plan-actions { margin-top: 12px; padding: 0; border: 0; background: none; flex-wrap: wrap; }
+.plan-note-input { min-width: 0; flex: 0 1 260px; }
+@media (max-width: 640px) { .plan-note-input { flex-basis: 100%; } }

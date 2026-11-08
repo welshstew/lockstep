@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "./api";
 import { ExpiryView, type ScanTarget } from "./components/ExpiryView";
+import { PlansView } from "./components/PlansView";
 import { Results } from "./components/Results";
 import { type InspectTarget, Inspector, type TrustCandidate } from "./components/Inspector";
 import { ProfileBar } from "./components/ProfileBar";
@@ -56,8 +57,11 @@ export function App() {
   const [changeset, setChangeset] = useState<Changeset>({});
   const [reviewing, setReviewing] = useState(false);
   const [inspecting, setInspecting] = useState<InspectTarget[] | null>(null);
-  const [view, setView] = useState<"compare" | "expiry">(() => {
-    try { return localStorage.getItem("lockstep.view") === "expiry" ? "expiry" : "compare"; } catch { return "compare"; }
+  const [view, setView] = useState<"compare" | "expiry" | "plans">(() => {
+    try {
+      const v = localStorage.getItem("lockstep.view");
+      return v === "expiry" || v === "plans" ? v : "compare";
+    } catch { return "compare"; }
   });
   useEffect(() => { try { localStorage.setItem("lockstep.view", view); } catch { /* ignore */ } }, [view]);
   const [sharedProfiles, setSharedProfiles] = useState<Profile[]>([]);
@@ -195,9 +199,12 @@ export function App() {
       <nav className="tabs" role="tablist" aria-label="View">
         <button type="button" role="tab" aria-selected={view === "compare"} onClick={() => setView("compare")}>Compare</button>
         <button type="button" role="tab" aria-selected={view === "expiry"} onClick={() => setView("expiry")}>Certificate expiry</button>
+        <button type="button" role="tab" aria-selected={view === "plans"} onClick={() => setView("plans")}>Sync plans</button>
       </nav>
 
-      {view === "expiry" ? (
+      {view === "plans" ? (
+        <PlansView connections={connections} leftConnId={sides[0].connId} rightConnId={sides[1].connId} />
+      ) : view === "expiry" ? (
         <ExpiryView
           targets={sides.flatMap((s, i): ScanTarget[] => (s.connId && s.mount
             ? [{ side: i === 0 ? "left" : "right", conn_id: s.connId, mount: s.mount, prefix: s.prefix, label: label(s) }] : []))}
@@ -273,7 +280,7 @@ export function App() {
       })()}
 
       {reviewing && result && hasStaged && (
-        <ReviewDialog result={result} changeset={changeset} reveal={reveal}
+        <ReviewDialog result={result} changeset={changeset} reveal={reveal} profile={activeProfile?.name ?? null}
                       onClose={(applied) => {
                         setReviewing(false);
                         if (applied) { setChangeset({}); runCompare(); }

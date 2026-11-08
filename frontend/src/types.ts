@@ -319,3 +319,51 @@ export interface Profile {
   right_prefix?: string | null;
   rules: ProfileRules;
 }
+
+// ---- Saved sync plans (signed files, no values)
+
+export interface PlanVault {
+  vault: string;
+  preset: boolean;
+  namespace: string | null;
+  mount: string;
+  prefix: string;
+  identity: string;
+}
+
+export interface PlanChange {
+  path: string;
+  right_path: string;
+  direction: SyncDirection;
+  source_path: string;
+  target_path: string;
+  source_version: number;
+  target_version: number | null;
+  keys: { key: string; action: "add" | "update" }[];
+}
+
+export interface SyncPlan {
+  format: "lockstep.sync-plan";
+  version: 1;
+  id: string;
+  created_at: string;
+  note: string;
+  profile: string | null;
+  left: PlanVault;
+  right: PlanVault;
+  changes: PlanChange[];
+  signature: string;
+}
+
+export type PlanCheckStatus = "ready" | "stale" | "denied" | "error";
+
+export interface PlanCheck {
+  status: PlanCheckStatus;
+  message: string;
+  changes: { path: string; right_path: string; direction: SyncDirection; source: string; target: string;
+             status: PlanCheckStatus; problems: string[] }[];
+}
+
+export interface PlanApplyResult extends ApplyResult {
+  plan_id: string;
+}

@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
+import { downloadPlan, downloadReport, planFileName } from "../plans";
 import { type Changeset, toApiChanges } from "../staging";
-import type { ApplyResult, ChangePlan, CompareResult, PlanStatus, ResultStatus } from "../types";
+import type { ApplyResult, ChangePlan, CompareResult, PlanStatus, ResultStatus, SyncPlan } from "../types";
 import { formatValue } from "./ValueCell";
 
 interface Props {
   result: CompareResult;
   changeset: Changeset;
   reveal: boolean;
+  profile: string | null;
   onClose: (applied: boolean) => void;
 }
 
@@ -26,7 +28,7 @@ function side(r: CompareResult["left"]) {
   return { conn_id: r.conn_id, mount: r.mount, prefix: r.prefix };
 }
 
-export function ReviewDialog({ result, changeset, reveal, onClose }: Props) {
+export function ReviewDialog({ result, changeset, reveal, profile, onClose }: Props) {
   const ref = useRef<HTMLDialogElement>(null);
   const changes = useMemo(() => toApiChanges(changeset, result), [changeset, result]);
   const [plans, setPlans] = useState<ChangePlan[] | null>(null);
@@ -34,6 +36,9 @@ export function ReviewDialog({ result, changeset, reveal, onClose }: Props) {
   const [confirmed, setConfirmed] = useState(false);
   const [applying, setApplying] = useState(false);
   const [applied, setApplied] = useState<ApplyResult | null>(null);
+  const [planning, setPlanning] = useState(false);
+  const [note, setNote] = useState("");
+  const [saved, setSaved] = useState<SyncPlan | null>(null);
 
   useEffect(() => { ref.current?.showModal(); }, []);
   useEffect(() => {
@@ -48,6 +53,25 @@ export function ReviewDialog({ result, changeset, reveal, onClose }: Props) {
   const ready = plans?.filter((p) => p.status === "ready") ?? [];
   const blocked = plans?.filter((p) => p.status !== "ready" && p.status !== "noop") ?? [];
   const targets = [...new Set(ready.map((p) => `${p.target.name} · ${p.target.mount}`))];
+  // A plan can hold changes you can't write yourself (someone with write access applies it),
+  // but not ones that conflict or can't be read.
+  const writeDenied = (p: ChangePlan) => p.status === "denied" && p.keys.length > 0;
+  const plannable = plans?.filter((p) => p.status === "ready" || writeDenied(p)) ?? [];
+  const unplannable = plans?.filter((p) => !["ready", "noop"].includes(p.status) && !writeDenied(p)) ?? [];
+
+  async function savePlan() {
+    setPlanning(true);
+    setError(null);
+    try {
+      const plan = await api.planCreate(side(result.left), side(result.right), changes, note, profile);
+      downloadPlan(plan);
+      setSaved(plan);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setPlanning(false);
+    }
+  }
 
   async function apply() {
     setApplying(true);
@@ -73,6 +97,15 @@ export function ReviewDialog({ result, changeset, reveal, onClose }: Props) {
 
       <div className="review-body">
         {error && <div className="notice error" role="alert">{error}</div>}
+        {saved && (
+          <div className="notice info" role="status">
+            Plan saved as <span className="mono">{planFileName(saved, "json")}</span>. Pass it to someone with write access:
+            they open it in the <strong>Sync plans</strong> tab, check it and apply it.{" "}
+            <button type="button" className="btn ghost small" onClick={() => downloadReport(saved).catch((e) => setError(e.message))}>
+              Download report
+            </button>
+          </div>
+        )}
         {!plans && !error && <div className="empty"><span className="spinner" /> Checking current values in both Vaults…</div>}
 
         {applied ? (
@@ -153,6 +186,15 @@ export function ReviewDialog({ result, changeset, reveal, onClose }: Props) {
             {plans && ready.length === 0 && <span className="muted">Nothing can be written. See the notes above.</span>}
             {blocked.length > 0 && ready.length > 0 && <span className="subtle">{blocked.length} item(s) will be skipped</span>}
             <span className="spacer" />
+            {plans && plannable.length > 0 && !saved && (
+              <input type="text" className="plan-note-input" placeholder="Note for the plan (optional)" value={note}
+                     maxLength={2000} onChange={(e) => setNote(e.target.value)} aria-label="Plan note" />
+            )}
+            <button type="button" className="btn ghost" disabled={!plans || plannable.length === 0 || unplannable.length > 0 || planning || applying || Boolean(saved)}
+                    title={unplannable.length > 0 ? "Some changes conflict or can't be read: compare again first" : "Download these changes as a plan for someone else to apply"}
+                    onClick={savePlan}>
+              {planning && <span className="spinner" />} {saved ? "Plan saved" : "Save as plan"}
+            </button>
             <button type="button" className="btn ghost" onClick={() => ref.current?.close()} disabled={applying}>Cancel</button>
             <button type="button" className="btn primary" disabled={!confirmed || applying || ready.length === 0} onClick={apply}>
               {applying && <span className="spinner" />} Apply

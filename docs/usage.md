@@ -103,6 +103,42 @@ Every attempted write, applied or not, produces one JSON line on the server's st
 
 Values are never logged. Outcomes are `applied`, `conflict`, `denied`, `invalid` and `error`.
 
+### Sync plans
+
+A plan is a reviewed set of copies saved as a file, so one person can prepare the changes and
+another (with write access to the targets) can apply them later. It's also a report of what
+needs updating from where.
+
+**Save a plan.** Stage copies as usual and open **Review & apply…**. Add an optional note and
+choose **Save as plan**. You don't need write access to the targets to do this: a read-only
+user can prepare a plan for someone else. Lockstep downloads `lockstep-plan-<date>-<id>.json`;
+**Download report** gives the same plan as a Markdown table (from, to, key, add or update).
+Changes that conflict or can't be read can't go into a plan: compare again first. Keys whose
+target already has the same value are left out.
+
+A plan records, for each secret: the source and target paths, the keys and whether each is
+added or updated, and the version of the source and target at the time. It **never contains
+values**: they're read from the source when the plan is applied. It also records who created
+it on each side, the comparison profile (if any) and the note. The file is signed by the
+Lockstep server (with a key derived from `LOCKSTEP_SESSION_KEY`), so any edit to it is
+detected and the plan is refused. A plan made by one Lockstep server can't be applied on
+another with a different session key, and changing the session key invalidates existing plans.
+
+**Apply a plan.** Connect both sides to the Vaults the plan names (any identity with write
+access to the targets), open the **Sync plans** tab and choose **Open a plan file…**. Check
+the report, then **Check plan**: Lockstep reads every source and target now.
+
+- If every secret is exactly as it was when the plan was made, tick the confirmation and
+  choose **Apply plan**. Each write uses check-and-set and is audit-logged with the plan's ID
+  (`"plan_id"` in the `sync.apply` event).
+- If **any** source or target has changed since then, the whole plan is refused and nothing
+  is written. The person applying it is told to ask for a new plan, made from a fresh
+  comparison.
+- If you lack write access to any target, nothing is written either.
+
+The check runs again when you apply. If a secret changes in the moment between that check and
+its write, that one write is refused (check-and-set) and the result says so.
+
 ## 4. Value tools
 
 **Inspect** (under the status of a key with a badge) opens that key's value from one or both sides. The value is identified by **content, not by key name**, through as many layers as it has: base64 → PEM → certificates, base64 → DER, and so on.

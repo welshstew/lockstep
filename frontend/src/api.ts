@@ -1,5 +1,5 @@
 import type {
-  AnalyzeOptions, AnalyzeResult, ApiChange, AppConfig, ApplyResult, ChangePlan, CompareResult, Connection, ExpiryResult, KeyHistory, Locator, Mount, MountsResponse, Profile, ProfileRules, SecretValues,
+  AnalyzeOptions, AnalyzeResult, ApiChange, AppConfig, ApplyResult, ChangePlan, CompareResult, Connection, ExpiryResult, KeyHistory, Locator, Mount, MountsResponse, PlanApplyResult, PlanCheck, Profile, ProfileRules, SecretValues, SyncPlan,
 } from "./types";
 
 type SideRef = { conn_id: string; mount: string; prefix: string };
@@ -93,6 +93,22 @@ export const api = {
     call<ChangePlan[]>("POST", "/api/sync/preview", { left, right, changes, reveal }),
   syncApply: (left: SideRef, right: SideRef, changes: ApiChange[]) =>
     call<ApplyResult>("POST", "/api/sync/apply", { left, right, changes, confirm: true }),
+  planCreate: (left: SideRef, right: SideRef, changes: ApiChange[], note: string, profile: string | null) =>
+    call<SyncPlan>("POST", "/api/plans", { left, right, changes, note, profile }),
+  planVerify: (plan: unknown) => call<{ plan: SyncPlan }>("POST", "/api/plans/verify", { plan }),
+  planReport: async (plan: SyncPlan) => {
+    const res = await fetch("/api/plans/report", {
+      method: "POST", credentials: "same-origin",
+      headers: { "X-Requested-With": "lockstep", "Content-Type": "application/json" },
+      body: JSON.stringify({ plan }),
+    });
+    if (!res.ok) throw new ApiError(res.status, (await res.json().catch(() => ({})))?.detail?.message ?? res.statusText);
+    return res.text();
+  },
+  planCheck: (plan: SyncPlan, left_conn_id: string, right_conn_id: string) =>
+    call<PlanCheck>("POST", "/api/plans/check", { plan, left_conn_id, right_conn_id }),
+  planApply: (plan: SyncPlan, left_conn_id: string, right_conn_id: string) =>
+    call<PlanApplyResult>("POST", "/api/plans/apply", { plan, left_conn_id, right_conn_id, confirm: true }),
   history: (id: string, mount: string, path: string) =>
     call<KeyHistory>("GET", `/api/connections/${id}/history?${q({ mount, path })}`),
   secret: (id: string, mount: string, path: string) =>
