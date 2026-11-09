@@ -24,7 +24,7 @@ jobs:
       contents: read
       security-events: write   # SARIF upload to code scanning
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0   # gitleaks scans the full history
 
