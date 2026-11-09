@@ -1,6 +1,6 @@
 # Release on a version tag (vX.Y.Z, or vX.Y.Z-rc.N for a pre-release):
 #   1. the tag must match the versions in the repository (scripts/check-version.sh)
-#   2. the same security gate and browser tests as every pull request
+#   2. the same security gate, backend tests and browser tests as every pull request
 #   3. a multi-arch image (linux/amd64, linux/arm64) pushed to ghcr.io/<owner>/lockstep,
 #      with an SBOM and provenance attached, and signed with cosign (keyless, GitHub OIDC)
 #   4. the Helm chart pushed as an OCI artifact to ghcr.io/<owner>/charts/lockstep, signed
@@ -40,12 +40,16 @@ jobs:
       contents: read
       security-events: write
 
+  tests:
+    needs: verify
+    uses: ./.github/workflows/tests.yml
+
   e2e:
     needs: verify
     uses: ./.github/workflows/e2e.yml
 
   image:
-    needs: [verify, security, e2e]
+    needs: [verify, security, tests, e2e]
     runs-on: ubuntu-latest
     permissions:
       contents: read

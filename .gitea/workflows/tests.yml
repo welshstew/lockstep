@@ -1,0 +1,50 @@
+# Backend tests (pytest) on every PR (and on main): the same suite as `make test`, run in the
+# test image against the seeded compose Vaults and Dex, in an isolated compose project with no
+# published ports. Kubernetes-auth tests that need a real k3s token are skipped here.
+# Results (JUnit + stack logs) are uploaded as the "backend-test-reports" artifact.
+name: tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    env:
+      COMPOSE_PROJECT_NAME: lockstep-tests-${{ github.run_id }}-${{ github.run_attempt }}
+      COMPOSE: docker compose -f compose.yaml -f compose.ci.yaml
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tooling
+        run: docker version --format 'docker {{.Server.Version}}' && docker compose version
+
+      - name: Run the backend tests
+        run: |
+          $COMPOSE --profile test build tests
+          $COMPOSE --profile test run --name "$COMPOSE_PROJECT_NAME-tests" tests \
+            python -m pytest -q -p no:cacheprovider -rs --junitxml=/tmp/junit.xml
+
+      - name: Collect reports
+        if: always()
+        run: |
+          mkdir -p reports/tests
+          docker cp "$COMPOSE_PROJECT_NAME-tests:/tmp/junit.xml" reports/tests/junit.xml || true
+          $COMPOSE logs --no-color seed vault-a vault-b dex > reports/tests/stack.log 2>&1 || true
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: backend-test-reports
+          path: reports/tests
+          retention-days: 14
+
+      - name: Tear down
+        if: always()
+        run: |
+          docker rm -f "$COMPOSE_PROJECT_NAME-tests" >/dev/null 2>&1 || true
+          $COMPOSE --profile test down -v --remove-orphans
