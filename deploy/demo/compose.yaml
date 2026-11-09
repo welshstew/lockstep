@@ -1,5 +1,6 @@
 # Public demo of Lockstep: two throwaway dev-mode Vaults, Dex for OIDC sign-in, and the app,
-# behind Caddy (automatic HTTPS). Only Caddy publishes ports (80, 443).
+# behind Caddy (automatic HTTPS), plus the landing page and visit statistics (GoAccess, from
+# Caddy's access log). Only Caddy publishes ports (80, 443).
 #
 # Deployed by scripts/deploy-demo.sh, which copies the repository to the server, generates
 # .env (secrets) and dex.yaml on first run, and starts this stack. Demo data is restored
@@ -33,17 +34,63 @@ services:
       DEMO_HOST: ${DEMO_HOST:?}
       LOGIN_HOST: ${LOGIN_HOST:?}
       APEX_HOST: ${APEX_HOST:?}
+      STATS_USER: ${STATS_USER:-stats}
+      STATS_HASH: ${STATS_HASH:?}   # bcrypt, made by scripts/deploy-demo.sh
     ports: ["80:80", "443:443", "443:443/udp"]
     volumes:
       - ./deploy/demo/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
       - caddy-config:/config
+      - ./deploy/demo/site:/srv/site:ro
+      - ./docs/images:/srv/images:ro
+      - caddy-logs:/var/log/caddy
+      - stats-report:/srv/stats:ro
     mem_limit: 128m
+    depends_on:
+      log-init: {condition: service_completed_successfully}
     networks:
       default:
         # The Vaults fetch Dex's discovery document from its public HTTPS address, so
         # inside the network that name has to reach Caddy too.
         aliases: ["${LOGIN_HOST:?}"]
+
+  # One-shot: give the log and report volumes to the users that write them.
+  log-init:
+    image: &goaccess docker.io/allinurl/goaccess:1.12@sha256:9e6dfd4abce94bd7c2907c1840b7b35f666587d56b24ffbb930b4782a87ea172
+    entrypoint: ["sh", "-c", "chown 999:999 /logs && chown 65532:65532 /report /db"]   # 999 = caddy in hi/caddy
+    volumes:
+      - caddy-logs:/logs
+      - stats-report:/report
+      - stats-db:/db
+    restart: "no"
+
+  # Visit statistics: rebuilds the report from Caddy's access log every 5 minutes. IP
+  # addresses are anonymised in the report; totals persist in stats-db across log rotation.
+  goaccess:
+    <<: *common
+    image: *goaccess
+    user: "65532"
+    read_only: true
+    tmpfs: [/tmp]
+    entrypoint: ["sh", "-c"]
+    command:
+      - >-
+        while :; do
+        if [ -s /logs/access.log ]; then
+        goaccess /logs/access.log --log-format=CADDY --anonymize-ip --ignore-crawlers
+        --persist --restore --db-path=/db --no-global-config
+        --html-report-title='Lockstep visits' -o /report/next.html
+        && mv /report/next.html /report/index.html;
+        fi;
+        sleep 300;
+        done
+    volumes:
+      - caddy-logs:/logs:ro
+      - stats-report:/report
+      - stats-db:/db
+    mem_limit: 256m
+    depends_on:
+      log-init: {condition: service_completed_successfully}
 
   vault-a:
     <<: *vault
@@ -120,3 +167,6 @@ services:
 volumes:
   caddy-data:
   caddy-config:
+  caddy-logs:
+  stats-report:
+  stats-db:

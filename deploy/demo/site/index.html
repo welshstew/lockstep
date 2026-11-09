@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lockstep: compare and sync Vault KV secrets</title>
+  <meta name="description" content="Open-source tool to compare, inspect and sync KV v2 secrets across HashiCorp Vault clusters, without showing values you didn't ask to see. Try the live demo.">
+  <meta property="og:title" content="Lockstep: compare and sync Vault KV secrets">
+  <meta property="og:description" content="Compare, inspect and sync KV v2 secrets across HashiCorp Vault clusters. Open source, MIT licensed, built for Kubernetes.">
+  <meta property="og:image" content="https://getlockstep.cloud/images/02-compare-dark.png">
+  <meta property="og:url" content="https://getlockstep.cloud/">
+  <meta name="color-scheme" content="light dark">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect x='1' y='3' width='6' height='10' rx='1' fill='%234f6bed'/><rect x='9' y='3' width='6' height='10' rx='1' fill='%23e0864a'/></svg>">
+  <link rel="stylesheet" href="/site.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+
+  <header class="top">
+    <div class="wrap top-row">
+      <a class="brand" href="/"><span class="mark" aria-hidden="true"><i></i><i></i></span>Lockstep</a>
+      <nav aria-label="Main">
+        <a href="#features">Features</a>
+        <a href="#install">Install</a>
+        <a href="https://github.com/welshstew/lockstep">GitHub</a>
+        <a class="btn small" href="https://demo.getlockstep.cloud">Try the demo</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="hero">
+      <div class="wrap">
+        <p class="eyebrow">Open source · MIT · built for Kubernetes</p>
+        <h1>Keep your Vault clusters <span class="l">in</span> <span class="r">lockstep</span>.</h1>
+        <p class="lede">Compare, inspect and sync KV&nbsp;v2 secrets across HashiCorp Vault clusters, environments and mounts. Values are compared on the server, so nothing is shown unless you ask for it.</p>
+        <div class="ctas">
+          <a class="btn primary" href="https://demo.getlockstep.cloud">Try the live demo</a>
+          <a class="btn" href="https://github.com/welshstew/lockstep">View on GitHub</a>
+        </div>
+        <p class="hint">Demo: sign in as <code>alice</code> / <code>password</code> on both sides, choose <code>app-config</code>, press Compare.</p>
+      </div>
+      <div class="wrap shot hero-shot">
+        <picture>
+          <source media="(prefers-color-scheme: dark)" srcset="/images/02-compare-dark.png">
+          <img src="/images/02-compare-light.png" width="1440" height="900" alt="Two Vaults compared side by side: each secret marked Different, Left only, Right only or Equal, with values hidden">
+        </picture>
+      </div>
+    </section>
+
+    <section id="features" class="features">
+      <div class="wrap">
+        <h2>Everything you need to keep secrets in sync</h2>
+        <div class="grid">
+          <article>
+            <h3>Compare anything to anything</h3>
+            <p>Two Vaults, two mounts or two path prefixes. See which secrets and keys are equal, different, or only on one side, down to a <code>5432</code> vs <code>"5432"</code> type change.</p>
+          </article>
+          <article>
+            <h3>Values stay hidden</h3>
+            <p>The browser only gets a status per key. <strong>Show values</strong> reveals them for the secrets you open, and nothing else.</p>
+          </article>
+          <article>
+            <h3>Copies you can trust</h3>
+            <p>Copy a key or a whole secret with ← / → after a review. Check-and-set writes never overwrite a change made since you compared. Nothing is deleted, and every write is audit-logged.</p>
+          </article>
+          <article>
+            <h3>Sync plans</h3>
+            <p>Save reviewed changes as a signed file, with no values in it, for someone with write access to apply. If anything in it has changed since, nothing is written.</p>
+          </article>
+          <article>
+            <h3>Certificates and keystores</h3>
+            <p>Base64, PEM, X.509 chains validated link by link, PKCS#12, JKS and JCEKS. Inspect them, compare them field by field, and see every certificate's expiry on one dashboard.</p>
+          </article>
+          <article>
+            <h3>Comparison profiles</h3>
+            <p>Pair <code>services/*/prod/**</code> with <code>services/*/staging/**</code>, ignore keys that differ by design, and share the rules with your team.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="tour">
+      <div class="wrap row">
+        <div class="copy">
+          <h2>Review before anything is written</h2>
+          <p>Stage copies key by key. The review shows exactly what each target will get, its version change, and whether you're allowed to write it. Then apply it yourself, or save it as a plan for someone else.</p>
+        </div>
+        <div class="shot">
+          <picture>
+            <source media="(prefers-color-scheme: dark)" srcset="/images/04-review-dark.png">
+            <img src="/images/04-review-light.png" width="1440" height="900" loading="lazy" alt="Review dialog listing one key update with Apply and Save as plan buttons">
+          </picture>
+        </div>
+      </div>
+      <div class="wrap row flip">
+        <div class="copy">
+          <h2>Know what each value is</h2>
+          <p>Lockstep works out what's inside each value: a PKCS#12 file, a Java keystore, a certificate chain, an image. It opens keystores with the password stored next to them and checks every certificate.</p>
+        </div>
+        <div class="shot">
+          <picture>
+            <source media="(prefers-color-scheme: dark)" srcset="/images/06-inspect-pkcs12-dark.png">
+            <img src="/images/06-inspect-pkcs12-light.png" width="1440" height="900" loading="lazy" alt="Inspector showing a PKCS#12 keystore from both Vaults with its certificate chain">
+          </picture>
+        </div>
+      </div>
+      <div class="wrap row">
+        <div class="copy">
+          <h2>See what expires when</h2>
+          <p>Every certificate in one or both mounts, including those inside keystores, sorted by expiry. Filter, inspect, and export to CSV.</p>
+        </div>
+        <div class="shot">
+          <picture>
+            <source media="(prefers-color-scheme: dark)" srcset="/images/11-expiry-dark.png">
+            <img src="/images/11-expiry-light.png" width="1440" height="900" loading="lazy" alt="Certificate expiry dashboard with expired, 30-day, 90-day and later counts">
+          </picture>
+        </div>
+      </div>
+    </section>
+
+    <section class="built">
+      <div class="wrap">
+        <h2>Built to run in production</h2>
+        <ul class="checks">
+          <li><strong>Stateless.</strong> Sessions live in an encrypted cookie, so any number of replicas can serve any request.</li>
+          <li><strong>Sign in your way.</strong> Token, userpass, LDAP, OIDC redirect, or the pod's Kubernetes service account.</li>
+          <li><strong>Hardened images.</strong> Distroless and non-root on Red Hat Hardened Images, multi-arch, signed with cosign, with an SBOM and build provenance.</li>
+          <li><strong>A Helm chart that's tested.</strong> Read-only filesystem, NetworkPolicy, PodDisruptionBudget, a session key kept across upgrades, all installed into a real cluster in CI.</li>
+          <li><strong>Scanned on every change.</strong> CVEs, leaked secrets, misconfigurations and base image signatures, plus end-to-end browser tests.</li>
+          <li><strong>Configured by environment.</strong> Everything is a <code>LOCKSTEP_*</code> variable or a chart value.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section id="install" class="install">
+      <div class="wrap">
+        <h2>Install</h2>
+        <div class="two">
+          <div>
+            <h3>Kubernetes (Helm)</h3>
+<pre><code>helm upgrade --install lockstep \
+  oci://ghcr.io/welshstew/charts/lockstep \
+  -n lockstep --create-namespace \
+  --set 'vaults[0].name=Production' \
+  --set 'vaults[0].url=https://vault.example.com'</code></pre>
+          </div>
+          <div>
+            <h3>Try it locally</h3>
+<pre><code>git clone https://github.com/welshstew/lockstep
+cd lockstep
+make up    # two demo Vaults + Lockstep
+open http://localhost:8080</code></pre>
+          </div>
+        </div>
+        <p class="more">Configuration, authentication and deployment guides are in the <a href="https://github.com/welshstew/lockstep#documentation">documentation</a>.</p>
+      </div>
+    </section>
+
+    <section class="demo">
+      <div class="wrap demo-box">
+        <div>
+          <h2>Try it now</h2>
+          <p>The demo has two Vaults with sample data, including certificates and keystores. Sign in as <code>alice</code> (can write), <code>bob</code> (read-only) or <code>carol</code> (limited access); every password is <code>password</code>. The data resets every hour.</p>
+        </div>
+        <a class="btn primary big" href="https://demo.getlockstep.cloud">Open the demo</a>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <div class="wrap">
+      <p><a class="brand small" href="/"><span class="mark" aria-hidden="true"><i></i><i></i></span>Lockstep</a> is open source under the <a href="https://github.com/welshstew/lockstep/blob/main/LICENSE">MIT licence</a>. <a href="https://github.com/welshstew/lockstep">GitHub</a> · <a href="https://github.com/welshstew/lockstep/releases">Releases</a> · <a href="https://github.com/welshstew/lockstep/blob/main/SECURITY.md">Security</a></p>
+      <p class="fine">Lockstep is an independent project. It is not affiliated with, endorsed by or sponsored by HashiCorp. HashiCorp and Vault are trademarks of HashiCorp, Inc.</p>
+      <p class="fine">Privacy: this site sets no cookies for tracking and loads no third-party scripts. The server keeps access logs (including IP addresses) for 30 days to keep the site secure and to count visits; visit statistics are produced with anonymised IP addresses. The demo's sign-in cookie only holds your demo session.</p>
+    </div>
+  </footer>
+</body>
+</html>

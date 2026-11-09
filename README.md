@@ -6,7 +6,7 @@
 [![e2e](https://github.com/welshstew/lockstep/actions/workflows/e2e.yml/badge.svg)](https://github.com/welshstew/lockstep/actions/workflows/e2e.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**Try it:** [demo.getlockstep.cloud](https://demo.getlockstep.cloud), a public demo with two throwaway Vaults (sign in as `alice` / `password`; data resets every hour).
+**Website:** [getlockstep.cloud](https://getlockstep.cloud) · **Try it:** [demo.getlockstep.cloud](https://demo.getlockstep.cloud), a public demo with two throwaway Vaults (sign in as `alice` / `password`; data resets every hour).
 
 Compare **KV v2 secrets engines** across HashiCorp Vault clusters, or across two mounts in the same Vault. See exactly which values differ, without displaying them. Copy selected keys between the two sides safely, with a reviewed changeset.
 
@@ -56,8 +56,11 @@ This starts two dev-mode Vaults filled with demo data, Dex as an OIDC provider, 
 ## Deploy
 
 ```sh
-helm upgrade --install lockstep ./charts/lockstep -n lockstep --create-namespace -f my-values.yaml
+helm upgrade --install lockstep oci://ghcr.io/welshstew/charts/lockstep --version 0.1.0 \
+  -n lockstep --create-namespace -f my-values.yaml
 ```
+
+Or run the container anywhere: `ghcr.io/welshstew/lockstep:0.1.0` (amd64 and arm64, signed with cosign, with an SBOM and build provenance; see [releases](https://github.com/welshstew/lockstep/releases)).
 
 A hardened chart: non-root, read-only filesystem, a session key kept across upgrades, optional Ingress, NetworkPolicy and Kubernetes auth. See [Deploying on Kubernetes](docs/kubernetes.md) and the [chart README](charts/lockstep/README.md).
 

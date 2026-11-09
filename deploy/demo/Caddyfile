@@ -1,4 +1,8 @@
-# Lockstep public demo. Hostnames come from the environment (see compose.yaml).
+# Lockstep public demo. Hostnames and the stats login come from the environment (see compose.yaml).
+#   APEX_HOST     landing page (www redirects to it), and /stats (visit statistics, password protected)
+#   DEMO_HOST     the Lockstep demo
+#   LOGIN_HOST    Dex, for OIDC sign-in in the demo
+
 (security) {
 	header {
 		Strict-Transport-Security "max-age=31536000"
@@ -9,8 +13,31 @@
 	}
 }
 
+# Access log for the visit statistics (GoAccess reads it). Kept 30 days. Sign-in material
+# never reaches it: Caddy redacts Cookie and Authorization headers itself, and the OIDC
+# callback's code and state are removed from logged URLs.
+(access_log) {
+	log {
+		output file /var/log/caddy/access.log {
+			mode 0644
+			roll_size 50MiB
+			roll_keep_for 720h
+		}
+		format filter {
+			request>uri query {
+				delete code
+				delete state
+			}
+			request>headers>Cookie delete
+			request>headers>Authorization delete
+			resp_headers>Set-Cookie delete
+		}
+	}
+}
+
 {$DEMO_HOST} {
 	import security
+	import access_log
 	header {
 		Content-Security-Policy "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
 		X-Frame-Options DENY
@@ -23,10 +50,46 @@
 
 {$LOGIN_HOST} {
 	import security
+	import access_log
 	reverse_proxy dex:5556
 }
 
-{$APEX_HOST}, www.{$APEX_HOST} {
+{$APEX_HOST} {
 	import security
-	redir https://{$DEMO_HOST}{uri} permanent
+	import access_log
+	encode zstd gzip
+
+	# Visit statistics (GoAccess report, rebuilt every few minutes)
+	redir /stats /stats/
+	handle_path /stats/* {
+		basic_auth {
+			{$STATS_USER} {$STATS_HASH}
+		}
+		header {
+			Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'"
+			Cache-Control no-store
+			X-Robots-Tag noindex
+		}
+		root * /srv/stats
+		file_server
+	}
+
+	# Screenshots, straight from docs/images
+	handle_path /images/* {
+		header Cache-Control "public, max-age=86400"
+		root * /srv/images
+		file_server
+	}
+
+	# Landing page: static, no scripts
+	handle {
+		header Content-Security-Policy "default-src 'none'; img-src 'self' data:; style-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+		root * /srv/site
+		file_server
+	}
+}
+
+www.{$APEX_HOST} {
+	import security
+	redir https://{$APEX_HOST}{uri} permanent
 }

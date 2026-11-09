@@ -9,7 +9,9 @@ ARG PY_BUILDER=registry.access.redhat.com/hi/python:3.14-builder@sha256:cff3c96a
 ARG PY_RUNTIME=registry.access.redhat.com/hi/python:3.14@sha256:a9ad325f34cf0806b810a58a71a352a8b6321737d5ee669ed962ad26038ca5ae
 ARG NODE_BUILDER=registry.access.redhat.com/hi/nodejs:24-builder@sha256:a79f666c9127faee19a0514e269b9af6a2cdfc6e7f61d9b3832d019b861abb3a
 
-FROM ${NODE_BUILDER} AS frontend-build
+# The built SPA is the same on every architecture, so build it natively (no emulation in
+# multi-arch builds).
+FROM --platform=$BUILDPLATFORM ${NODE_BUILDER} AS frontend-build
 WORKDIR /build
 COPY --chown=65532:0 frontend/package.json frontend/package-lock.json ./
 RUN npm ci --no-audit --no-fund

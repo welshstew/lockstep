@@ -12,6 +12,7 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  workflow_call:   # run by release.yml before anything is published
 
 permissions:
   contents: read

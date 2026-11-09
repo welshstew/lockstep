@@ -10,16 +10,13 @@ Lockstep is one stateless container, so any number of replicas can serve any req
 ## With Helm (recommended)
 
 ```sh
-podman build -t registry.example.com/lockstep:0.1.0 . && podman push registry.example.com/lockstep:0.1.0
-
-helm upgrade --install lockstep ./charts/lockstep -n lockstep --create-namespace -f my-values.yaml
+helm upgrade --install lockstep oci://ghcr.io/welshstew/charts/lockstep --version 0.1.0 \
+  -n lockstep --create-namespace -f my-values.yaml
 helm test lockstep -n lockstep
 ```
 
 ```yaml
 # my-values.yaml
-image:
-  repository: registry.example.com/lockstep
 publicUrl: https://lockstep.example.com
 vaults:
   - {name: Production, url: https://vault.prod.example.com}
@@ -35,7 +32,12 @@ The [chart README](../charts/lockstep/README.md) has every value and more exampl
 
 ## Checklist
 
-1. **Image:** build it from this repository and push it where your cluster can pull it. Set `image.repository` (and `image.digest` for an immutable deployment).
+1. **Image:** by default the chart runs the release image `ghcr.io/welshstew/lockstep:<appVersion>`. Pin `image.digest` for an immutable deployment, or set `image.repository` to a mirror or your own build. Verify a release image before you trust it:
+   ```sh
+   cosign verify ghcr.io/welshstew/lockstep:0.1.0 \
+     --certificate-identity https://github.com/welshstew/lockstep/.github/workflows/release.yml@refs/tags/v0.1.0 \
+     --certificate-oidc-issuer https://token.actions.githubusercontent.com
+   ```
 2. **Vaults:** list them in `vaults`. `allowCustomConnections` is **off** in the chart, so the pods only call Vaults you list.
 3. **TLS:** terminate it at the ingress, and keep `session.cookieSecure: true`.
 4. **Private CA:** if your Vaults use one, put the bundle in a ConfigMap or Secret and set `vaultTls.caBundle`.

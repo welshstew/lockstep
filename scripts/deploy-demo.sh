@@ -16,7 +16,7 @@ cd "$(dirname "$0")/.."
 ssh "$TARGET" "mkdir -p '$DIR' && chmod 700 '$DIR'"
 rsync -az --delete \
   --exclude .git --exclude .env --exclude dex.yaml --exclude node_modules --exclude frontend/dist \
-  --exclude .venv --exclude reports --exclude '__pycache__' --exclude .pytest_cache --exclude docs/images \
+  --exclude .venv --exclude reports --exclude '__pycache__' --exclude .pytest_cache \
   ./ "$TARGET:$DIR/"
 
 ssh "$TARGET" DIR="$DIR" DOMAIN="$DOMAIN" bash -s <<'REMOTE'
@@ -36,6 +36,14 @@ VAULT_B_TOKEN=$(rand)
 DEX_CLIENT_SECRET=$(rand)
 ENV
   echo "created $DIR/.env with new secrets"
+fi
+# Added after the first release of this script: fill in on existing servers too.
+if ! grep -q '^STATS_HASH=' .env; then
+  pw=$(rand | cut -c1-24)
+  caddy_img=$(sed -n 's|^ *image: \(registry.access.redhat.com/hi/caddy[^ ]*\).*|\1|p' deploy/demo/compose.yaml | head -1)
+  hash=$(printf '%s\n' "$pw" | docker run --rm -i --entrypoint caddy "$caddy_img" hash-password)
+  { echo "STATS_USER=stats"; echo "STATS_PASSWORD=$pw"; echo "STATS_HASH='$hash'"; } >> .env
+  echo "added a password for /stats to $DIR/.env (STATS_PASSWORD)"
 fi
 set -a; . ./.env; set +a
 # Dex doesn't expand environment variables in its config, so render it here.

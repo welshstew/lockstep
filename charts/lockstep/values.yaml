@@ -2,7 +2,7 @@
 # see docs/configuration.md for details.
 
 image:
-  repository: lockstep              # set to where you publish the image, e.g. ghcr.io/<you>/lockstep (build it from github.com/welshstew/lockstep)
+  repository: ghcr.io/welshstew/lockstep   # signed release images (amd64, arm64); or your own build
   tag: ""                           # defaults to the chart's appVersion
   digest: ""                        # optional: sha256:… (takes precedence over tag)
   pullPolicy: IfNotPresent

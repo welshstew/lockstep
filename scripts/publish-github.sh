@@ -15,8 +15,10 @@ MSG=${4:-}
 cd "$(dirname "$0")/.."
 
 [[ -z $(git status --porcelain --untracked-files=no) ]] || { echo "working tree has changes; commit or stash first" >&2; exit 1; }
-if git grep -n "OWNER/lockstep" -- . ':!scripts/publish-github.sh' >/dev/null; then
-  echo "replace the OWNER placeholders first:" >&2; git grep -n "OWNER/lockstep" -- . ':!scripts/publish-github.sh' >&2; exit 1
+# Literal placeholders only: "$OWNER/lockstep" and "${OWNER}/..." in scripts are shell variables.
+placeholder='(^|[^$A-Za-z_{])OWNER/lockstep'
+if git grep -nE "$placeholder" -- . ':!scripts/publish-github.sh' >/dev/null; then
+  echo "replace the OWNER placeholders first:" >&2; git grep -nE "$placeholder" -- . ':!scripts/publish-github.sh' >&2; exit 1
 fi
 if git grep -nI -E "100\.123\.|tailec806|/Users/" -- . ':!scripts/publish-github.sh' >/dev/null; then
   echo "internal addresses or local paths found:" >&2; git grep -nI -E "100\.123\.|tailec806|/Users/" -- . ':!scripts/publish-github.sh' >&2; exit 1

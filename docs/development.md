@@ -163,3 +163,9 @@ Two workflows run on every pull request and on `main`, on GitHub Actions (`.gith
 | `e2e.yml` | Starts the whole demo stack and runs the browser tests | `e2e-reports` (JUnit, failure screenshots, app and seed logs) |
 
 The e2e job runs the stack as its own compose project (`lockstep-ci-<run>`) with `compose.ci.yaml`, which publishes **no ports**, so runs can't clash with each other or with other services on the CI host. Nothing is bind-mounted (Dex's config and the tests are baked into images), because a runner's Docker host can't see the job's checkout. The stack is removed, volumes included, at the end of every run.
+
+## Releasing
+
+1. Set the new version in `charts/lockstep/Chart.yaml` (`version` and `appVersion`), `backend/pyproject.toml` and `frontend/package.json`, and add a `## [X.Y.Z]` section to `CHANGELOG.md`. `scripts/check-version.sh vX.Y.Z` checks they agree.
+2. Merge, publish to GitHub (`scripts/publish-github.sh …`), then tag the published commit `vX.Y.Z` on GitHub.
+3. `.github/workflows/release.yml` re-runs the security gate and browser tests, builds the amd64 and arm64 image, pushes it to `ghcr.io/<owner>/lockstep` with an SBOM and provenance, pushes the chart to `oci://ghcr.io/<owner>/charts/lockstep`, signs both with cosign (keyless), and creates the GitHub Release from the changelog. A tag like `v0.2.0-rc.1` makes a pre-release (no `latest` tag).

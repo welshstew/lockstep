@@ -3,15 +3,16 @@
 Deploys [Lockstep](../../README.md): compare, inspect and sync KV secrets across HashiCorp Vault clusters.
 
 ```sh
-helm upgrade --install lockstep ./charts/lockstep -n lockstep --create-namespace -f my-values.yaml
+helm upgrade --install lockstep oci://ghcr.io/welshstew/charts/lockstep --version 0.1.0 \
+  -n lockstep --create-namespace -f my-values.yaml
 helm test lockstep -n lockstep
 ```
+
+From a checkout, use `./charts/lockstep` instead of the `oci://` reference. The chart runs the signed release image `ghcr.io/welshstew/lockstep` at the chart's `appVersion` unless you set `image.*`.
 
 The smallest working values:
 
 ```yaml
-image:
-  repository: registry.example.com/lockstep   # where you pushed the image
 vaults:
   - name: Production
     url: https://vault.prod.example.com
@@ -30,7 +31,7 @@ vaults:
 
 | Key | Default | Description |
 |---|---|---|
-| `image.repository` | `lockstep` | Image to run. Build it with `podman build -t <registry>/lockstep:<version> .` and push it |
+| `image.repository` | `ghcr.io/welshstew/lockstep` | Image to run. Release images are multi-arch and signed; set your own registry to run your own build or a mirror |
 | `image.tag` | chart `appVersion` | |
 | `image.digest` | `""` | `sha256:…`; overrides the tag |
 | `image.pullPolicy` | `IfNotPresent` | |
