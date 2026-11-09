@@ -20,7 +20,7 @@ jobs:
       COMPOSE_PROJECT_NAME: lockstep-ci-${{ github.run_id }}-${{ github.run_attempt }}
       COMPOSE: docker compose -f compose.yaml -f compose.ci.yaml
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Tooling
         run: docker version --format 'docker {{.Server.Version}}' && docker compose version
