@@ -7,4 +7,4 @@
 #   2. Put the ID below, merge, and publish to GitHub. .github/workflows/artifacthub.yml
 #      then pushes this file as ghcr.io/welshstew/charts/lockstep:artifacthub.io.
 # It's ignored (not pushed) while the ID is the placeholder.
-repositoryID: REPLACE-WITH-ARTIFACT-HUB-REPOSITORY-ID
+repositoryID: 148078fa-d5ae-41dc-a418-0b7440265bc0
