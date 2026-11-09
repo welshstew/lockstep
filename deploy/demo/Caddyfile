@@ -39,6 +39,8 @@
 	import security
 	import access_log
 	header {
+		# The demo app isn't content: keep it out of search results (the landing page links to it)
+		X-Robots-Tag "noindex, nofollow"
 		Content-Security-Policy "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
 		X-Frame-Options DENY
 	}
@@ -51,6 +53,7 @@
 {$LOGIN_HOST} {
 	import security
 	import access_log
+	header X-Robots-Tag "noindex, nofollow"
 	reverse_proxy dex:5556
 }
 
@@ -76,6 +79,10 @@
 		file_server
 	}
 
+	# The guides are listed on the docs index
+	redir /guides /docs/
+	redir /guides/ /docs/
+
 	# Screenshots, straight from docs/images
 	handle_path /images/* {
 		header Cache-Control "public, max-age=86400"
@@ -83,7 +90,7 @@
 		file_server
 	}
 
-	# Landing page: static, no scripts
+	# Landing page, docs and guides: static, no scripts (JSON-LD is data, never executed)
 	handle {
 		header Content-Security-Policy "default-src 'none'; img-src 'self' data:; style-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 		root * /srv/site

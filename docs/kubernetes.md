@@ -1,3 +1,4 @@
+<!-- description: Deploy Lockstep on Kubernetes with its Helm chart: a checklist, Ingress, OIDC callback, NetworkPolicy and Kubernetes service account auth. -->
 # Deploying on Kubernetes
 
 Lockstep is one stateless container, so any number of replicas can serve any request:

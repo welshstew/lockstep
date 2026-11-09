@@ -5,7 +5,8 @@
 #
 # Copies the repository to /opt/lockstep, creates /opt/lockstep/.env with random secrets on
 # the first run (kept on later runs, never printed), renders the Dex config, and (re)starts
-# the stack. Needs rsync locally, and Docker with the compose plugin on the server.
+# the stack. Builds the site's docs pages first (scripts/build-site.sh). Needs rsync and
+# Python 3 locally, and Docker with the compose plugin on the server.
 set -euo pipefail
 
 TARGET=${1:?usage: $0 user@host [domain]}
@@ -13,10 +14,13 @@ DOMAIN=${2:-getlockstep.cloud}
 DIR=${DEPLOY_DIR:-/opt/lockstep}
 cd "$(dirname "$0")/.."
 
+# The site's docs and guide pages and sitemap are generated from docs/ (gitignored)
+scripts/build-site.sh
+
 ssh "$TARGET" "mkdir -p '$DIR' && chmod 700 '$DIR'"
 rsync -az --delete \
   --exclude .git --exclude .env --exclude dex.yaml --exclude node_modules --exclude frontend/dist \
-  --exclude .venv --exclude reports --exclude '__pycache__' --exclude .pytest_cache \
+  --exclude .venv --exclude .venv-site --exclude reports --exclude '__pycache__' --exclude .pytest_cache \
   ./ "$TARGET:$DIR/"
 
 ssh "$TARGET" DIR="$DIR" DOMAIN="$DOMAIN" bash -s <<'REMOTE'

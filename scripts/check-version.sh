@@ -13,6 +13,7 @@ check() {  # check <what> <found>
 }
 check "charts/lockstep/Chart.yaml version" "$(sed -n 's/^version: *//p' charts/lockstep/Chart.yaml)"
 check "charts/lockstep/Chart.yaml appVersion" "$(sed -n 's/^appVersion: *"\{0,1\}\([^"]*\)"\{0,1\}/\1/p' charts/lockstep/Chart.yaml)"
+check "charts/lockstep/Chart.yaml artifacthub.io/images" "$(sed -n 's|^ *image: ghcr.io/[^:]*/lockstep:||p' charts/lockstep/Chart.yaml)"
 check "backend/pyproject.toml" "$(sed -n 's/^version = "\(.*\)"/\1/p' backend/pyproject.toml)"
 check "frontend/package.json" "$(sed -n 's/^  "version": "\(.*\)",/\1/p' frontend/package.json)"
 if grep -q "^## \[$v\]" CHANGELOG.md; then echo "ok  CHANGELOG.md has [$v]"; else echo "!!  CHANGELOG.md has no '## [$v]' section" >&2; fail=1; fi

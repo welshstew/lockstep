@@ -3,15 +3,36 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Lockstep: compare and sync Vault KV secrets</title>
-  <meta name="description" content="Open-source tool to compare, inspect and sync KV v2 secrets across HashiCorp Vault clusters, in a web UI or from the command line, without showing values you didn't ask to see. Try the live demo.">
-  <meta property="og:title" content="Lockstep: compare and sync Vault KV secrets">
+  <title>Lockstep: compare and sync HashiCorp Vault KV secrets</title>
+  <meta name="description" content="Open-source tool to compare and sync KV v2 secrets across HashiCorp Vault clusters and environments. Find drift, review and copy safely, from a web UI or the CLI.">
+  <meta property="og:title" content="Lockstep: compare and sync HashiCorp Vault KV secrets">
   <meta property="og:description" content="Compare, inspect and sync KV v2 secrets across HashiCorp Vault clusters. Open source, MIT licensed, built for Kubernetes.">
   <meta property="og:image" content="https://getlockstep.cloud/images/02-compare-dark.png">
   <meta property="og:url" content="https://getlockstep.cloud/">
+  <meta property="og:type" content="website">
+  <link rel="canonical" href="https://getlockstep.cloud/">
   <meta name="color-scheme" content="light dark">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect x='1' y='3' width='6' height='10' rx='1' fill='%234f6bed'/><rect x='9' y='3' width='6' height='10' rx='1' fill='%23e0864a'/></svg>">
   <link rel="stylesheet" href="/site.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "Lockstep",
+    "description": "Compare and sync KV v2 secrets across HashiCorp Vault clusters, mounts and environments, with a web UI and a command line. Values stay hidden unless you ask to see them.",
+    "url": "https://getlockstep.cloud/",
+    "applicationCategory": "DeveloperApplication",
+    "applicationSubCategory": "Secrets management",
+    "operatingSystem": "Linux, macOS, Windows, Kubernetes",
+    "license": "https://opensource.org/licenses/MIT",
+    "isAccessibleForFree": true,
+    "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"},
+    "downloadUrl": "https://github.com/welshstew/lockstep/releases",
+    "softwareHelp": "https://getlockstep.cloud/docs/",
+    "screenshot": "https://getlockstep.cloud/images/02-compare-light.png",
+    "sameAs": ["https://github.com/welshstew/lockstep"]
+  }
+  </script>
 </head>
 <body>
   <a class="skip" href="#main">Skip to content</a>
@@ -22,6 +43,7 @@
       <nav aria-label="Main">
         <a href="#features">Features</a>
         <a href="#install">Install</a>
+        <a href="/docs/">Docs</a>
         <a href="https://github.com/welshstew/lockstep">GitHub</a>
         <a class="btn small" href="https://demo.getlockstep.cloud">Try the demo</a>
       </nav>
@@ -182,7 +204,27 @@ lockstep compare --help
 docker run --rm -it --entrypoint lockstep ghcr.io/welshstew/lockstep:0.2.0 --help</code></pre>
           </div>
         </div>
-        <p class="more">Configuration, authentication, deployment and <a href="https://github.com/welshstew/lockstep/blob/main/docs/cli.md">command-line</a> guides are in the <a href="https://github.com/welshstew/lockstep#documentation">documentation</a>.</p>
+        <p class="more">Configuration, authentication, deployment and <a href="/docs/cli/">command-line</a> guides are in the <a href="/docs/">documentation</a>.</p>
+      </div>
+    </section>
+
+    <section class="guides">
+      <div class="wrap">
+        <h2>Guides</h2>
+        <div class="grid">
+          <article>
+            <h3><a href="/guides/compare-hashicorp-vault-clusters/">How to compare secrets between two Vault clusters</a></h3>
+            <p>Diffing with the vault CLI and where it falls short, then comparing whole mounts in the browser or from the terminal.</p>
+          </article>
+          <article>
+            <h3><a href="/guides/sync-vault-secrets-between-environments/">Syncing secrets between environments safely</a></h3>
+            <p>Check-and-set writes, merges without deletes, reviews, and sync plans for changes someone else applies.</p>
+          </article>
+          <article>
+            <h3><a href="/guides/detect-vault-secret-drift-in-ci/">Detecting secret drift in CI</a></h3>
+            <p>Fail a pipeline when two Vault environments drift apart, with a read-only token and no values in the logs.</p>
+          </article>
+        </div>
       </div>
     </section>
 
@@ -199,7 +241,7 @@ docker run --rm -it --entrypoint lockstep ghcr.io/welshstew/lockstep:0.2.0 --hel
 
   <footer class="foot">
     <div class="wrap">
-      <p><a class="brand small" href="/"><span class="mark" aria-hidden="true"><i></i><i></i></span>Lockstep</a> is open source under the <a href="https://github.com/welshstew/lockstep/blob/main/LICENSE">MIT licence</a>. <a href="https://github.com/welshstew/lockstep">GitHub</a> · <a href="https://github.com/welshstew/lockstep/releases">Releases</a> · <a href="https://github.com/welshstew/lockstep/blob/main/SECURITY.md">Security</a></p>
+      <p><a class="brand small" href="/"><span class="mark" aria-hidden="true"><i></i><i></i></span>Lockstep</a> is open source under the <a href="https://github.com/welshstew/lockstep/blob/main/LICENSE">MIT licence</a>. <a href="https://github.com/welshstew/lockstep">GitHub</a> · <a href="https://github.com/welshstew/lockstep/releases">Releases</a> · <a href="/docs/">Docs</a> · <a href="https://github.com/welshstew/lockstep/blob/main/SECURITY.md">Security</a></p>
       <p class="fine">Lockstep is an independent project. It is not affiliated with, endorsed by or sponsored by HashiCorp. HashiCorp and Vault are trademarks of HashiCorp, Inc.</p>
       <p class="fine">Privacy: this site sets no cookies for tracking and loads no third-party scripts. The server keeps access logs (including IP addresses) for 30 days to keep the site secure and to count visits; visit statistics are produced with anonymised IP addresses. The demo's sign-in cookie only holds your demo session.</p>
     </div>

@@ -1,3 +1,4 @@
+<!-- description: Every LOCKSTEP_* environment variable: preset Vault connections, custom URLs, sessions, TLS, Kubernetes auth and shared comparison profiles. -->
 # Configuration
 
 All configuration comes from environment variables prefixed `LOCKSTEP_`. Lists accept JSON (`["a","b"]`); the two plain string lists also accept comma-separated values.

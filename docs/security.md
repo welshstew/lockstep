@@ -1,3 +1,4 @@
+<!-- description: Lockstep's security model: what it sees, stores, logs and writes, example read-only and copy Vault policies, and the signed, scanned supply chain. -->
 # Security model
 
 ## What the tool holds

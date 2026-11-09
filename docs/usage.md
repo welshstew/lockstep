@@ -1,3 +1,4 @@
+<!-- description: How to use Lockstep: compare two Vault KV v2 locations, read the statuses, use profiles, copy values safely, sync plans, value tools and certificate expiry. -->
 # Using the tool
 
 ## 1. Choose what to compare

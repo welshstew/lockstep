@@ -176,6 +176,22 @@ The e2e job runs the stack as its own compose project (`lockstep-ci-<run>`) with
 
 ## Releasing
 
-1. Set the new version in `charts/lockstep/Chart.yaml` (`version` and `appVersion`), `backend/pyproject.toml` and `frontend/package.json`, and add a `## [X.Y.Z]` section to `CHANGELOG.md`. `scripts/check-version.sh vX.Y.Z` checks they agree.
+1. Set the new version in `charts/lockstep/Chart.yaml` (`version`, `appVersion` and the image in the `artifacthub.io/images` annotation), `backend/pyproject.toml` and `frontend/package.json`, and add a `## [X.Y.Z]` section to `CHANGELOG.md`. Rewrite the chart's `artifacthub.io/changes` annotation for the release (Artifact Hub shows it). `scripts/check-version.sh vX.Y.Z` checks the versions agree.
 2. Merge, publish to GitHub (`scripts/publish-github.sh …`), then tag the published commit `vX.Y.Z` on GitHub.
 3. `.github/workflows/release.yml` re-runs the security gate and browser tests, builds the amd64 and arm64 image, pushes it to `ghcr.io/<owner>/lockstep` with an SBOM and provenance, pushes the chart to `oci://ghcr.io/<owner>/charts/lockstep`, signs both with cosign (keyless), and creates the GitHub Release from the changelog. A tag like `v0.2.0-rc.1` makes a pre-release (no `latest` tag).
+
+### Artifact Hub
+
+The chart is listed on [Artifact Hub](https://artifacthub.io) from its OCI repository, `oci://ghcr.io/welshstew/charts/lockstep`. Its page there comes from `Chart.yaml`:
+- **Annotations:** category, links, image, and the changes in this version.
+- **The chart README.**
+- **The values schema.**
+
+The "Verified Publisher" badge needs `charts/lockstep/artifacthub-repo.yml` to hold the repository ID Artifact Hub assigns. Once it does, `.github/workflows/artifacthub.yml` pushes the file as `ghcr.io/welshstew/charts/lockstep:artifacthub.io`. That happens on merge, or when you run the workflow manually. `.helmignore` keeps the file out of the chart package.
+
+## The website
+
+getlockstep.cloud is the static landing page in `deploy/demo/site`. Its docs and guide pages are generated from `docs/*.md` and `docs/guides/*.md`, and so is `sitemap.xml`. `scripts/build-site.sh` generates them, using Python-Markdown in `.venv-site/`, and `scripts/deploy-demo.sh` runs it before copying the site to the server. The generated files are gitignored.
+- **Which pages:** `DOCS` in `scripts/build_site.py` lists the reference guides that are published. Every guide in `docs/guides/` is published.
+- **Links:** links between published pages become site links, and links to anything else in the repository go to GitHub. Keep links relative (`../cli.md#install`) so they work on GitHub too.
+

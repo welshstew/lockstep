@@ -1,0 +1,10 @@
+# Artifact Hub repository metadata for oci://ghcr.io/welshstew/charts/lockstep.
+#
+# Artifact Hub lists the chart without this file. The file proves we own the repository,
+# which gives it the "Verified Publisher" badge:
+#   1. Add the repository on artifacthub.io (Control Panel > Add repository, kind "Helm
+#      charts", URL oci://ghcr.io/welshstew/charts/lockstep) and copy its repository ID.
+#   2. Put the ID below, merge, and publish to GitHub. .github/workflows/artifacthub.yml
+#      then pushes this file as ghcr.io/welshstew/charts/lockstep:artifacthub.io.
+# It's ignored (not pushed) while the ID is the placeholder.
+repositoryID: REPLACE-WITH-ARTIFACT-HUB-REPOSITORY-ID

@@ -1,3 +1,4 @@
+<!-- description: The lockstep command line: compare two Vault KV v2 locations into a YAML report with Vault UI links and vault kv get commands, then apply it key by key. -->
 # Command line
 
 The `lockstep` command does what the web UI does, from a terminal or a CI job:

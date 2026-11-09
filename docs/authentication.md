@@ -1,3 +1,4 @@
+<!-- description: Signing in to Vault with Lockstep: token, userpass, LDAP, OIDC redirect and Kubernetes service account, with the Vault-side setup for each. -->
 # Authentication
 
 Each side of a comparison has its own **connection**: a Vault address, an optional namespace, and a way to sign in. A browser session can hold up to six connections; a connection made for one side can be reused on the other (same Vault, different mount).
@@ -63,7 +64,7 @@ When the tool runs in Kubernetes, it can sign in to a Vault **as its own pod's s
 3. Vault validates the token through the cluster's **TokenReview** API, checks that the service account matches the role's `bound_service_account_names` and `bound_service_account_namespaces`, and returns a Vault token with the role's policies.
 4. The connection shows the identity as `kubernetes-<namespace>-<serviceaccount>`. The Vault token is revoked on *Sign out*.
 
-### ⚠️ It's the tool's identity, not yours
+### It's the tool's identity, not yours
 
 Anyone who can open the tool and choose Kubernetes gets **that service account's Vault access**, and copies are audit-logged under the service account (`"target_auth": "kubernetes"`), not the person. That's why the feature is opt-in:
 
