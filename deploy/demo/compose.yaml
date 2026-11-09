@@ -38,7 +38,9 @@ services:
       STATS_HASH: ${STATS_HASH:?}   # bcrypt, made by scripts/deploy-demo.sh
     ports: ["80:80", "443:443", "443:443/udp"]
     volumes:
-      - ./deploy/demo/Caddyfile:/etc/caddy/Caddyfile:ro
+      # The directory, not the file: a file bind mount pins the original inode, and rsync
+      # replaces files, so the container would keep seeing the old Caddyfile.
+      - ./deploy/demo:/etc/caddy:ro
       - caddy-data:/data
       - caddy-config:/config
       - ./deploy/demo/site:/srv/site:ro

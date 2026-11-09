@@ -51,5 +51,8 @@ sed -e "s|\${LOGIN_HOST}|$LOGIN_HOST|g" -e "s|\${DEMO_HOST}|$DEMO_HOST|g" \
     -e "s|\${DEX_CLIENT_SECRET}|$DEX_CLIENT_SECRET|g" deploy/demo/dex.yaml.tmpl > dex.yaml
 chown 65532:65532 dex.yaml && chmod 600 dex.yaml
 docker compose -f deploy/demo/compose.yaml --project-directory . up -d --build --remove-orphans
+# A changed Caddyfile alone doesn't recreate the container, so always reload its config.
+docker compose -f deploy/demo/compose.yaml --project-directory . exec -T caddy \
+  caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
 docker compose -f deploy/demo/compose.yaml --project-directory . ps
 REMOTE
