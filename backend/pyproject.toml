@@ -20,7 +20,7 @@ lockstep = "lockstep.cli:main"
 dev = ["pytest==9.2.0", "pytest-asyncio==1.4.1.post1"]
 
 [build-system]
-requires = ["setuptools>=77"]  # SPDX license expressions (PEP 639)
+requires = ["setuptools>=84.2.1"]  # SPDX license expressions (PEP 639)
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
