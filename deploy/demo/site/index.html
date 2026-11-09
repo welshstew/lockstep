@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Lockstep: compare and sync Vault KV secrets</title>
-  <meta name="description" content="Open-source tool to compare, inspect and sync KV v2 secrets across HashiCorp Vault clusters, without showing values you didn't ask to see. Try the live demo.">
+  <meta name="description" content="Open-source tool to compare, inspect and sync KV v2 secrets across HashiCorp Vault clusters, in a web UI or from the command line, without showing values you didn't ask to see. Try the live demo.">
   <meta property="og:title" content="Lockstep: compare and sync Vault KV secrets">
   <meta property="og:description" content="Compare, inspect and sync KV v2 secrets across HashiCorp Vault clusters. Open source, MIT licensed, built for Kubernetes.">
   <meta property="og:image" content="https://getlockstep.cloud/images/02-compare-dark.png">
@@ -117,6 +117,27 @@
           </picture>
         </div>
       </div>
+      <div class="wrap row flip cli-row">
+        <div class="copy">
+          <h2>From the terminal, too</h2>
+          <p><code>lockstep compare</code> writes a YAML report of what differs: no values, but a Vault UI link and a <code>vault kv get</code> command for every secret. Set an action on the keys to change and <code>lockstep apply</code> copies them, asking before each one. It logs in like the <code>vault</code> CLI, and its exit code makes it a drift check in CI.</p>
+        </div>
+        <div class="shot">
+<pre class="term" aria-label="A terminal session comparing two Vaults and applying one change"><code><span class="prompt">$</span> lockstep compare --mount app-config -o report.yaml
+  different   payments/db     differs: password
+  left only   services/api
+  right only  services/queue
+
+12 secrets: 9 equal, 1 different, 1 left only, 1 right only.
+
+<span class="prompt">$</span> lockstep apply report.yaml
+→ staging · app-config/payments/db   from prod · app-config/payments/db
+  1 key to write (v7 → v8):
+    update password
+  Write password? [y]es / [n]o / [a]ll / [q]uit: y
+  Written: v8 (1 key).</code></pre>
+        </div>
+      </div>
     </section>
 
     <section class="built">
@@ -152,8 +173,16 @@ cd lockstep
 make up    # two demo Vaults + Lockstep
 open http://localhost:8080</code></pre>
           </div>
+          <div class="span">
+            <h3>Command line</h3>
+<pre><code>pipx install "git+https://github.com/welshstew/lockstep@v0.2.0#subdirectory=backend"
+lockstep compare --help
+
+# or run it from the image
+docker run --rm -it --entrypoint lockstep ghcr.io/welshstew/lockstep:0.2.0 --help</code></pre>
+          </div>
         </div>
-        <p class="more">Configuration, authentication and deployment guides are in the <a href="https://github.com/welshstew/lockstep#documentation">documentation</a>.</p>
+        <p class="more">Configuration, authentication, deployment and <a href="https://github.com/welshstew/lockstep/blob/main/docs/cli.md">command-line</a> guides are in the <a href="https://github.com/welshstew/lockstep#documentation">documentation</a>.</p>
       </div>
     </section>
 
