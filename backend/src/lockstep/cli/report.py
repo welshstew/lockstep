@@ -23,13 +23,34 @@ from ..api.sync import Change, Direction
 from .connect import CliError
 
 FORMAT = 1
+# JSON Schema for the report, so editors can complete and check `action:` values. Published
+# at this URL by the website build (scripts/build_site.py); `lockstep schema` prints it.
+SCHEMA_URL = "https://getlockstep.cloud/schemas/lockstep-report-v1.json"
 KeyAction = Literal["skip", "copy-to-right", "copy-to-left"]
 SecretAction = Literal["per-key", "skip", "copy-to-right", "copy-to-left"]
+_KEY_ACTIONS = {
+    "skip": "Leave this key alone (the default).",
+    "copy-to-right": "Write the left side's value to the right side. The key must exist on the left.",
+    "copy-to-left": "Write the right side's value to the left side. The key must exist on the right.",
+}
+_SECRET_ACTIONS = {
+    "per-key": "Use the actions set on this secret's keys (the default).",
+    "skip": "Leave the whole secret alone, whatever its keys say.",
+    "copy-to-right": "Copy every key the left side has to the right side, including keys that are already equal.",
+    "copy-to-left": "Copy every key the right side has to the left side, including keys that are already equal.",
+}
+
+
+def _enum_help(options: dict[str, str]) -> dict:
+    """Per-value hover text for editors (VS Code / yaml-language-server)."""
+    return {"enumDescriptions": list(options.values()),
+            "markdownEnumDescriptions": [f"`{k}`: {v}" for k, v in options.items()]}
 DIRECTION: dict[str, Direction] = {"copy-to-right": "left_to_right", "copy-to-left": "right_to_left"}
 # A key can be copied from the side that has it
 COPYABLE = {"copy-to-right": ("left_only", "different"), "copy-to-left": ("right_only", "different")}
 
 HEADER = """\
+# yaml-language-server: $schema={schema}
 # Lockstep comparison report
 #
 # Lists every secret that differs between the two sides, without any values. To look at
@@ -52,64 +73,83 @@ class ReportSide(BaseModel):
     """One side of the comparison."""
 
     model_config = ConfigDict(extra="ignore")
-    name: str
-    addr: str
-    namespace: str | None = None
-    mount: str = Field(min_length=1)
-    prefix: str = ""
-    ui_addr: str | None = None
-    identity: str = ""
+    name: str = Field(description="Label for this side, used in messages.")
+    addr: str = Field(description="Vault address. `lockstep apply` connects here unless you pass --left-addr/--right-addr.")
+    namespace: str | None = Field(default=None, description="Vault Enterprise namespace.")
+    mount: str = Field(min_length=1, description="KV v2 mount.")
+    prefix: str = Field(default="", description="Path prefix that was compared (empty: the whole mount).")
+    ui_addr: str | None = Field(default=None, description="Address of the Vault UI, if it differs from addr.")
+    identity: str = Field(default="", description="Who compared this side (Vault's display name for the token).")
 
 
 class SecretSide(BaseModel):
+    """One side of a secret, as it was when the report was made."""
+
     model_config = ConfigDict(extra="ignore")
-    path: str  # full path within the mount (prefix included)
-    state: str
-    version: int | None = None
-    updated: str | None = None
-    ui: str | None = None
-    cli: str | None = None
+    path: str = Field(description="Full path within the mount (prefix included).")
+    state: str = Field(description="present, absent, deleted, no_access or error.")
+    version: int | None = Field(default=None, description="KV v2 version when compared. `apply` skips the secret if it has changed since.")
+    updated: str | None = Field(default=None, description="When that version was written.")
+    ui: str | None = Field(default=None, description="The secret in the Vault web UI.")
+    cli: str | None = Field(default=None, description="Command to see its values with the vault CLI.")
 
 
 class ReportKey(BaseModel):
+    """A key that isn't equal on both sides."""
+
     model_config = ConfigDict(extra="forbid")  # catches typos such as `acton:`
-    key: str
-    status: str
-    type_differs: bool = False
-    ignored: bool = False
-    left_holds: str | None = None
-    right_holds: str | None = None
-    action: KeyAction = "skip"
+    key: str = Field(description="Key name.")
+    status: str = Field(description="different, left_only or right_only (unknown if a side couldn't be read).")
+    type_differs: bool = Field(default=False, description='The values have different JSON types, e.g. 5432 vs "5432".')
+    ignored: bool = Field(default=False, description="A profile rule says this difference doesn't count.")
+    left_holds: str | None = Field(default=None, description="What the left value is (certificate, keystore...), without the value.")
+    right_holds: str | None = Field(default=None, description="What the right value is, without the value.")
+    action: KeyAction = Field(default="skip", description="What `lockstep apply` does with this key.",
+                              json_schema_extra=_enum_help(_KEY_ACTIONS))
 
 
 class ReportSecret(BaseModel):
+    """A secret that differs (or every secret, with --include-equal)."""
+
     model_config = ConfigDict(extra="forbid")
-    path: str
-    status: str
-    action: SecretAction = "per-key"
-    note: str | None = None
+    path: str = Field(description="The secret's path relative to the prefixes (the right side's form under a mapping).")
+    status: str = Field(description="equal, different, left_only, right_only, no_access or error.")
+    action: SecretAction = Field(default="per-key", description="What `lockstep apply` does with the whole secret.",
+                                 json_schema_extra=_enum_help(_SECRET_ACTIONS))
+    note: str | None = Field(default=None, description="Why the comparison couldn't be completed for this secret.")
     left: SecretSide
     right: SecretSide
-    equal_keys: int = 0
-    keys: list[ReportKey] = []
+    equal_keys: int = Field(default=0, description="How many keys are equal (not listed).")
+    keys: list[ReportKey] = Field(default=[], description="Keys that differ, each with an action.")
 
 
 class Report(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    lockstep_report: int
-    created: str
+    """A Lockstep comparison report: what differs between two Vault KV v2 locations, never values.
+    Set `action` on keys or secrets, then run `lockstep apply` on the file."""
+
+    model_config = ConfigDict(extra="ignore", title="Lockstep comparison report")
+    lockstep_report: int = Field(description=f"Report format version ({FORMAT}).",
+                                 json_schema_extra={"const": FORMAT})
+    created: str = Field(description="When the comparison ran (UTC).")
     left: ReportSide
     right: ReportSide
-    profile: str | None = None
-    summary: dict[str, int] = {}
-    warnings: list[str] = []
-    secrets: list[ReportSecret] = []
+    profile: str | None = Field(default=None, description="Comparison profile used, if any.")
+    summary: dict[str, int] = Field(default={}, description="Counts per status.")
+    warnings: list[str] = Field(default=[], description="Folders that couldn't be listed, truncation.")
+    secrets: list[ReportSecret] = Field(default=[], description="Secrets that differ.")
 
     @model_validator(mode="after")
     def _version(self):
         if self.lockstep_report != FORMAT:
             raise ValueError(f"unsupported report format {self.lockstep_report} (this lockstep reads {FORMAT})")
         return self
+
+
+def schema() -> dict:
+    """The report's JSON Schema (draft 2020-12), published at SCHEMA_URL."""
+    out = {"$schema": "https://json-schema.org/draft/2020-12/schema", "$id": SCHEMA_URL,
+           **Report.model_json_schema()}
+    return out
 
 
 # --------------------------------------------------------------------------- links
@@ -196,7 +236,7 @@ def dump(report: Report, filename: str) -> str:
             else "skip | copy-to-right | copy-to-left"
         return f"{m.group(1)}{m.group(2)}  # {options}"
 
-    return HEADER.format(file=filename) + _ACTION_LINE.sub(hint, body)
+    return HEADER.format(file=filename, schema=SCHEMA_URL) + _ACTION_LINE.sub(hint, body)
 
 
 # --------------------------------------------------------------------------- load / plan

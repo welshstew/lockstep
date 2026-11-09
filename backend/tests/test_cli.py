@@ -126,6 +126,39 @@ def test_profile_from_web_export(tmp_path):
     assert prof is None and rules.key_ignored("host", "any/path")
 
 
+def test_published_schema_matches_the_code():
+    import json
+    from pathlib import Path
+
+    committed = Path(__file__).resolve().parents[2] / "schemas" / "lockstep-report-v1.json"
+    if not committed.exists():
+        pytest.skip("repository checkout not available (schemas/ is outside the backend)")
+    assert json.loads(committed.read_text()) == rpt.schema(), \
+        "schemas/lockstep-report-v1.json is out of date: run `lockstep schema > schemas/lockstep-report-v1.json`"
+
+
+def test_schema_describes_actions_for_editors():
+    s = rpt.schema()
+    key_action = s["$defs"]["ReportKey"]["properties"]["action"]
+    assert key_action["enum"] == ["skip", "copy-to-right", "copy-to-left"]
+    assert len(key_action["enumDescriptions"]) == 3
+    assert s["$defs"]["ReportKey"]["additionalProperties"] is False  # typos are flagged
+    assert s["properties"]["lockstep_report"]["const"] == 1
+
+
+def test_report_points_editors_at_the_schema():
+    from lockstep.diff import SideInfo, diff_secret
+    from lockstep.engine import Comparison
+    from lockstep.vault import TreeResult
+
+    d = diff_secret("a", SideInfo(state="present", version=1), {"k": 1}, SideInfo(state="absent"), None)
+    side = rpt.ReportSide(name="x", addr="http://x", mount="m")
+    rep = rpt.build(Comparison([d], TreeResult(), TreeResult(), {"total": 1}), side, side, None)
+    text = rpt.dump(rep, "r.yaml")
+    assert text.splitlines()[0] == f"# yaml-language-server: $schema={rpt.SCHEMA_URL}"
+    assert rpt.load(text, "r.yaml").secrets[0].keys[0].key == "k"
+
+
 # --------------------------------------------------------------------------- against Vault
 
 

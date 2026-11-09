@@ -8,6 +8,7 @@ Reads Markdown from docs/ and docs/guides/ and writes, next to the landing page:
     deploy/demo/site/guides/<name>/index.html    every docs/guides/*.md
     deploy/demo/site/docs/index.html             an index of both
     deploy/demo/site/sitemap.xml
+    deploy/demo/site/schemas/*.json              copied from schemas/ (the CLI report's schema)
 These are generated (gitignored); scripts/deploy-demo.sh builds them before copying.
 
 A page's meta description comes from an HTML comment at its top,
@@ -237,6 +238,10 @@ def main() -> int:
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(render(p, pages, by_path))
     (SITE / "docs/index.html").write_text(render_index(pages))
+    # JSON Schemas referenced by files Lockstep writes (the CLI report's first line)
+    (SITE / "schemas").mkdir(exist_ok=True)
+    for f in (ROOT / "schemas").glob("*.json"):
+        (SITE / "schemas" / f.name).write_bytes(f.read_bytes())
 
     urls = [(BASE + "/", _lastmod(SITE / "index.html"), "1.0"), (BASE + "/docs/", _lastmod(ROOT / "docs"), "0.6")]
     urls += [(BASE + p.url, _lastmod(p.src), "0.8" if p.section == "guides" else "0.6") for p in pages]

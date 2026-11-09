@@ -1,0 +1,376 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://getlockstep.cloud/schemas/lockstep-report-v1.json",
+  "$defs": {
+    "ReportKey": {
+      "additionalProperties": false,
+      "description": "A key that isn't equal on both sides.",
+      "properties": {
+        "key": {
+          "description": "Key name.",
+          "title": "Key",
+          "type": "string"
+        },
+        "status": {
+          "description": "different, left_only or right_only (unknown if a side couldn't be read).",
+          "title": "Status",
+          "type": "string"
+        },
+        "type_differs": {
+          "default": false,
+          "description": "The values have different JSON types, e.g. 5432 vs \"5432\".",
+          "title": "Type Differs",
+          "type": "boolean"
+        },
+        "ignored": {
+          "default": false,
+          "description": "A profile rule says this difference doesn't count.",
+          "title": "Ignored",
+          "type": "boolean"
+        },
+        "left_holds": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "What the left value is (certificate, keystore...), without the value.",
+          "title": "Left Holds"
+        },
+        "right_holds": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "What the right value is, without the value.",
+          "title": "Right Holds"
+        },
+        "action": {
+          "default": "skip",
+          "description": "What `lockstep apply` does with this key.",
+          "enum": [
+            "skip",
+            "copy-to-right",
+            "copy-to-left"
+          ],
+          "enumDescriptions": [
+            "Leave this key alone (the default).",
+            "Write the left side's value to the right side. The key must exist on the left.",
+            "Write the right side's value to the left side. The key must exist on the right."
+          ],
+          "markdownEnumDescriptions": [
+            "`skip`: Leave this key alone (the default).",
+            "`copy-to-right`: Write the left side's value to the right side. The key must exist on the left.",
+            "`copy-to-left`: Write the right side's value to the left side. The key must exist on the right."
+          ],
+          "title": "Action",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "status"
+      ],
+      "title": "ReportKey",
+      "type": "object"
+    },
+    "ReportSecret": {
+      "additionalProperties": false,
+      "description": "A secret that differs (or every secret, with --include-equal).",
+      "properties": {
+        "path": {
+          "description": "The secret's path relative to the prefixes (the right side's form under a mapping).",
+          "title": "Path",
+          "type": "string"
+        },
+        "status": {
+          "description": "equal, different, left_only, right_only, no_access or error.",
+          "title": "Status",
+          "type": "string"
+        },
+        "action": {
+          "default": "per-key",
+          "description": "What `lockstep apply` does with the whole secret.",
+          "enum": [
+            "per-key",
+            "skip",
+            "copy-to-right",
+            "copy-to-left"
+          ],
+          "enumDescriptions": [
+            "Use the actions set on this secret's keys (the default).",
+            "Leave the whole secret alone, whatever its keys say.",
+            "Copy every key the left side has to the right side, including keys that are already equal.",
+            "Copy every key the right side has to the left side, including keys that are already equal."
+          ],
+          "markdownEnumDescriptions": [
+            "`per-key`: Use the actions set on this secret's keys (the default).",
+            "`skip`: Leave the whole secret alone, whatever its keys say.",
+            "`copy-to-right`: Copy every key the left side has to the right side, including keys that are already equal.",
+            "`copy-to-left`: Copy every key the right side has to the left side, including keys that are already equal."
+          ],
+          "title": "Action",
+          "type": "string"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Why the comparison couldn't be completed for this secret.",
+          "title": "Note"
+        },
+        "left": {
+          "$ref": "#/$defs/SecretSide"
+        },
+        "right": {
+          "$ref": "#/$defs/SecretSide"
+        },
+        "equal_keys": {
+          "default": 0,
+          "description": "How many keys are equal (not listed).",
+          "title": "Equal Keys",
+          "type": "integer"
+        },
+        "keys": {
+          "default": [],
+          "description": "Keys that differ, each with an action.",
+          "items": {
+            "$ref": "#/$defs/ReportKey"
+          },
+          "title": "Keys",
+          "type": "array"
+        }
+      },
+      "required": [
+        "path",
+        "status",
+        "left",
+        "right"
+      ],
+      "title": "ReportSecret",
+      "type": "object"
+    },
+    "ReportSide": {
+      "description": "One side of the comparison.",
+      "properties": {
+        "name": {
+          "description": "Label for this side, used in messages.",
+          "title": "Name",
+          "type": "string"
+        },
+        "addr": {
+          "description": "Vault address. `lockstep apply` connects here unless you pass --left-addr/--right-addr.",
+          "title": "Addr",
+          "type": "string"
+        },
+        "namespace": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Vault Enterprise namespace.",
+          "title": "Namespace"
+        },
+        "mount": {
+          "description": "KV v2 mount.",
+          "minLength": 1,
+          "title": "Mount",
+          "type": "string"
+        },
+        "prefix": {
+          "default": "",
+          "description": "Path prefix that was compared (empty: the whole mount).",
+          "title": "Prefix",
+          "type": "string"
+        },
+        "ui_addr": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Address of the Vault UI, if it differs from addr.",
+          "title": "Ui Addr"
+        },
+        "identity": {
+          "default": "",
+          "description": "Who compared this side (Vault's display name for the token).",
+          "title": "Identity",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "addr",
+        "mount"
+      ],
+      "title": "ReportSide",
+      "type": "object"
+    },
+    "SecretSide": {
+      "description": "One side of a secret, as it was when the report was made.",
+      "properties": {
+        "path": {
+          "description": "Full path within the mount (prefix included).",
+          "title": "Path",
+          "type": "string"
+        },
+        "state": {
+          "description": "present, absent, deleted, no_access or error.",
+          "title": "State",
+          "type": "string"
+        },
+        "version": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "KV v2 version when compared. `apply` skips the secret if it has changed since.",
+          "title": "Version"
+        },
+        "updated": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "When that version was written.",
+          "title": "Updated"
+        },
+        "ui": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The secret in the Vault web UI.",
+          "title": "Ui"
+        },
+        "cli": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Command to see its values with the vault CLI.",
+          "title": "Cli"
+        }
+      },
+      "required": [
+        "path",
+        "state"
+      ],
+      "title": "SecretSide",
+      "type": "object"
+    }
+  },
+  "description": "A Lockstep comparison report: what differs between two Vault KV v2 locations, never values.\nSet `action` on keys or secrets, then run `lockstep apply` on the file.",
+  "properties": {
+    "lockstep_report": {
+      "const": 1,
+      "description": "Report format version (1).",
+      "title": "Lockstep Report",
+      "type": "integer"
+    },
+    "created": {
+      "description": "When the comparison ran (UTC).",
+      "title": "Created",
+      "type": "string"
+    },
+    "left": {
+      "$ref": "#/$defs/ReportSide"
+    },
+    "right": {
+      "$ref": "#/$defs/ReportSide"
+    },
+    "profile": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Comparison profile used, if any.",
+      "title": "Profile"
+    },
+    "summary": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "default": {},
+      "description": "Counts per status.",
+      "title": "Summary",
+      "type": "object"
+    },
+    "warnings": {
+      "default": [],
+      "description": "Folders that couldn't be listed, truncation.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Warnings",
+      "type": "array"
+    },
+    "secrets": {
+      "default": [],
+      "description": "Secrets that differ.",
+      "items": {
+        "$ref": "#/$defs/ReportSecret"
+      },
+      "title": "Secrets",
+      "type": "array"
+    }
+  },
+  "required": [
+    "lockstep_report",
+    "created",
+    "left",
+    "right"
+  ],
+  "title": "Lockstep comparison report",
+  "type": "object"
+}

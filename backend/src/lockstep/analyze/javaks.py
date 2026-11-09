@@ -24,6 +24,11 @@ from . import der
 
 JKS_MAGIC = 0xFEEDFEED
 JCEKS_MAGIC = 0xCECECECE
+# Told to the user for every JKS/JCEKS keystore. The SHA-1 and MD5 below are fixed by these
+# formats: we only verify and decrypt existing files and never create hashes of our own.
+WEAK_FORMAT_NOTE = ("{kind} protects keys and checks integrity with SHA-1{extra}, which is weak by today's "
+                    "standards. Java has used PKCS#12 by default since Java 9; consider converting: "
+                    "keytool -importkeystore -srckeystore old.{ext} -destkeystore new.p12 -deststoretype pkcs12")
 JKS_KEY_OID = "1.3.6.1.4.1.42.2.17.1.1"  # Sun's proprietary JKS key protection
 JCEKS_KEY_OID = "1.3.6.1.4.1.42.2.19.1"  # PBEWithMD5AndTripleDES
 
@@ -106,7 +111,8 @@ def parse(buf: bytes, password: str | None = None) -> Keystore:
         raise KeystoreError(f"unsupported keystore version {version}")
     count = r.u4()
     entries: list[Entry] = []
-    notes: list[str] = []
+    notes: list[str] = [WEAK_FORMAT_NOTE.format(
+        kind=kind.upper(), ext=kind, extra=" (and MD5 with Triple DES for keys)" if kind == "jceks" else "")]
     complete = True
     for _ in range(count):
         tag = r.u4()

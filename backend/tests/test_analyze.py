@@ -154,6 +154,7 @@ def test_pkcs12_password_flow(ana):
 def test_jks_made_by_keytool(ana):
     no_pw = find(ana("certs", "keystores/java-app", "keystore.jks")["root"], "jks")
     assert no_pw["details"]["integrity"] == "unchecked" and no_pw["needs_password"]
+    assert any("SHA-1" in n and "-deststoretype pkcs12" in n for n in no_pw["notes"])  # weak format, said so
     assert len(all_of(no_pw, "certificate")) == 2  # certs readable without the password
     assert find(no_pw, "private_key") is None
 
@@ -173,6 +174,7 @@ def test_jceks_made_by_keytool(ana):
     assert ks["details"]["integrity"] == "ok"
     entry = find(ks, "keystore_entry")
     assert any("JCEKS" in n for n in entry["notes"])
+    assert any("MD5 with Triple DES" in n and "old.jceks" in n for n in ks["notes"])
     assert len(all_of(ks, "certificate")) == 2
 
 

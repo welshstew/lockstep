@@ -3,6 +3,13 @@
 All notable changes to Lockstep. Versions follow [Semantic Versioning](https://semver.org/);
 the image, the Helm chart and the app share one version.
 
+## [Unreleased]
+
+### Added
+
+- **Editor support for CLI reports:** reports point to a published JSON Schema (`https://getlockstep.cloud/schemas/lockstep-report-v1.json`, also printed by `lockstep schema`). In VS Code with the YAML extension, and other editors using the YAML language server, `action:` values autocomplete with descriptions and typos are flagged while you edit.
+- The value inspector notes that JKS and JCEKS keystores use weak, format-mandated SHA-1 (and MD5/Triple DES) protection, and gives the `keytool` command to convert them to PKCS#12.
+
 ## [0.2.0] - 2026-11-09
 
 ### Added

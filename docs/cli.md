@@ -218,6 +218,23 @@ Don't set both a secret action and key actions on the same secret.
 - an action on a secret one side couldn't read
 - a misspelt field or action
 
+### Editor support
+
+The report's first line points editors at its [JSON Schema](https://getlockstep.cloud/schemas/lockstep-report-v1.json):
+
+```yaml
+# yaml-language-server: $schema=https://getlockstep.cloud/schemas/lockstep-report-v1.json
+```
+
+In **VS Code** with Red Hat's [YAML extension](https://marketplace.visualstudio.com/items?itemName=redhat.vscode-yaml):
+- `action:` values autocomplete, with a description of each.
+- A misspelt field or action is underlined as you type.
+- Hovering over a field explains it.
+
+The same line works in other editors that use the YAML language server, such as Neovim, Helix and Zed. In **JetBrains** IDEs, map the schema URL to your report files under *Settings → Languages & Frameworks → Schemas and DTDs → JSON Schema Mappings*.
+
+`lockstep schema` prints the schema, for offline use.
+
 ## Apply
 
 ```sh

@@ -193,5 +193,6 @@ The "Verified Publisher" badge needs `charts/lockstep/artifacthub-repo.yml` to h
 
 getlockstep.cloud is the static landing page in `deploy/demo/site`. Its docs and guide pages are generated from `docs/*.md` and `docs/guides/*.md`, and so is `sitemap.xml`. `scripts/build-site.sh` generates them, using Python-Markdown in `.venv-site/`, and `scripts/deploy-demo.sh` runs it before copying the site to the server. The generated files are gitignored.
 - **Which pages:** `DOCS` in `scripts/build_site.py` lists the reference guides that are published. Every guide in `docs/guides/` is published.
+- **Schemas:** `schemas/*.json` are published at `/schemas/`. `schemas/lockstep-report-v1.json` is generated from the CLI's report models; after changing them, run `lockstep schema > schemas/lockstep-report-v1.json`, and a test checks it's up to date. A breaking change to the report format needs a new `lockstep_report` version and a new schema file. Leave the old file in place, because reports already written point to it.
 - **Links:** links between published pages become site links, and links to anything else in the repository go to GitHub. Keep links relative (`../cli.md#install`) so they work on GitHub too.
 

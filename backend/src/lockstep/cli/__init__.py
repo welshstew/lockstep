@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 import sys
 from importlib.metadata import PackageNotFoundError, version
@@ -79,6 +80,10 @@ def parser() -> argparse.ArgumentParser:
     for which in SIDES:
         add_side_args(a, which, locations=False)
     add_tls_args(a)
+
+    sub.add_parser("schema", help="print the report's JSON Schema",
+                   description=f"Print the JSON Schema of the report file (also at {report_mod.SCHEMA_URL}). "
+                               "Editors use it to complete and check `action:` values.")
     return p
 
 
@@ -262,6 +267,9 @@ async def _apply(args) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
+    if args.command == "schema":
+        print(json.dumps(report_mod.schema(), indent=2, ensure_ascii=False))
+        return 0
     try:
         return asyncio.run(_compare(args) if args.command == "compare" else _apply(args))
     except CliError as e:
