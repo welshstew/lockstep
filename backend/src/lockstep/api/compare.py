@@ -2,27 +2,24 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from .. import engine
 from ..config import Settings, get_settings
-from ..analyze.detect import badge
-from ..diff import SecretDiff, SideInfo, diff_secret, summarize
-from ..rules import Rules, pair_paths
+from ..diff import SecretDiff
+from ..rules import Rules
 from ..session import SessionData, load_session
-from ..vault import TreeResult, VaultClient, VaultError
+from ..vault import VaultError
 from .connections import client_for, get_connection, vault_http_error
 
 router = APIRouter(prefix="/api", tags=["compare"])
 
 Sess = Annotated[SessionData, Depends(load_session)]
 Conf = Annotated[Settings, Depends(get_settings)]
-
-READ_CONCURRENCY = 16
 
 
 class Side(BaseModel):
@@ -65,26 +62,6 @@ class SecretOut(BaseModel):
     data: dict[str, Any] | None
 
 
-def _hidden(denied: list[str], full_path: str) -> bool:
-    return any(full_path.startswith(d) for d in denied)
-
-
-async def _read_side(v: VaultClient, sem: asyncio.Semaphore, mount: str, full_path: str,
-                     listed: bool, tree: TreeResult) -> tuple[SideInfo, dict | None]:
-    if not listed:
-        if _hidden(tree.denied, full_path):
-            return SideInfo(state="no_access"), None
-        return SideInfo(state="absent"), None
-    try:
-        async with sem:
-            s = await v.kv_read(mount, full_path)
-    except VaultError as e:
-        if e.denied:
-            return SideInfo(state="no_access"), None
-        return SideInfo(state="error", error=e.message), None
-    return SideInfo(state=s.state, version=s.version, updated=s.updated), s.data
-
-
 @router.post("/compare", response_model=CompareOut)
 async def compare(body: CompareRequest, session: Sess, settings: Conf):
     lconn = get_connection(session, body.left.conn_id)
@@ -94,54 +71,21 @@ async def compare(body: CompareRequest, session: Sess, settings: Conf):
 
     async with client_for(lconn, settings) as lv, client_for(rconn, settings) as rv:
         try:
-            ltree, rtree = await asyncio.gather(
-                lv.kv_tree(lmount, lprefix, max_secrets=settings.max_tree_secrets),
-                rv.kv_tree(rmount, rprefix, max_secrets=settings.max_tree_secrets))
+            result = await engine.compare(lv, lmount, lprefix, rv, rmount, rprefix, body.rules,
+                                          max_secrets=settings.max_tree_secrets)
         except VaultError as e:
             raise vault_http_error(e) from e
-
-        lrel = {s[len(lprefix):] for s in ltree.secrets}
-        rrel = {s[len(rprefix):] for s in rtree.secrets}
-        rules = body.rules or Rules()
-        pairs, collisions, ignored_paths = pair_paths(lrel, rrel, rules)
-        lsem, rsem = asyncio.Semaphore(READ_CONCURRENCY), asyncio.Semaphore(READ_CONCURRENCY)
-
-        async def one(key: str) -> SecretDiff:
-            lp, rp = pairs[key]
-            if key in collisions:
-                none = SideInfo(state="error", error="mapping collision")
-                d = diff_secret(key, none, None, none, None, left_path=lp, right_path=rp)
-                d.note = (f"The mappings send several left paths here ({', '.join(collisions[key])}). "
-                          f"Fix the profile so each target has one source.")
-                return d
-            (li, ld), (ri, rd) = await asyncio.gather(
-                _read_side(lv, lsem, lmount, lprefix + lp, lp in lrel, ltree),
-                _read_side(rv, rsem, rmount, rprefix + rp, rp in rrel, rtree))
-            d = diff_secret(key, li, ld, ri, rd, ignored=lambda k: rules.key_ignored(k, lp, rp),
-                            left_path=lp, right_path=rp)
-            for name in (kd.key for kd in d.keys):
-                lb = badge(ld[name]) if ld and name in ld else None
-                rb = badge(rd[name]) if rd and name in rd else None
-                if lb or rb:
-                    d.badges[name] = {"left": lb, "right": rb}
-            return d  # values are dropped once this returns
-
-        diffs = await asyncio.gather(*(one(k) for k in sorted(pairs)))
 
     def summary(conn_id, mount, prefix, tree):
         return SideSummary(conn_id=conn_id, mount=mount, prefix=prefix.rstrip("/"),
                            denied=[d[len(prefix):] for d in tree.denied], truncated=tree.truncated,
                            secret_count=len(tree.secrets))
 
-    totals = summarize(list(diffs))
-    totals["ignored_paths"] = ignored_paths
-    totals["ignored_keys"] = sum(d.ignored_keys for d in diffs)
-    totals["mapped"] = sum(d.left_path != d.right_path for d in diffs)
     return CompareOut(
-        left=summary(lconn.id, lmount, lprefix, ltree),
-        right=summary(rconn.id, rmount, rprefix, rtree),
-        secrets=list(diffs),
-        summary=totals,
+        left=summary(lconn.id, lmount, lprefix, result.left_tree),
+        right=summary(rconn.id, rmount, rprefix, result.right_tree),
+        secrets=result.secrets,
+        summary=result.summary,
     )
 
 

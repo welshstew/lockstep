@@ -24,6 +24,7 @@ Compare **KV v2 secrets engines** across HashiCorp Vault clusters, or across two
 - **Honest about permissions.** Secrets you can't list or read show as **No access**, never as "only on the other side", so nobody overwrites what they couldn't see.
 - **Copy with ← / →** per key or per secret. A review shows exactly what each target gets. Writes use KV v2 **check-and-set**: a target changed by someone else since you compared becomes a conflict, not an overwrite. Nothing is ever deleted. Every write is **audit-logged** (without values).
 - **Sync plans.** Save a reviewed set of copies as a signed file (paths, keys and versions, never values) that doubles as a report of what needs updating from where. Someone with write access opens it, checks it and applies it. If anything in it changed since it was made, nothing is written and the plan has to be made again. Read-only users can prepare plans.
+- **Command line too.** `lockstep compare` writes a YAML report of the differences (no values), with each secret's Vault UI link and `vault kv get` command. Set an action on the keys to change, and `lockstep apply` makes the copies, asking before each key is written. Logs in like the `vault` CLI, and works as a drift check in CI (exit code 1 on differences). See [Command line](docs/cli.md).
 - **Certificate expiry dashboard.** Scan one or both sides' mounts for every certificate (PEM, DER, base64, PKCS#12, JKS/JCEKS; keystores opened with the password stored beside them) and see what expires when. Only certificate details come back, never values.
 - **Value tools.** Each value is identified by its content: base64, PEM, DER, **X.509 certificates and chains** (validated link by link), **PKCS#12**, **JKS / JCEKS** keystores, keys, CSRs, images, ZIP/JAR, PDF… Inspect one or both sides, compare certificates field by field, preview images, download files.
 - **Last-updated metadata.** When each secret was written and when each key last changed (worked out from KV v2 versions), never part of the comparison.
@@ -56,11 +57,17 @@ This starts two dev-mode Vaults filled with demo data, Dex as an OIDC provider, 
 ## Deploy
 
 ```sh
-helm upgrade --install lockstep oci://ghcr.io/welshstew/charts/lockstep --version 0.1.0 \
+helm upgrade --install lockstep oci://ghcr.io/welshstew/charts/lockstep --version 0.2.0 \
   -n lockstep --create-namespace -f my-values.yaml
 ```
 
-Or run the container anywhere: `ghcr.io/welshstew/lockstep:0.1.0` (amd64 and arm64, signed with cosign, with an SBOM and build provenance; see [releases](https://github.com/welshstew/lockstep/releases)).
+Or run the container anywhere: `ghcr.io/welshstew/lockstep:0.2.0` (amd64 and arm64, signed with cosign, with an SBOM and build provenance; see [releases](https://github.com/welshstew/lockstep/releases)).
+
+For the command line, install from GitHub (it isn't on PyPI yet) or use the same image with `--entrypoint lockstep`. See [Command line: install](docs/cli.md#install):
+
+```sh
+pipx install "git+https://github.com/welshstew/lockstep@v0.2.0#subdirectory=backend"
+```
 
 A hardened chart: non-root, read-only filesystem, a session key kept across upgrades, optional Ingress, NetworkPolicy and Kubernetes auth. See [Deploying on Kubernetes](docs/kubernetes.md) and the [chart README](charts/lockstep/README.md).
 
@@ -69,6 +76,7 @@ A hardened chart: non-root, read-only filesystem, a session key kept across upgr
 | Guide | Contents |
 |---|---|
 | [Using the tool](docs/usage.md) | Comparing, statuses and permissions, copying values, value tools, timestamps |
+| [Command line](docs/cli.md) | `lockstep compare` reports and `lockstep apply`: install, logging in, the report format, exit codes |
 | [Authentication](docs/authentication.md) | Token, userpass/LDAP, OIDC redirect, **Kubernetes service account**: app settings *and* the Vault-side setup for each |
 | [Configuration](docs/configuration.md) | Every `LOCKSTEP_*` setting |
 | [Deploying on Kubernetes](docs/kubernetes.md) | The Helm chart, a deployment checklist, OIDC callback and Kubernetes auth in a cluster ([chart values](charts/lockstep/README.md)) |
@@ -79,7 +87,7 @@ A hardened chart: non-root, read-only filesystem, a session key kept across upgr
 
 ## Status and roadmap
 
-**Working:** comparison, copying, value tools, last-updated metadata, comparison profiles (path mapping and ignore rules), a certificate expiry dashboard, all sign-in methods (token, userpass/LDAP, OIDC redirect, Kubernetes), a Helm chart tested in a real cluster, and in CI security scanning, chart checks and browser end-to-end tests.
+**Working:** comparison, copying, a command-line interface (reports and apply), value tools, last-updated metadata, comparison profiles (path mapping and ignore rules), a certificate expiry dashboard, all sign-in methods (token, userpass/LDAP, OIDC redirect, Kubernetes), a Helm chart tested in a real cluster, and in CI security scanning, chart checks and browser end-to-end tests.
 
 **Possible next steps:**
 1. **Four-eyes rule for sync plans:** optionally require the person applying a plan to be someone other than its creator (plans already record who made them)

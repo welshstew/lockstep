@@ -13,6 +13,8 @@
 backend/src/lockstep/
   api/          connections · compare (+ history) · sync · analyze · auth (OIDC)
   analyze/      content detection, certificates and chains, DER reader, JKS/JCEKS reader
+  cli/          the `lockstep` command: compare -> YAML report, apply (connect, report, apply)
+  engine.py     comparing two locations (shared by the API and the CLI)
   diff.py       pure comparison logic        vault.py    Vault HTTP client
   session.py    encrypted cookie sessions    config.py   LOCKSTEP_* settings
 backend/tests/  pytest, run against the compose Vaults
@@ -76,7 +78,7 @@ The Vaults run in dev mode (in memory). The **seed job recreates its mounts on e
 make test        # or: podman compose --profile test run --rm --build tests
 ```
 
-The tests run in a container on the compose network, against the seeded Vaults and Dex. They cover the diff engine, sessions, connections and permissions, copying (CAS, conflicts, audit), last-changed history, value detection (certificates, PKCS#12, JKS/JCEKS, images…), the OIDC login through Dex, and Kubernetes auth (with real k3s logins when the token is mounted; otherwise those tests are skipped). Tests that write data use a random prefix and remove it afterwards.
+The tests run in a container on the compose network, against the seeded Vaults and Dex. They cover the diff engine, sessions, connections and permissions, copying (CAS, conflicts, audit), last-changed history, value detection (certificates, PKCS#12, JKS/JCEKS, images…), the OIDC login through Dex, the command line (reports, action checks, compare and apply against both Vaults), and Kubernetes auth (with real k3s logins when the token is mounted; otherwise those tests are skipped). Tests that write data use a random prefix and remove it afterwards.
 
 For the UI with hot reload:
 
@@ -85,6 +87,14 @@ cd frontend && npm install && npm run dev     # http://localhost:5173, proxies /
 ```
 
 `npm run build` typechecks (strict TypeScript) and builds.
+
+To try the CLI against the local stack (Vault A on :8200 with token `root-a`, Vault B on :8201 with `root-b`):
+
+```sh
+python3 -m venv .venv && .venv/bin/pip install -e backend
+VAULT_TOKEN=root-a LOCKSTEP_RIGHT_TOKEN=root-b .venv/bin/lockstep compare \
+  --left-addr http://localhost:8200 --right-addr http://localhost:8201 --mount app-config -o report.yaml
+```
 
 ## Browser end-to-end tests
 

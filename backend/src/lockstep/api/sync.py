@@ -129,10 +129,21 @@ class _Ctx:
     """Both sides' connections and clients for one request."""
 
     def __init__(self, req: SyncRequest, session: SessionData, settings: Settings):
-        self.lconn = get_connection(session, req.left.conn_id)
-        self.rconn = get_connection(session, req.right.conn_id)
-        self.lmount, self.lprefix = req.left.norm()
-        self.rmount, self.rprefix = req.right.norm()
+        self._setup(get_connection(session, req.left.conn_id), get_connection(session, req.right.conn_id),
+                    req.left, req.right, settings)
+
+    @classmethod
+    def direct(cls, lconn: Connection, rconn: Connection, left: Side, right: Side,
+               settings: Settings) -> "_Ctx":
+        """A context from two connections, without a web session (the CLI)."""
+        ctx = cls.__new__(cls)
+        ctx._setup(lconn, rconn, left, right, settings)
+        return ctx
+
+    def _setup(self, lconn: Connection, rconn: Connection, left: Side, right: Side, settings: Settings):
+        self.lconn, self.rconn = lconn, rconn
+        self.lmount, self.lprefix = left.norm()
+        self.rmount, self.rprefix = right.norm()
         self.settings = settings
 
     async def __aenter__(self):

@@ -23,6 +23,13 @@ helm upgrade --install lockstep oci://ghcr.io/$OWNER/charts/lockstep --version $
 \`\`\`sh
 docker pull ghcr.io/$OWNER/lockstep:$v
 \`\`\`
+
+**Command line** (Python 3.13+), from GitHub or from the image:
+
+\`\`\`sh
+pipx install "git+https://github.com/$REPO@v$v#subdirectory=backend"
+docker run --rm -it --entrypoint lockstep -e VAULT_ADDR -e VAULT_TOKEN ghcr.io/$OWNER/lockstep:$v --help
+\`\`\`
 ${IMAGE_DIGEST:+
 Image digest: \`$IMAGE_DIGEST\`${CHART_DIGEST:+ · chart digest: \`$CHART_DIGEST\`}
 }

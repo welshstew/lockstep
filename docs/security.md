@@ -34,6 +34,14 @@ Every attempted write is [audit-logged](usage.md#audit-log), without values. Tok
 - **SSRF:** with `LOCKSTEP_ALLOW_CUSTOM_CONNECTIONS=false`, the server only calls the Vaults you configured. With custom addresses allowed, `LOCKSTEP_CUSTOM_URL_PATTERNS` limits which hosts it will call. Preset URLs are never sent to browsers.
 - **Untrusted content:** SVG previews are rendered as images (no script execution). Downloads are sent as `application/octet-stream` with `nosniff`.
 
+## The command line
+
+`lockstep compare` and `lockstep apply` use your own Vault tokens on your own machine. Nothing goes through a Lockstep server.
+- **Tokens:** read from the environment, a token file or `~/.vault-token`, never from arguments. A token the CLI makes by logging in (userpass/LDAP) is revoked when the command ends. It never stores tokens.
+- **Reports:** hold paths, key names, versions and what kind of value each key holds, never values. They aren't signed, because the person running `apply` writes with their own permissions and confirms each key. Treat a report from someone else like any change request: read it before you apply it, for example with `--dry-run`.
+- **Writes:** `apply` follows the web app's rules. It reads the source fresh, writes with check-and-set, never deletes, and appends audit lines to `--audit-log` if you give it a file.
+- **Values on screen:** they only appear with `--show-values`.
+
 ## Kubernetes service account sign-in
 
 This lets users act as the **tool's** identity rather than their own. It's off by default and can be pinned to specific roles. Read [the trade-offs](authentication.md#its-the-tools-identity-not-yours) before enabling it.

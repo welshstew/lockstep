@@ -3,6 +3,12 @@
 All notable changes to Lockstep. Versions follow [Semantic Versioning](https://semver.org/);
 the image, the Helm chart and the app share one version.
 
+## [0.2.0] - 2026-11-09
+
+### Added
+
+- **Command line:** `lockstep compare` writes a YAML report of the differences, with no values. For each secret it gives both sides' versions, a Vault UI link and a `vault kv get` command. `lockstep apply` carries out the actions you set in the report: it asks before each key (or `--yes`, `--dry-run`), reads values fresh from the source, and skips any secret that changed since the report. It logs in like the `vault` CLI (`VAULT_ADDR`, `VAULT_TOKEN`, `~/.vault-token`, per-side overrides, userpass/LDAP prompts) and returns diff-style exit codes for CI. It's in the Python package and the container image.
+
 ## [0.1.0] - 2026-11-09
 
 First public release.
@@ -20,4 +26,5 @@ First public release.
 - **Helm chart:** hardened defaults, session key kept across upgrades, Ingress, NetworkPolicy, PodDisruptionBudget, Kubernetes auth, shared profiles; validated by a schema and tested in k3s.
 - Runs on Red Hat Hardened Images (distroless, non-root). Every change is scanned (CVEs, secrets, misconfigurations, base image signatures) and tested end to end in a browser.
 
+[0.2.0]: https://github.com/welshstew/lockstep/releases/tag/v0.2.0
 [0.1.0]: https://github.com/welshstew/lockstep/releases/tag/v0.1.0

@@ -3,7 +3,7 @@
 Deploys [Lockstep](../../README.md): compare, inspect and sync KV secrets across HashiCorp Vault clusters.
 
 ```sh
-helm upgrade --install lockstep oci://ghcr.io/welshstew/charts/lockstep --version 0.1.0 \
+helm upgrade --install lockstep oci://ghcr.io/welshstew/charts/lockstep --version 0.2.0 \
   -n lockstep --create-namespace -f my-values.yaml
 helm test lockstep -n lockstep
 ```
