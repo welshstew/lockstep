@@ -2,8 +2,9 @@
 
 Values are read and analysed on the server; only certificate metadata is returned (subject,
 issuer, dates, where it lives), never secret values. Keystores that need a password are
-opened only with a password stored in a sibling key of the same secret (names like
-*pass*, *pwd*), which the user can already read; the result says which key was used.
+opened with a password stored in a sibling key of the same secret (names like *pass*, *pwd*),
+or else with the best candidates the password finder ranks from the rest of the scanned tree
+(see analyze/passwords.py). The user can already read those keys; the result says which was used.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 from cryptography import x509
 
-from ..analyze import certs
+from ..analyze import certs, passwords
 from ..analyze.detect import Analysis, Node, analyze
 from ..config import Settings, get_settings
 from ..session import SessionData, load_session
@@ -31,7 +32,6 @@ Conf = Annotated[Settings, Depends(get_settings)]
 PASSWORD_HINT = re.compile(r"pass|pwd|pin|secret", re.I)
 MAX_VALUE = 1024 * 1024
 READS = 16
-LOCKED_KINDS = {"pkcs12", "jks", "jceks", "encrypted_private_key"}
 
 
 class ScanSide(BaseModel):
@@ -52,7 +52,7 @@ class CertRow(BaseModel):
     path: str  # full path within the mount
     key: str
     container: str  # e.g. "PEM (2 blocks)", "PKCS#12 keystore", "Java keystore (JKS)"
-    opened_with: str | None = None  # sibling key whose value opened the keystore
+    opened_with: str | None = None  # the key ("path · key" if in another secret) whose value opened the keystore
     alias: str | None = None
     subject: str
     subject_cn: str
@@ -104,8 +104,7 @@ def _container(a: Analysis) -> Node:
     return node
 
 
-def _needs_password(node: Node) -> bool:
-    return (node.kind in LOCKED_KINDS and node.needs_password) or any(_needs_password(c) for c in node.children)
+_needs_password = passwords.needs_password
 
 
 def _find(node: Node, nid: str) -> Node | None:
@@ -117,17 +116,23 @@ def _find(node: Node, nid: str) -> Node | None:
     return None
 
 
-def scan_value(value: str, siblings: dict[str, str]) -> tuple[Analysis, str | None]:
-    """Analyse a value; if it's a locked keystore, try passwords from sibling keys."""
+FINDER_TRIES = 10  # candidates from elsewhere in the scanned tree, per locked keystore
+
+
+def scan_value(value: str, siblings: dict[str, str],
+               elsewhere: list[passwords.Candidate] = ()) -> tuple[Analysis, str | None]:
+    """Analyse a value; if it's a locked keystore, try passwords from sibling keys, then the
+    best candidates the password finder ranked from the rest of the scanned tree."""
     a = analyze(value)
     if _needs_password(a.root):
-        for k, pw in siblings.items():
+        tries = [(k, pw) for k, pw in siblings.items()] + [(c.label, c.value) for c in elsewhere[:FINDER_TRIES]]
+        for label, pw in tries:
             try:
                 b = analyze(value, password=pw)
             except Exception:  # noqa: BLE001
                 continue
             if b.password_used and not _needs_password(b.root):
-                return b, k
+                return b, label
     return a, None
 
 
@@ -159,6 +164,7 @@ async def expiry(body: ExpiryRequest, session: Sess, settings: Conf):
 
             results = await asyncio.gather(*(read(p) for p in tree.secrets))
 
+        tree_data = {p: d for p, d, err in results if err is None and d}
         n_values = unreadable = 0
         for path, data, err in results:
             if err is not None:
@@ -172,7 +178,13 @@ async def expiry(body: ExpiryRequest, session: Sess, settings: Conf):
                     continue
                 n_values += 1
                 try:
-                    a, used = await asyncio.to_thread(scan_value, value, {k: p for k, p in siblings.items() if k != key})
+                    sib = {k: p for k, p in siblings.items() if k != key}
+                    a, used = await asyncio.to_thread(scan_value, value, sib)
+                    if used is None and _needs_password(a.root):
+                        root = passwords.search_root(path)  # same area the inspector's finder searches
+                        near = {p: d for p, d in tree_data.items() if p.startswith(root)}
+                        far = [c for c in passwords.rank(path, key, near) if c.path != path]
+                        a, used = await asyncio.to_thread(scan_value, value, {}, far)
                 except Exception:  # noqa: BLE001 (one odd value must not break the scan)
                     continue
                 container = _container(a)
@@ -189,7 +201,7 @@ async def expiry(body: ExpiryRequest, session: Sess, settings: Conf):
                         serial=format(cert.serial_number, "x"), sha256=certs.fingerprint(cert)))
                 if _needs_password(a.root):
                     reason = ("certificates listed, but the keystore's integrity couldn't be checked without a password"
-                              if a.certificates else "needs a password; no sibling key opened it")
+                              if a.certificates else "needs a password; no nearby password key opened it")
                     locked.append(LockedRow(side=s.side, path=path, key=key, container=container.label, reason=reason))
         stats.append(SideStats(side=s.side, mount=mount, prefix=prefix.rstrip("/"), secrets=len(tree.secrets),
                                values=n_values, denied=tree.denied, truncated=tree.truncated, unreadable=unreadable))

@@ -5,12 +5,14 @@ Per side (left/right), first match wins:
   namespace  --left-namespace, LOCKSTEP_LEFT_NAMESPACE, VAULT_NAMESPACE
   token      LOCKSTEP_LEFT_TOKEN, --left-token-file, VAULT_TOKEN, ~/.vault-token
              (or --left-auth userpass/ldap: logs in and prompts for the password, or reads
-             LOCKSTEP_LEFT_PASSWORD; the token it gets is revoked when the command ends)
+             LOCKSTEP_LEFT_PASSWORD; or --left-auth jwt: logs in with the JWT in
+             LOCKSTEP_LEFT_JWT or --left-jwt-file, e.g. a CI job's OIDC token, and --left-role.
+             A token from a login is revoked when the command ends)
 TLS follows the vault CLI too: VAULT_CACERT / --ca-cert, VAULT_SKIP_VERIFY / --tls-skip-verify.
 
 When the right side points at the same Vault and namespace as the left and has no auth
 options of its own, it reuses the left side's connection.
-Tokens are never accepted as command-line arguments (they'd show up in `ps` and shell history).
+Tokens and JWTs are never accepted as command-line arguments (they'd show up in `ps` and shell history).
 """
 
 from __future__ import annotations
@@ -30,7 +32,7 @@ from ..session import Connection
 from ..vault import VaultClient, VaultError
 
 SIDES = ("left", "right")
-AUTH_METHODS = ("token", "userpass", "ldap")
+AUTH_METHODS = ("token", "userpass", "ldap", "jwt")
 
 
 class CliError(Exception):
@@ -48,14 +50,16 @@ def add_side_args(p: argparse.ArgumentParser, which: str, *, locations: bool) ->
     """--left-* / --right-* options. `locations` adds mount, prefix, name and UI address
     (compare); apply takes those from the report."""
     other = "left" if which == "right" else None
-    g = p.add_argument_group(f"{which} side")
-    if locations:
+    g = p.add_argument_group("Vault" if which == "vault" else f"{which} side")
+    if which == "vault":  # single-Vault commands (export, import)
+        fallback = f"${env(which, 'ADDR')}, then $VAULT_ADDR"
+    elif locations:
         fallback = f"${env(which, 'ADDR')}, then " + ("the left side's address" if other else "$VAULT_ADDR")
     else:
         fallback = f"${env(which, 'ADDR')}, then the address in the report"
     g.add_argument(f"--{which}-addr", metavar="URL", help=f"Vault address (default: {fallback})")
     g.add_argument(f"--{which}-namespace", metavar="NS",
-                   help="Vault Enterprise namespace" + ("" if locations else " (default: the report's)"))
+                   help="Vault Enterprise namespace" + ("" if locations or which == "vault" else " (default: the report's)"))
     if locations:
         g.add_argument(f"--{which}-mount", metavar="MOUNT", help="KV v2 mount (default: --mount)")
         g.add_argument(f"--{which}-prefix", metavar="PATH", help="only compare under this path (default: --prefix)")
@@ -69,6 +73,9 @@ def add_side_args(p: argparse.ArgumentParser, which: str, *, locations: bool) ->
     g.add_argument(f"--{which}-auth-mount", metavar="PATH", help="auth mount path (default: the method name)")
     g.add_argument(f"--{which}-token-file", metavar="FILE", help=f"read the token from this file "
                                                                  f"(after ${env(which, 'TOKEN')})")
+    g.add_argument(f"--{which}-jwt-file", metavar="FILE", help=f"jwt login: read the JWT from this file "
+                                                               f"(after ${env(which, 'JWT')})")
+    g.add_argument(f"--{which}-role", metavar="ROLE", help="jwt login: Vault role (default: the mount's default_role)")
 
 
 def env(which: str, name: str) -> str:
@@ -93,23 +100,26 @@ class Target:
     which: str
     addr: str
     namespace: str | None
-    auth: str  # token | userpass | ldap
+    auth: str  # token | userpass | ldap | jwt
     explicit_auth: bool  # the user gave this side its own auth options
     user: str | None
     auth_mount: str | None
     token_file: str | None
+    jwt_file: str | None = None
+    role: str | None = None
 
 
 def _opt(args, which: str, name: str):
     return getattr(args, f"{which}_{name}", None)
 
 
-def resolve_targets(args: argparse.Namespace, defaults: dict[str, dict] | None = None) -> dict[str, Target]:
+def resolve_targets(args: argparse.Namespace, defaults: dict[str, dict] | None = None,
+                    sides: tuple[str, ...] = SIDES) -> dict[str, Target]:
     """Work out each side's address, namespace and login method. `defaults` supplies
     per-side addr/namespace (apply: from the report), used before the environment."""
     defaults = defaults or {}
     out: dict[str, Target] = {}
-    for which in SIDES:
+    for which in sides:
         d = defaults.get(which, {})
         addr = (_opt(args, which, "addr") or os.environ.get(env(which, "ADDR")) or d.get("addr")
                 or (out["left"].addr if which == "right" else os.environ.get("VAULT_ADDR")))
@@ -127,12 +137,14 @@ def resolve_targets(args: argparse.Namespace, defaults: dict[str, dict] | None =
             ns = out["left"].namespace
         else:
             ns = os.environ.get("VAULT_NAMESPACE")
-        explicit = any(_opt(args, which, k) for k in ("auth", "user", "auth_mount", "token_file")) \
+        explicit = any(_opt(args, which, k) for k in ("auth", "user", "auth_mount", "token_file", "jwt_file",
+                                                      "role")) \
             or bool(os.environ.get(env(which, "TOKEN")))
         out[which] = Target(which=which, addr=addr.rstrip("/"), namespace=ns or None,
                             auth=_opt(args, which, "auth") or "token", explicit_auth=explicit,
                             user=_opt(args, which, "user") or os.environ.get(env(which, "USER")),
-                            auth_mount=_opt(args, which, "auth_mount"), token_file=_opt(args, which, "token_file"))
+                            auth_mount=_opt(args, which, "auth_mount"), token_file=_opt(args, which, "token_file"),
+                            jwt_file=_opt(args, which, "jwt_file"), role=_opt(args, which, "role"))
     return out
 
 
@@ -153,6 +165,17 @@ def _read_token(t: Target) -> str:
                    f"(or {env(t.which, 'TOKEN')}), or use --{t.which}-auth userpass/ldap.")
 
 
+def _read_jwt(t: Target) -> str:
+    if jwt := os.environ.get(env(t.which, "JWT")):
+        return jwt.strip()
+    if t.jwt_file:
+        try:
+            return Path(t.jwt_file).expanduser().read_text().strip()
+        except OSError as e:
+            raise CliError(f"Can't read the {t.which} JWT file: {e}") from e
+    raise CliError(f"No JWT for the {t.which} side: set {env(t.which, 'JWT')} or use --{t.which}-jwt-file.")
+
+
 def _password(t: Target) -> str:
     if pw := os.environ.get(env(t.which, "PASSWORD")):
         return pw
@@ -168,6 +191,13 @@ async def connect(t: Target, settings: Settings, name: str) -> Connection:
         minted = False
         if t.auth == "token":
             token = _read_token(t)
+        elif t.auth == "jwt":
+            mount = t.auth_mount or "jwt"
+            try:
+                token = (await anon.login_jwt(_read_jwt(t), t.role, mount=mount))["client_token"]
+            except VaultError as e:
+                raise CliError(f"jwt login to {t.addr} (auth/{mount}) failed: {e.message}") from e
+            minted = True
         else:
             if not t.user:
                 raise CliError(f"--{t.which}-user is required for {t.auth} login.")

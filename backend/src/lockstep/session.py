@@ -29,7 +29,7 @@ class Connection(BaseModel):
     namespace: str | None = None
     preset_id: int | None = None
     token: str
-    auth_method: str  # token | userpass | ldap | oidc
+    auth_method: str  # token | userpass | ldap | oidc | kubernetes | jwt
     minted: bool = False  # True if we created this token by logging in, so we should revoke it
     display_name: str = ""
     policies: list[str] = []

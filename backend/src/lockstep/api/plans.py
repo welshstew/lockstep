@@ -35,7 +35,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from ..config import Settings, get_settings
 from ..session import Connection, SessionData, load_session
-from .compare import Side
+from .compare import FileSide, Side
 from .connections import get_connection
 from .sync import MAX_CHANGES, ApplyOut, Change, Direction, SyncRequest, _Ctx, apply_changes, evaluate
 
@@ -269,6 +269,11 @@ async def _check(plan: Plan, req: SyncRequest, session: SessionData, settings: S
 
 @router.post("", response_model=Plan)
 async def create(body: CreateRequest, session: Sess, settings: Conf):
+    if isinstance(body.left, FileSide) or isinstance(body.right, FileSide):
+        raise HTTPException(400, detail={"message": "A plan needs a Vault on both sides, not an export file."})
+    if any(c.set for c in body.changes):
+        raise HTTPException(400, detail={"message": "Plans never hold values, so overrides can't go into a plan. "
+                                                    "Apply them directly, or plan only the copies."})
     lconn = get_connection(session, body.left.conn_id)
     rconn = get_connection(session, body.right.conn_id)
     async with _Ctx(body, session, settings) as ctx:

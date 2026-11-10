@@ -8,12 +8,15 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from typing import Literal
+
 from .. import engine
 from ..config import Settings, get_settings
 from ..diff import SecretDiff
+from ..exports import ExportDoc, FileVault
 from ..rules import Rules
-from ..session import SessionData, load_session
-from ..vault import VaultError
+from ..session import Connection, SessionData, load_session
+from ..vault import VaultClient, VaultError
 from .connections import client_for, get_connection, vault_http_error
 
 router = APIRouter(prefix="/api", tags=["compare"])
@@ -32,13 +35,42 @@ class Side(BaseModel):
         return self.mount.strip("/"), f"{p}/" if p else ""
 
 
+class FileSide(BaseModel):
+    """An export file as one side: read-only, so it can be a source but never a target."""
+
+    export: ExportDoc
+    name: str = Field(default="export file", max_length=200)  # the file name, for display
+    prefix: str = ""
+
+    def norm(self) -> tuple[str, str]:
+        p = self.prefix.strip("/")
+        return "export", f"{p}/" if p else ""
+
+
+AnySide = Side | FileSide
+
+
+def side_connection(side: AnySide, session: SessionData) -> Connection:
+    """The side's connection; for an export file, a stand-in used for names and the audit log."""
+    if isinstance(side, FileSide):
+        src = side.export.source
+        return Connection(id="file", name=side.name, url="file:", token="-", auth_method="file",
+                          display_name=f"export of {src.vault} · {src.mount}")
+    return get_connection(session, side.conn_id)
+
+
+def side_client(side: AnySide, conn: Connection, settings: Settings) -> VaultClient | FileVault:
+    return FileVault(side.export) if isinstance(side, FileSide) else client_for(conn, settings)
+
+
 class CompareRequest(BaseModel):
-    left: Side
-    right: Side
+    left: AnySide
+    right: AnySide
     rules: Rules | None = None  # a comparison profile's mappings and ignore rules
 
 
 class SideSummary(BaseModel):
+    kind: Literal["vault", "file"] = "vault"
     conn_id: str
     mount: str
     prefix: str
@@ -64,12 +96,12 @@ class SecretOut(BaseModel):
 
 @router.post("/compare", response_model=CompareOut)
 async def compare(body: CompareRequest, session: Sess, settings: Conf):
-    lconn = get_connection(session, body.left.conn_id)
-    rconn = get_connection(session, body.right.conn_id)
+    lconn = side_connection(body.left, session)
+    rconn = side_connection(body.right, session)
     lmount, lprefix = body.left.norm()
     rmount, rprefix = body.right.norm()
 
-    async with client_for(lconn, settings) as lv, client_for(rconn, settings) as rv:
+    async with side_client(body.left, lconn, settings) as lv, side_client(body.right, rconn, settings) as rv:
         try:
             result = await engine.compare(lv, lmount, lprefix, rv, rmount, rprefix, body.rules,
                                           max_secrets=settings.max_tree_secrets)
@@ -77,7 +109,8 @@ async def compare(body: CompareRequest, session: Sess, settings: Conf):
             raise vault_http_error(e) from e
 
     def summary(conn_id, mount, prefix, tree):
-        return SideSummary(conn_id=conn_id, mount=mount, prefix=prefix.rstrip("/"),
+        return SideSummary(kind="file" if conn_id == "file" else "vault", conn_id=conn_id, mount=mount,
+                           prefix=prefix.rstrip("/"),
                            denied=[d[len(prefix):] for d in tree.denied], truncated=tree.truncated,
                            secret_count=len(tree.secrets))
 

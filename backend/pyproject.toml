@@ -1,6 +1,6 @@
 [project]
 name = "lockstep"
-version = "0.2.0"
+version = "0.3.0"
 description = "Compare and sync KV v2 secrets across HashiCorp Vault mounts and clusters"
 requires-python = ">=3.13"
 license = "MIT"

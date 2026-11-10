@@ -9,6 +9,9 @@ web:
 
 oauth2:
   skipApprovalScreen: true
+  # Lets tests get an ID token directly (resource owner password grant), to sign in to
+  # Vault's JWT auth method. Dev only.
+  passwordConnector: local
 
 staticClients:
   - id: vault

@@ -1,4 +1,4 @@
-<!-- description: Signing in to Vault with Lockstep: token, userpass, LDAP, OIDC redirect and Kubernetes service account, with the Vault-side setup for each. -->
+<!-- description: Signing in to Vault with Lockstep: token, userpass, LDAP, OIDC redirect, JWT and Kubernetes service account, with the Vault-side setup for each. -->
 # Authentication
 
 Each side of a comparison has its own **connection**: a Vault address, an optional namespace, and a way to sign in. A browser session can hold up to six connections; a connection made for one side can be reused on the other (same Vault, different mount).
@@ -10,6 +10,7 @@ The connect form asks the chosen Vault which sign-in methods it advertises (`sys
 | [Token](#token) | a Vault token | no (you supplied it) |
 | [Username / LDAP](#username-and-ldap) | username, password, optional mount path | yes |
 | [OIDC](#oidc-redirect) | optional mount path and role, then sign in at your IdP | yes |
+| [JWT](#jwt) | a JWT, optional mount path and role | yes |
 | [Kubernetes](#kubernetes-service-account) | mount path and role name | yes |
 
 Tokens are kept only in the encrypted session cookie (see [security](security.md)). The connection chip shows the identity Vault reports (`display_name`), the policies, and when the token expires.
@@ -52,6 +53,29 @@ vault auth tune -listing-visibility=unauth oidc/
 ```
 
 The identity provider must also allow the tool's callback as a redirect URI for that client. JWT auth mounts configured for the OIDC flow (`role_type=oidc`) work the same way.
+
+## JWT
+
+Signs in with Vault's [JWT auth method](https://developer.hashicorp.com/vault/docs/auth/jwt): paste a JWT, such as an ID token from your identity provider or a CI job's OIDC token, and Lockstep calls `auth/<mount>/login` with `{"jwt": "…", "role": "…"}`. The mount defaults to the JWT mount the Vault advertises, or `jwt`. Leave **Role** empty to use the mount's `default_role`. The JWT is sent to Vault once and not kept; the Vault token it returns is revoked when you sign out.
+
+Vault checks the JWT's signature, issuer, audience and expiry against the mount's configuration and the role's bindings, so a JWT only gets in where your Vault admin allows it. Roles with `role_type=oidc` don't accept JWTs: use [OIDC](#oidc-redirect) for those.
+
+### Vault-side setup
+
+```sh
+vault auth enable jwt
+vault write auth/jwt/config \
+    oidc_discovery_url=https://idp.example.com \
+    bound_issuer=https://idp.example.com \
+    default_role=lockstep
+vault write auth/jwt/role/lockstep \
+    role_type=jwt user_claim=email bound_audiences=<client-id> \
+    token_policies=lockstep-readonly token_ttl=1h
+# Optional: show the method on login screens
+vault auth tune -listing-visibility=unauth jwt
+```
+
+Use `jwks_url` or `jwt_validation_pubkeys` instead of `oidc_discovery_url` if your issuer doesn't publish OIDC discovery. For CI tokens, bind the role to the claims that identify the pipeline (`bound_claims`), not just the audience.
 
 ## Kubernetes service account
 

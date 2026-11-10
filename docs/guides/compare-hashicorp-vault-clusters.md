@@ -51,7 +51,7 @@ Values stay hidden until you turn on **Show values**, and then only for the secr
 The same comparison runs from a terminal with the [`lockstep` CLI](../cli.md), which logs in the way the `vault` CLI does:
 
 ```sh
-pipx install "git+https://github.com/welshstew/lockstep@v0.2.0#subdirectory=backend"
+pipx install "git+https://github.com/welshstew/lockstep@v0.3.0#subdirectory=backend"
 
 lockstep compare \
   --left-addr https://vault-prod.example.com --left-name prod \

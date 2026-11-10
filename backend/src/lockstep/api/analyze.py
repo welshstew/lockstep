@@ -6,6 +6,7 @@ secret values back. Keystore passwords are used for this request only, never sto
 
 from __future__ import annotations
 
+import asyncio
 import re
 from typing import Annotated, Any
 
@@ -13,7 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
-from ..analyze import certs
+from ..analyze import certs, passwords
 from ..analyze.detect import Analysis, Node, analyze
 from ..config import Settings, get_settings
 from ..session import SessionData, load_session
@@ -36,9 +37,17 @@ class Locator(BaseModel):
     key: str = Field(min_length=1)
 
 
+class PasswordRef(BaseModel):
+    """A password stored in another secret of the same mount (from the password finder)."""
+
+    path: str = Field(min_length=1)
+    key: str = Field(min_length=1)
+
+
 class AnalyzeRequest(Locator):
     password: str | None = None  # typed by the user
     password_key: str | None = None  # or: take it from this key in the same secret
+    password_ref: PasswordRef | None = None  # or: from another secret in the same mount
     trust: list[Locator] = Field(default_factory=list, max_length=20)  # extra trust anchors
     # Trust specific certificates seen in this value or its secret ("Trust this root"), by SHA-256
     trust_sha256: list[str] = Field(default_factory=list, max_length=20)
@@ -75,13 +84,20 @@ def _value(data: dict, key: str) -> Any:
     return data[key]
 
 
-def _password(req: AnalyzeRequest, data: dict) -> str | None:
+async def _password(req: AnalyzeRequest, data: dict, session: SessionData, settings: Settings) -> str | None:
     if req.password is not None:
         return req.password
     if req.password_key:
         pw = data.get(req.password_key)
         if not isinstance(pw, str):
             raise HTTPException(400, detail={"message": f"'{req.password_key}' isn't a text value in this secret"})
+        return pw
+    if req.password_ref:
+        ref = req.password_ref
+        other = await _read(Locator(conn_id=req.conn_id, mount=req.mount, path=ref.path, key=ref.key), session, settings)
+        pw = other.get(ref.key)
+        if not isinstance(pw, str):
+            raise HTTPException(400, detail={"message": f"'{ref.key}' in {ref.path} isn't a text value"})
         return pw
     return None
 
@@ -98,7 +114,7 @@ def _find(node: Node, nid: str) -> Node | None:
 async def run(req: AnalyzeRequest, session: SessionData, settings: Settings) -> tuple[Analysis, dict, AnalyzeOut]:
     data = await _read(req, session, settings)
     value = _value(data, req.key)
-    a = analyze(value, _password(req, data))
+    a = analyze(value, await _password(req, data, session, settings))
 
     # Certificates in sibling keys: intermediates for chain building, and key ↔ cert matching.
     sibling_certs: list[tuple[str, Any]] = []
@@ -161,7 +177,7 @@ async def analyze_value(body: AnalyzeRequest, session: Sess, settings: Conf):
 async def content(body: ContentRequest, session: Sess, settings: Conf):
     """Raw bytes of one node, for download or image preview."""
     data = await _read(body, session, settings)
-    a = analyze(_value(data, body.key), _password(body, data))
+    a = analyze(_value(data, body.key), await _password(body, data, session, settings))
     node = _find(a.root, body.node_id)
     blob = a.blobs.get(body.node_id)
     if node is None or blob is None or not node.downloadable:
@@ -175,3 +191,71 @@ async def content(body: ContentRequest, session: Sess, settings: Conf):
         "X-Content-Type-Options": "nosniff",
         "Access-Control-Expose-Headers": "X-Filename, X-Mime",
     })
+
+
+# --------------------------------------------------------------------------- password finder
+
+MAX_SEARCH_SECRETS = 500
+MAX_TRIES = 40
+
+
+class CandidateOut(BaseModel):
+    path: str
+    key: str
+    opens: bool
+    reasons: list[str]
+
+
+class PasswordsOut(BaseModel):
+    needs_password: bool
+    candidates: list[CandidateOut]  # ones that open the keystore first, then by likelihood
+    # A published default password that opens it (Java's "changeit"): public knowledge, not a stored value
+    default: str | None
+    default_label: str | None
+    searched: str  # the folder searched, relative to the mount
+    secrets: int
+    truncated: bool
+    denied: list[str]
+
+
+@router.post("/passwords", response_model=PasswordsOut)
+async def find_passwords(body: Locator, session: Sess, settings: Conf):
+    """Look for the keystore's password in nearby secrets and try each candidate here.
+    Returns where the candidates are and whether they open it, never their values."""
+    value = _value(await _read(body, session, settings), body.key)
+    mount, path = body.mount.strip("/"), body.path.strip("/")
+    root = passwords.search_root(path)
+    if not passwords.needs_password(analyze(value).root):
+        return PasswordsOut(needs_password=False, candidates=[], default=None, default_label=None, searched=root,
+                            secrets=0, truncated=False, denied=[])
+    conn = get_connection(session, body.conn_id)
+    async with client_for(conn, settings) as v:
+        try:
+            tree = await v.kv_tree(mount, root, max_secrets=min(MAX_SEARCH_SECRETS, settings.max_tree_secrets))
+        except VaultError as e:
+            raise vault_http_error(e) from e
+        sem = asyncio.Semaphore(16)
+
+        async def read(p: str):
+            async with sem:
+                try:
+                    s = await v.kv_read(mount, p)
+                    return p, s.data if s.state == "present" else None
+                except VaultError:
+                    return p, None
+
+        found = dict(await asyncio.gather(*(read(p) for p in set(tree.secrets) | {path})))
+
+    ranked = passwords.rank(path, body.key, {p: d for p, d in found.items() if d}, limit=MAX_TRIES)
+    works = await asyncio.gather(*(asyncio.to_thread(passwords.opens, value, c.value) for c in ranked))
+    default = default_label = None
+    if not any(works):
+        for pw, label in passwords.DEFAULTS.items():
+            if await asyncio.to_thread(passwords.opens, value, pw):
+                default, default_label = pw, label
+                break
+    order = sorted(zip(ranked, works), key=lambda cw: not cw[1])  # stable: openers first, rank kept
+    return PasswordsOut(
+        needs_password=True, default=default, default_label=default_label,
+        candidates=[CandidateOut(path=c.path, key=c.key, opens=w, reasons=c.reasons) for c, w in order],
+        searched=root, secrets=len(tree.secrets), truncated=tree.truncated, denied=tree.denied)

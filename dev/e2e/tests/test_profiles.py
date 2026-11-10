@@ -106,3 +106,51 @@ def test_cancelled_review_does_not_come_back(page):
     compare(page)
     page.wait_for_timeout(500)
     expect(page.locator("dialog.review")).to_have_count(0)
+
+
+def test_build_a_profile_by_picking_what_to_ignore(page):
+    from conftest import choose_mount
+    connect_both(page)
+    choose_mount(page, "left", "app-config")
+    choose_mount(page, "right", "app-config")
+    compare(page)
+    expect(row(page, "payments/db").locator(".badge").last).to_have_text("Different")
+
+    page.get_by_role("button", name="Pick what to ignore…").click()
+    draft = page.locator("section.draft-bar")
+    expect(draft).to_contain_text("Nothing picked yet")
+
+    legacy = row(page, "legacy/old-service")
+    legacy.get_by_role("button", name="Ignore secret").click()
+    expect(legacy).to_have_class(re.compile("draft-ignored"))
+    row(page, "new-service/config").get_by_role("button", name="Ignore new-service/**").click()
+    db = expand(page, "payments/db")
+    key_row(db, "password").get_by_role("button", name="Ignore everywhere").click()
+    expect(key_row(db, "password")).to_have_class(re.compile("draft-ignored"))
+    expect(draft.locator(".draft-rules li")).to_have_count(3)
+
+    # Undo one pick, then redo it
+    legacy.get_by_role("button", name="Ignore secret").click()
+    expect(draft.locator(".draft-rules li")).to_have_count(2)
+    legacy.get_by_role("button", name="Ignore secret").click()
+
+    draft.get_by_role("button", name="Compare with these rules").click()
+    expect(page.locator(".profile-effect")).to_contain_text("Unsaved rules")
+    expect(row(page, "legacy/old-service")).to_have_count(0)
+    expect(row(page, "new-service/config")).to_have_count(0)
+    expect(row(page, "payments/db")).to_have_count(0)  # now equal: only the password differed
+
+    draft.get_by_role("button", name="Save as profile…").click()
+    editor = page.locator("dialog.profile-editor")
+    expect(editor.locator("h2")).to_have_text("New comparison profile")
+    expect(editor.locator("textarea")).to_have_value("new-service/**\nlegacy/old-service")  # in the order picked
+    expect(editor.get_by_label("Ignored key 1", exact=True)).to_have_value("password")
+    expect(editor.get_by_label("Ignored key 1 path")).to_have_value("**")
+    editor.get_by_label("Name").fill("Picked rules")
+    editor.get_by_role("button", name="Save profile").click()
+
+    expect(page.locator("section.profile-bar select")).to_have_value("personal:Picked rules")
+    expect(page.locator("section.draft-bar")).to_have_count(0)
+    compare(page)
+    expect(page.locator(".profile-effect")).to_contain_text("Profile Picked rules")
+    expect(row(page, "legacy/old-service")).to_have_count(0)

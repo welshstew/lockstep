@@ -65,6 +65,8 @@ spec:
               value: {{ toJson .Values.customUrlPatterns | quote }}
             - name: LOCKSTEP_MAX_TREE_SECRETS
               value: {{ .Values.maxTreeSecrets | quote }}
+            - name: LOCKSTEP_EXPORT_MODE
+              value: {{ .Values.exportMode | quote }}
             - name: LOCKSTEP_VAULT_TLS_VERIFY
               value: {{ .Values.vaultTls.verify | quote }}
             {{- if or .Values.vaultTls.caBundle.configMap .Values.vaultTls.caBundle.secret }}

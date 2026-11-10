@@ -4,8 +4,12 @@ Two calls, both stateless:
   POST /api/sync/preview  what would change, per target secret (values only if reveal=true)
   POST /api/sync/apply    do it. Needs confirm=true
 
+A change copies keys from the source side, sets values the user typed (an override), or
+both, in one write to the target secret.
+
 Safety rules, applied the same way by preview and apply:
-  * Values always come from a fresh read of the SOURCE Vault, never from the browser.
+  * Copied values always come from a fresh read of the SOURCE Vault, never from the browser.
+    Override values are the only values the browser sends, and only to be written.
   * Each target write uses KV v2 check-and-set (CAS) against the target version the user
     saw when comparing. If the target changed since, the item is a conflict and isn't written.
   * Keys that exist only on the target are kept (no deletes in v1).
@@ -26,8 +30,7 @@ from pydantic import BaseModel, Field, model_validator
 from ..config import Settings, get_settings
 from ..session import Connection, SessionData, load_session
 from ..vault import VaultClient, VaultError
-from .compare import Side
-from .connections import client_for, get_connection
+from .compare import AnySide, Side, side_client, side_connection
 
 router = APIRouter(prefix="/api/sync", tags=["sync"])
 audit = logging.getLogger("lockstep.audit")
@@ -37,6 +40,8 @@ Conf = Annotated[Settings, Depends(get_settings)]
 
 Direction = Literal["left_to_right", "right_to_left"]
 MAX_CHANGES = 500
+MAX_SET_KEYS = 200
+MAX_SET_BYTES = 1024 * 1024  # all override values in one change, as JSON (Vault's default request limit is ~32 MB)
 WRITE_CAPS = {"create", "update", "root", "sudo"}
 
 
@@ -46,15 +51,35 @@ WRITE_CAPS = {"create", "update", "root", "sudo"}
 class Change(BaseModel):
     path: str = Field(min_length=1)  # the LEFT side's path, relative to its prefix
     right_path: str | None = None  # the right side's path, if a profile mapping differs (default: path)
-    direction: Direction
-    keys: list[str] | None = None  # None means every key the source has
+    direction: Direction  # which way: left_to_right writes the right side
+    keys: list[str] | None = None  # keys to copy from the source; None = all, [] = none (override only)
+    # Override: values typed by the user, written to the target as they are (any JSON type)
+    set: dict[str, Any] | None = Field(default=None, max_length=MAX_SET_KEYS)
     expected_target_version: int | None = None  # from the compare; None means the target was absent
     expected_source_version: int | None = None  # informational: warns if the source moved
 
+    @model_validator(mode="after")
+    def _check(self):
+        if self.keys is not None and not self.keys and not self.set:
+            raise ValueError(f"nothing to do for {self.path}: no keys to copy and no values to set")
+        if self.set:
+            if any(not k or len(k) > 512 for k in self.set):
+                raise ValueError("override key names must be 1-512 characters")
+            if len(json.dumps(self.set)) > MAX_SET_BYTES:
+                raise ValueError(f"override values for {self.path} are too large")
+            both = set(self.set) & set(self.keys or [])
+            if both:
+                raise ValueError(f"{', '.join(sorted(both))}: both copied and overridden in {self.path}")
+        return self
+
+    @property
+    def copies(self) -> bool:
+        return self.keys is None or bool(self.keys)
+
 
 class SyncRequest(BaseModel):
-    left: Side
-    right: Side
+    left: AnySide  # an export file can be the source of a copy (it can't be written)
+    right: AnySide
     changes: list[Change] = Field(min_length=1, max_length=MAX_CHANGES)
     reveal: bool = False  # preview only: include values
 
@@ -66,8 +91,6 @@ class SyncRequest(BaseModel):
             if k in seen:
                 raise ValueError(f"duplicate change for {c.path} ({c.direction})")
             seen.add(k)
-            if c.keys is not None and not c.keys:
-                raise ValueError(f"empty key list for {c.path}")
         return self
 
 
@@ -88,7 +111,8 @@ class KeyPlan(BaseModel):
     key: str
     action: Literal["add", "update", "unchanged"]
     type_change: bool = False
-    source_value: Any = None  # only when reveal=true
+    override: bool = False  # a value the user typed, not copied from the source
+    source_value: Any = None  # only when reveal=true (for an override: the new value)
     target_value: Any = None
 
 
@@ -111,6 +135,7 @@ class ChangeResult(BaseModel):
     direction: Direction
     target: str  # "<conn name> · <mount>/<path>"
     status: Literal["applied", "noop", "conflict", "denied", "invalid", "error"]
+    overridden: list[str] = []  # keys set from typed values
     old_version: int | None = None
     new_version: int | None = None
     keys: list[str] = []
@@ -129,7 +154,7 @@ class _Ctx:
     """Both sides' connections and clients for one request."""
 
     def __init__(self, req: SyncRequest, session: SessionData, settings: Settings):
-        self._setup(get_connection(session, req.left.conn_id), get_connection(session, req.right.conn_id),
+        self._setup(side_connection(req.left, session), side_connection(req.right, session),
                     req.left, req.right, settings)
 
     @classmethod
@@ -140,15 +165,16 @@ class _Ctx:
         ctx._setup(lconn, rconn, left, right, settings)
         return ctx
 
-    def _setup(self, lconn: Connection, rconn: Connection, left: Side, right: Side, settings: Settings):
+    def _setup(self, lconn: Connection, rconn: Connection, left: AnySide, right: AnySide, settings: Settings):
         self.lconn, self.rconn = lconn, rconn
+        self.left, self.right = left, right
         self.lmount, self.lprefix = left.norm()
         self.rmount, self.rprefix = right.norm()
         self.settings = settings
 
     async def __aenter__(self):
-        self.lv = client_for(self.lconn, self.settings)
-        self.rv = client_for(self.rconn, self.settings)
+        self.lv = side_client(self.left, self.lconn, self.settings)
+        self.rv = side_client(self.right, self.rconn, self.settings)
         return self
 
     async def __aexit__(self, *exc):
@@ -164,8 +190,11 @@ def _type(v: Any) -> str:
     return type(v).__name__
 
 
-async def evaluate(ctx: _Ctx, change: Change, reveal: bool) -> tuple[ChangePlan, dict | None, int]:
-    """Plan one change from fresh reads. Returns (plan, new target data, CAS version)."""
+async def evaluate(ctx: _Ctx, change: Change, reveal: bool,
+                   any_target_version: bool = False) -> tuple[ChangePlan, dict | None, int]:
+    """Plan one change from fresh reads. Returns (plan, new target data, CAS version).
+    `any_target_version`: take the target as it is now (an import preview, which has no
+    earlier comparison to hold it to); the version found is what apply will expect."""
     (sconn, sv, smount, sprefix), (tconn, tv, tmount, tprefix) = ctx.ends(change.direction)
     lrel, rrel = change.path, change.right_path or change.path
     srel, trel = (lrel, rrel) if change.direction == "left_to_right" else (rrel, lrel)
@@ -188,9 +217,15 @@ async def evaluate(ctx: _Ctx, change: Change, reveal: bool) -> tuple[ChangePlan,
         except VaultError:
             return []  # can't tell: treat as no write permission; the write itself is the final check
 
+    async def no_source():
+        return None, None
+
+    # An override on its own doesn't need the source (it may not even exist there).
     (src, serr), (tgt, terr), caps = await asyncio.gather(
-        read(sv, smount, spath), read(tv, tmount, tpath), caps_for(f"{tmount}/data/{tpath}"))
-    src_ep = endpoint(sconn, smount, spath, src.version if src else None, src.state if src else "no_access")
+        read(sv, smount, spath) if change.copies else no_source(), read(tv, tmount, tpath),
+        caps_for(f"{tmount}/data/{tpath}"))
+    src_ep = endpoint(sconn, smount, spath, src.version if src else None,
+                      src.state if src else ("no_access" if change.copies else "unused"))
     tgt_ep = endpoint(tconn, tmount, tpath, tgt.version if tgt else None, tgt.state if tgt else "no_access")
 
     def plan(status, keys=(), can_write=False) -> ChangePlan:
@@ -202,12 +237,16 @@ async def evaluate(ctx: _Ctx, change: Change, reveal: bool) -> tuple[ChangePlan,
         kind, msg = serr or terr
         problems.append(f"Can't read the {'source' if serr else 'target'}: {msg}")
         return plan("denied" if kind == "denied" else "error"), None, 0
-    if src.state != "present":
+    if change.copies and src.state != "present":
         problems.append("The source has no current data (missing or deleted).")
         return plan("invalid"), None, 0
+    if tgt.state == "deleted" and not change.copies:
+        warnings.append("The target's latest version is deleted. Setting values writes a new version with "
+                        "only these keys.")
 
-    source_data = src.data or {}
-    keys = change.keys if change.keys is not None else sorted(source_data)
+    overrides = change.set or {}
+    source_data = (src.data or {}) if change.copies else {}
+    keys = change.keys if change.keys is not None else sorted(k for k in source_data if k not in overrides)
     missing = [k for k in keys if k not in source_data]
     if missing:
         problems.append(f"Not in the source: {', '.join(missing)}")
@@ -216,15 +255,16 @@ async def evaluate(ctx: _Ctx, change: Change, reveal: bool) -> tuple[ChangePlan,
     # CAS: 0 means "must not exist yet". A soft-deleted latest version still counts as the
     # current version for CAS purposes.
     actual = tgt.version if tgt.state in ("present", "deleted") and tgt.version else 0
-    expected = change.expected_target_version or 0
-    if change.expected_source_version is not None and src.version != change.expected_source_version:
+    expected = actual if any_target_version else (change.expected_target_version or 0)
+    if change.copies and change.expected_source_version is not None and src.version != change.expected_source_version:
         warnings.append(f"The source changed since you compared (v{change.expected_source_version} → "
                         f"v{src.version}). The current source value will be copied.")
 
     target_data = dict(tgt.data or {}) if tgt.state == "present" else {}
+    new_values = {k: source_data[k] for k in keys} | overrides
     key_plans = []
-    for k in keys:
-        new = source_data[k]
+    for k in sorted(new_values):
+        new = new_values[k]
         if k not in target_data:
             action = "add"
         elif json.dumps(target_data[k], sort_keys=True) == json.dumps(new, sort_keys=True):
@@ -232,7 +272,7 @@ async def evaluate(ctx: _Ctx, change: Change, reveal: bool) -> tuple[ChangePlan,
         else:
             action = "update"
         key_plans.append(KeyPlan(
-            key=k, action=action,
+            key=k, action=action, override=k in overrides,
             type_change=action == "update" and _type(target_data[k]) != _type(new),
             source_value=new if reveal else None,
             target_value=target_data.get(k) if reveal else None))
@@ -248,8 +288,7 @@ async def evaluate(ctx: _Ctx, change: Change, reveal: bool) -> tuple[ChangePlan,
     if all(k.action == "unchanged" for k in key_plans):
         return plan("noop", key_plans, can_write), None, actual
 
-    new_data = target_data | {k: source_data[k] for k in keys}
-    return plan("ready", key_plans, can_write), new_data, actual
+    return plan("ready", key_plans, can_write), target_data | new_values, actual
 
 
 def _audit(ctx: _Ctx, plan: ChangePlan, result: ChangeResult, plan_id: str | None = None) -> None:
@@ -266,6 +305,7 @@ def _audit(ctx: _Ctx, plan: ChangePlan, result: ChangeResult, plan_id: str | Non
                    "path": plan.target.path, "old_version": result.old_version,
                    "new_version": result.new_version},
         "keys": result.keys,
+        "overridden": result.overridden,  # names only: typed values are never logged
         "message": result.message,
         **({"plan_id": plan_id} if plan_id else {}),
     }, sort_keys=True))
@@ -303,6 +343,7 @@ async def apply_changes(ctx: _Ctx, changes: list[Change], plan_id: str | None = 
         changed = [k.key for k in plan.keys if k.action != "unchanged"]
         res = ChangeResult(path=c.path, right_path=c.right_path or c.path, direction=c.direction,
                            target=f"{tconn.name} · {tmount}/{plan.target.path}",
+                           overridden=[k.key for k in plan.keys if k.override and k.action != "unchanged"],
                            # "ready" becomes applied/conflict/denied/error once the write is attempted
                            status="error" if plan.status == "ready" else plan.status,  # type: ignore[arg-type]
                            old_version=plan.target.version, keys=changed,

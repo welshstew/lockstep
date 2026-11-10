@@ -83,3 +83,59 @@ export async function importProfiles(file: File): Promise<Profile[]> {
   }
   return list as Profile[];
 }
+
+// ---- Building rules from a comparison ("Ignore mode")
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** Same glob semantics as the server (rules.py): `*` within a segment, `**` any depth. */
+export function globRegex(pattern: string): RegExp {
+  const p = pattern.trim().replace(/^\/+|\/+$/g, "");
+  let rx = p.split(/(\*\*|\*)/).map((part) => (part === "**" ? "(.*)" : part === "*" ? "([^/]*)" : escapeRe(part))).join("");
+  if (p.endsWith("/**")) rx = rx.replace(/\/\(\.\*\)$/, "(?:/(.*))?"); // "a/**" also matches "a"
+  return new RegExp(`^${rx}$`);
+}
+
+function keyGlob(pattern: string): RegExp {
+  return new RegExp(`^${pattern.split("*").map(escapeRe).join(".*")}$`);
+}
+
+export function pathIgnored(rules: ProfileRules, ...paths: string[]): boolean {
+  return rules.ignore_paths.some((g) => paths.some((p) => p && globRegex(g).test(p)));
+}
+
+export function keyIgnored(rules: ProfileRules, key: string, ...paths: string[]): boolean {
+  return rules.ignore_keys.some((k) => keyGlob(k.key).test(key) && paths.some((p) => p && globRegex(k.path || "**").test(p)));
+}
+
+/** Rules in both, without duplicates (a's order first). */
+export function mergeRules(a: ProfileRules | null | undefined, b: ProfileRules): ProfileRules {
+  const base = a ?? emptyRules();
+  const paths = [...base.ignore_paths, ...b.ignore_paths.filter((p) => !base.ignore_paths.includes(p))];
+  const same = (x: { key: string; path: string }, y: { key: string; path: string }) => x.key === y.key && (x.path || "**") === (y.path || "**");
+  const keys = [...base.ignore_keys, ...b.ignore_keys.filter((k) => !base.ignore_keys.some((x) => same(x, k)))];
+  const maps = [...base.mappings, ...b.mappings.filter((m) => !base.mappings.some((x) => x.left === m.left && x.right === m.right))];
+  return { mappings: maps, ignore_paths: paths, ignore_keys: keys };
+}
+
+export function ruleCount(r: ProfileRules): number {
+  return r.mappings.length + r.ignore_paths.length + r.ignore_keys.length;
+}
+
+/** Add or remove one ignored path in a draft. */
+export function toggleIgnorePath(r: ProfileRules, pattern: string): ProfileRules {
+  return r.ignore_paths.includes(pattern)
+    ? { ...r, ignore_paths: r.ignore_paths.filter((p) => p !== pattern) }
+    : { ...r, ignore_paths: [...r.ignore_paths, pattern] };
+}
+
+/** Add or remove one ignored key (in `path`, "**" for everywhere) in a draft. */
+export function toggleIgnoreKey(r: ProfileRules, key: string, path: string): ProfileRules {
+  const has = r.ignore_keys.some((k) => k.key === key && k.path === path);
+  return has
+    ? { ...r, ignore_keys: r.ignore_keys.filter((k) => !(k.key === key && k.path === path)) }
+    : { ...r, ignore_keys: [...r.ignore_keys, { key, path }] };
+}
+
+/** Glob characters in a literal path would be read as wildcards; such paths can't be picked. */
+export const literalSafe = (path: string) => !path.includes("*");

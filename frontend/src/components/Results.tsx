@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import type { Changeset } from "../staging";
 import type { InspectTarget } from "./Inspector";
-import type { CompareResult, SecretStatus } from "../types";
+import type { CompareResult, ExportDoc, ProfileRules, SecretStatus } from "../types";
 import { SecretRow, STATUS_LABEL } from "./SecretRow";
 
 type Filter = "changes" | "all" | SecretStatus;
@@ -17,9 +17,14 @@ interface Props {
   changeset: Changeset;
   onChangeset: (cs: Changeset) => void;
   onInspect: (targets: InspectTarget[]) => void;
+  ignoreMode?: boolean;
+  draft?: ProfileRules;
+  onDraft?: (r: ProfileRules) => void;
+  /** Opened export files used as a side: their values are read here, not from Vault */
+  fileDocs?: { left?: ExportDoc; right?: ExportDoc };
 }
 
-export function Results({ result, reveal, leftLabel, rightLabel, changeset, onChangeset, onInspect }: Props) {
+export function Results({ result, reveal, leftLabel, rightLabel, changeset, onChangeset, onInspect, ignoreMode, draft, onDraft, fileDocs }: Props) {
   const [filter, setFilter] = useState<Filter>("changes");
   const [query, setQuery] = useState("");
   const [limit, setLimit] = useState(PAGE);
@@ -83,7 +88,8 @@ export function Results({ result, reveal, leftLabel, rightLabel, changeset, onCh
           shown.slice(0, limit).map((x) => (
             <SecretRow key={x.path} secret={x} left={result.left} right={result.right} reveal={reveal}
                        changeset={changeset} onChangeset={onChangeset} onInspect={onInspect}
-                       sideNames={{ left: leftLabel, right: rightLabel }} />
+                       sideNames={{ left: leftLabel, right: rightLabel }}
+                       ignoreMode={ignoreMode} draft={draft} onDraft={onDraft} fileDocs={fileDocs} />
           ))
         )}
         {shown.length > limit && (

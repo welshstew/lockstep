@@ -18,11 +18,21 @@ There is no database and no server-side session store. The browser can't read or
 - **Values** are returned only by explicit reads: *Show values* for a secret you expand, value-tool previews and downloads. Every `/api` response has `Cache-Control: no-store`.
 - **Keystore private keys** are never downloadable.
 
+## Exports hold values
+
+A [secret-engine export](usage.md#6-export-and-import) is the one thing Lockstep produces that contains values in bulk. The server builds it with the user's own token (so it holds only what they can read), sends it to their browser as a download, and keeps nothing.
+
+- **Encrypted by default** with AES-256-GCM and a random 256-bit one-time key. The key is shown once and never stored or logged. The readable header (Vault name, mount, prefix, count) is authenticated.
+- **Plain exports** need an explicit choice and come with a warning. Set `LOCKSTEP_EXPORT_MODE=encrypted` to forbid them, or `off` to turn exporting off.
+- **Audit:** every export is logged (`"event": "export"`), never with values or the key.
+- **Opening an export** sends the file (and key) to the server, which decrypts it and returns the contents to the page. The page holds them in memory only: never in browser storage, and gone on reload. The CLI writes export files and key files readable by their owner only.
+
 ## What the tool writes
 
-Only **Apply** in the review dialog writes, and only:
+Only **Apply** in the review dialog and **Import** write, and only:
 
-- values **read again from the source Vault** at that moment (never values from the browser)
+- values **read again from the source Vault** at that moment, never copied values from the browser
+- or values you typed as an [override](usage.md#override-values), or from an export file you [import](usage.md#6-export-and-import) or copy from
 - with KV v2 **check-and-set** against the version you compared, so concurrent edits become conflicts
 - **adding or updating keys.** Nothing is ever deleted.
 
@@ -37,7 +47,7 @@ Every attempted write is [audit-logged](usage.md#audit-log), without values. Tok
 
 ## The command line
 
-`lockstep compare` and `lockstep apply` use your own Vault tokens on your own machine. Nothing goes through a Lockstep server.
+`lockstep compare`, `apply`, `export` and `import` use your own Vault tokens on your own machine. Nothing goes through a Lockstep server.
 - **Tokens:** read from the environment, a token file or `~/.vault-token`, never from arguments. A token the CLI makes by logging in (userpass/LDAP) is revoked when the command ends. It never stores tokens.
 - **Reports:** hold paths, key names, versions and what kind of value each key holds, never values. They aren't signed, because the person running `apply` writes with their own permissions and confirms each key. Treat a report from someone else like any change request: read it before you apply it, for example with `--dry-run`.
 - **Writes:** `apply` follows the web app's rules. It reads the source fresh, writes with check-and-set, never deletes, and appends audit lines to `--audit-log` if you give it a file.

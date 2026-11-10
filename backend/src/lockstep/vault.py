@@ -137,6 +137,13 @@ class VaultClient:
         res = await self.request("POST", f"auth/{mount.strip('/')}/login", json={"role": role, "jwt": jwt})
         return res["auth"]
 
+    async def login_jwt(self, jwt: str, role: str | None = None, mount: str = "jwt") -> dict:
+        """Vault's JWT auth method: exchange a JWT (e.g. an ID token or a CI job's OIDC token)
+        for a Vault token. Without a role, Vault uses the mount's default_role."""
+        body = {"jwt": jwt} | ({"role": role} if role else {})
+        res = await self.request("POST", f"auth/{mount.strip('/')}/login", json=body)
+        return res["auth"]
+
     # ------------------------------------------------------------------ mounts
 
     async def list_kv2_mounts(self) -> tuple[list[KvMount], str]:

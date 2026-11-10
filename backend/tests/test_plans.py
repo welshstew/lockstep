@@ -164,3 +164,9 @@ def test_conflicting_change_cannot_be_planned(client, env):
     env.b.put(f"{env.prefix}/cfg", {"k": "edited"})
     r = create(client, env, [ch])
     assert r.status_code == 409 and "Compare again" in r.json()["detail"]["message"]
+
+
+def test_overrides_never_go_into_a_plan(client, env, two_secrets):
+    change = two_secrets[0] | {"keys": [], "set": {"password": "typed"}}
+    r = create(client, env, [change])
+    assert r.status_code == 400 and "overrides can't go into a plan" in r.json()["detail"]["message"]

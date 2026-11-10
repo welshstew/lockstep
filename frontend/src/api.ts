@@ -1,8 +1,10 @@
 import type {
-  AnalyzeOptions, AnalyzeResult, ApiChange, AppConfig, ApplyResult, ChangePlan, CompareResult, Connection, ExpiryResult, KeyHistory, Locator, Mount, MountsResponse, PlanApplyResult, PlanCheck, Profile, ProfileRules, SecretValues, SyncPlan,
+  AnalyzeOptions, AnalyzeResult, ApiChange, PasswordSearch, ExportDoc, ExportResult, ImportPreview, ImportRules, AppConfig, ApplyResult, ChangePlan, CompareResult, Connection, ExpiryResult, KeyHistory, Locator, Mount, MountsResponse, PlanApplyResult, PlanCheck, Profile, ProfileRules, SecretValues, SyncPlan,
 } from "./types";
 
-type SideRef = { conn_id: string; mount: string; prefix: string };
+/** A comparison side: a Vault location, or an opened export file (read-only). */
+export type SideRef = { conn_id: string; mount: string; prefix: string } | { export: ExportDoc; name: string; prefix: string };
+type VaultSide = { conn_id: string; mount: string; prefix: string };
 
 export class ApiError extends Error {
   constructor(public status: number, message: string, public detail: Record<string, unknown> = {}) {
@@ -40,7 +42,8 @@ const q = (params: Record<string, string>) => new URLSearchParams(params).toStri
 export type AuthInput =
   | { method: "token"; token: string }
   | { method: "userpass" | "ldap"; username: string; password: string; mount?: string }
-  | { method: "kubernetes"; role: string; mount?: string };
+  | { method: "kubernetes"; role: string; mount?: string }
+  | { method: "jwt"; jwt: string; role?: string; mount?: string };
 
 export interface ConnectInput {
   preset_id?: number;
@@ -77,6 +80,7 @@ export const api = {
   expiry: (sides: { side: "left" | "right"; conn_id: string; mount: string; prefix: string }[]) =>
     call<ExpiryResult>("POST", "/api/expiry", { sides }),
   analyze: (loc: Locator, opts: AnalyzeOptions) => call<AnalyzeResult>("POST", "/api/analyze", { ...loc, ...opts }),
+  findPasswords: (loc: Locator) => call<PasswordSearch>("POST", "/api/analyze/passwords", loc),
   content,
   config: () => call<AppConfig>("GET", "/api/config"),
   connections: () => call<Connection[]>("GET", "/api/connections"),
@@ -85,15 +89,14 @@ export const api = {
   mounts: (id: string) => call<MountsResponse>("GET", `/api/connections/${id}/mounts`),
   describeMount: (id: string, path: string) =>
     call<Mount>("GET", `/api/connections/${id}/mounts/${encodeURIComponent(path).replace(/%2F/g, "/")}`),
-  compare: (left: { conn_id: string; mount: string; prefix: string },
-            right: { conn_id: string; mount: string; prefix: string }, rules?: ProfileRules | null) =>
+  compare: (left: SideRef, right: SideRef, rules?: ProfileRules | null) =>
     call<CompareResult>("POST", "/api/compare", { left, right, ...(rules ? { rules } : {}) }),
   profiles: () => call<Profile[]>("GET", "/api/profiles"),
   syncPreview: (left: SideRef, right: SideRef, changes: ApiChange[], reveal: boolean) =>
     call<ChangePlan[]>("POST", "/api/sync/preview", { left, right, changes, reveal }),
   syncApply: (left: SideRef, right: SideRef, changes: ApiChange[]) =>
     call<ApplyResult>("POST", "/api/sync/apply", { left, right, changes, confirm: true }),
-  planCreate: (left: SideRef, right: SideRef, changes: ApiChange[], note: string, profile: string | null) =>
+  planCreate: (left: VaultSide, right: VaultSide, changes: ApiChange[], note: string, profile: string | null) =>
     call<SyncPlan>("POST", "/api/plans", { left, right, changes, note, profile }),
   planVerify: (plan: unknown) => call<{ plan: SyncPlan }>("POST", "/api/plans/verify", { plan }),
   planReport: async (plan: SyncPlan) => {
@@ -109,6 +112,14 @@ export const api = {
     call<PlanCheck>("POST", "/api/plans/check", { plan, left_conn_id, right_conn_id }),
   planApply: (plan: SyncPlan, left_conn_id: string, right_conn_id: string) =>
     call<PlanApplyResult>("POST", "/api/plans/apply", { plan, left_conn_id, right_conn_id, confirm: true }),
+  exportCreate: (side: VaultSide, rules: { ignore_paths: string[]; ignore_keys: { key: string; path: string }[] }, encrypt: boolean) =>
+    call<ExportResult>("POST", "/api/exports", { side, rules, encrypt }),
+  exportOpen: (file: unknown, key?: string) =>
+    call<{ export: ExportDoc; encrypted: boolean }>("POST", "/api/exports/open", { file, ...(key ? { key } : {}) }),
+  importPreview: (exp: ExportDoc, name: string, rules: ImportRules, target: VaultSide, reveal: boolean) =>
+    call<ImportPreview>("POST", "/api/import/preview", { export: exp, name, rules, target, reveal }),
+  importApply: (exp: ExportDoc, name: string, rules: ImportRules, target: VaultSide, expected: Record<string, number | null>) =>
+    call<ApplyResult>("POST", "/api/import/apply", { export: exp, name, rules, target, expected, confirm: true }),
   history: (id: string, mount: string, path: string) =>
     call<KeyHistory>("GET", `/api/connections/${id}/history?${q({ mount, path })}`),
   secret: (id: string, mount: string, path: string) =>

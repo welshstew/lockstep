@@ -57,17 +57,19 @@ The Vaults run in dev mode (in memory). The **seed job recreates its mounts on e
 
 | Sign-in | Policy | Access |
 |---|---|---|
-| userpass `alice`, OIDC `alice@example.com` | `lockstep-admin` | everything (via an identity entity for OIDC) |
-| userpass `bob`, OIDC `bob@example.com` | `lockstep-readonly` | read and list every KV mount, plus `sys/mounts` |
+| userpass `alice`, OIDC or JWT `alice@example.com` | `lockstep-admin` | everything (via an identity entity for OIDC and JWT) |
+| userpass `bob`, OIDC or JWT `bob@example.com` | `lockstep-readonly` | read and list every KV mount, plus `sys/mounts` |
 | userpass `carol` | `lockstep-limited` | `app-config` only, no `sys/mounts`. `restricted/` is hidden; `payments/api` can be listed but not read |
 | Kubernetes (with `make up-k8s`) | per role | see [authentication](authentication.md#trying-it-locally) |
+
+For **JWT**, get an ID token from Dex directly: `curl -s -u vault:vault-dev-secret -d grant_type=password -d username=alice@example.com -d password=password -d 'scope=openid email' http://dex.localhost:5556/dex/token | jq -r .id_token`.
 
 **Mounts:**
 
 | Mount | Where | Contents |
 |---|---|---|
 | `app-config` | A and B | equal, different and one-sided secrets and keys; deep nesting; a path with a space; JSON values with a number vs a string; a soft-deleted secret; base64 text; PNG and SVG (with a `<script>` that must not run); a JAR; random AES/HMAC keys |
-| `certs` | A and B | root and intermediate CA; valid, renewed (differs A vs B), expired, not-yet-valid, self-signed, untrusted and missing-intermediate leaves; DER in base64; a base64 PEM chain; PKCS#12 with and without a password; **JKS and JCEKS keystores made by `keytool`** (password `changeit`) |
+| `certs` | A and B | root and intermediate CA; valid, renewed (differs A vs B), expired, not-yet-valid, self-signed, untrusted and missing-intermediate leaves; DER in base64; a base64 PEM chain; PKCS#12 with and without a password; **JKS and JCEKS keystores made by `keytool`** (password `changeit`); `some-secrets/`: a PKCS#12 whose password (random per seed) is in `strings/KEYSTORE_PASSWORD`, among decoys (password finder) |
 | `team-a-only` | A | one-sided mount |
 | `app-config-staging` | B | for comparing two mounts in the same Vault |
 | `legacy-kv` | A and B | KV v1; must be ignored |
@@ -78,7 +80,7 @@ The Vaults run in dev mode (in memory). The **seed job recreates its mounts on e
 make test        # or: podman compose --profile test run --rm --build tests
 ```
 
-The tests run in a container on the compose network, against the seeded Vaults and Dex. They cover the diff engine, sessions, connections and permissions, copying (CAS, conflicts, audit), last-changed history, value detection (certificates, PKCS#12, JKS/JCEKS, images…), the OIDC login through Dex, the command line (reports, action checks, compare and apply against both Vaults), and Kubernetes auth (with real k3s logins when the token is mounted; otherwise those tests are skipped). Tests that write data use a random prefix and remove it afterwards.
+The tests run in a container on the compose network, against the seeded Vaults and Dex. They cover the diff engine, sessions, connections and permissions, copying (CAS, conflicts, audit), last-changed history, value detection (certificates, PKCS#12, JKS/JCEKS, images…), the OIDC and JWT logins through Dex, the command line (reports, action checks, compare and apply against both Vaults), and Kubernetes auth (with real k3s logins when the token is mounted; otherwise those tests are skipped). Tests that write data use a random prefix and remove it afterwards.
 
 For the UI with hot reload:
 
@@ -111,8 +113,13 @@ make e2e
 | type difference and last changed | `number` vs `string` tags; per-key "changed … · vN" |
 | copy with review, conflict and audit | staging two copies; the review; a concurrent edit in Vault B; one written, one **conflict**; target values checked in Vault |
 | OIDC redirect login | the full round trip through Dex's login page and back |
+| JWT login | an ID token from Dex (password grant) pasted into the form's JWT option |
+| override values | **Override both**: masked typing, a new JSON key, the review (typed source, no plan), both Vaults checked |
 | limited user | the mount-list fallback notice; folders hidden by policy shown as **No access** |
 | inspect PKCS#12 | both sides; sibling password key; certificate diff; chain becomes trusted after picking `ca/root` |
+| export and import | an encrypted export downloaded with its key; the file as the left side (wrong key refused, values from the file, copy into Vault B, nothing into the file, no plan); an import with three transforms, saved rules, preview and write |
+| build a profile by picking | **Pick what to ignore…**: a secret, a folder, a key everywhere; undo; compare with the draft; save as a profile and use it |
+| password finder | a keystore in `some-secrets/files/` opened with **Use** on the password found in `some-secrets/strings/`; decoys listed as tried; no values on the page |
 | SVG preview | the image renders and its `<script>` does not run |
 | Kubernetes sign-in | with `make up-k8s` only (otherwise skipped) |
 

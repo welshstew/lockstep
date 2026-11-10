@@ -2,6 +2,7 @@
 
 import re
 
+import httpx
 import pytest
 from playwright.sync_api import expect
 
@@ -106,6 +107,22 @@ def test_oidc_redirect_login(page):
     expect(side(page, "left").locator(".conn-chip")).to_contain_text("lockstep-admin")
 
 
+def test_jwt_login(page):
+    """Vault's JWT auth method, with an ID token Dex issues directly (password grant)."""
+    r = httpx.post("http://dex.localhost:5556/dex/token", auth=("vault", "vault-dev-secret"), data={
+        "grant_type": "password", "username": "alice@example.com", "password": "password",
+        "scope": "openid email profile"})
+    r.raise_for_status()
+    card = side(page, "left")
+    expect(card.get_by_text("This Vault offers")).to_contain_text("jwt (jwt/)")
+    card.get_by_role("button", name="JWT", exact=True).click()
+    card.get_by_label("JWT", exact=True).fill(r.json()["id_token"])
+    card.get_by_role("button", name="Connect", exact=True).click()
+    expect(card.locator(".conn-chip")).to_contain_text("jwt-alice@example.com")
+    expect(card.locator(".conn-chip")).to_contain_text("lockstep-admin")
+    choose_mount(page, "left", "app-config")
+
+
 def test_limited_user_sees_no_access_not_one_sided(page):
     sign_in_userpass(page, "left", "carol", vault="Vault A")
     expect(side(page, "left").get_by_text("only mounts it can access are shown")).to_be_visible()
@@ -140,6 +157,26 @@ def test_inspect_pkcs12_both_sides_and_trust_root(page):
     expect(insp.locator(".chain-verdict .badge", has_text="Chain trusted").first).to_be_visible()
 
 
+def test_password_finder_opens_a_keystore_with_a_password_from_elsewhere(page):
+    connect_both(page, mount="certs", prefix="some-secrets")
+    compare(page)
+    show_everything(page)
+    r = expand(page, "files/certs.p12")
+    key_row(r, "certs.p12").get_by_role("button", name="Inspect").click()
+    insp = page.locator("dialog.inspector")
+    col = insp.locator(".inspect-col.left")
+    finder = col.locator(".pw-finder")
+    opener = finder.locator(".pw-candidate.opens")
+    expect(opener).to_have_count(1)
+    expect(opener).to_contain_text("some-secrets/strings/KEYSTORE_PASSWORD · value")
+    expect(finder.locator(".pw-others summary")).to_contain_text("2 other candidates tried in some-secrets/")
+    opener.get_by_role("button", name="Use").click()
+    expect(col.locator(".check.ok", has_text="password accepted")).to_contain_text(
+        "from some-secrets/strings/KEYSTORE_PASSWORD · value")
+    expect(col.locator(".node-label", has_text="Private key")).not_to_have_count(0)
+    expect(insp).not_to_contain_text("not-the-store-password")  # candidates are named, never shown
+
+
 def test_svg_preview_does_not_run_scripts(page):
     connect_both(page)
     compare(page)
@@ -166,3 +203,38 @@ def test_kubernetes_sign_in_when_available(page):
     card.get_by_role("button", name="Connect", exact=True).click()
     expect(card.locator(".conn-chip")).to_contain_text("kubernetes-lockstep-lockstep")
     expect(card.locator(".conn-chip")).to_contain_text("lockstep-readonly")
+
+
+def test_override_values_on_both_sides(page, sandbox, vault_a, vault_b):
+    vault_a.put("app-config", f"{sandbox}/svc", {"password": "A", "user": "app"})
+    vault_b.put("app-config", f"{sandbox}/svc", {"password": "B", "user": "app"})
+    connect_both(page, prefix=sandbox)
+    compare(page)
+    r = expand(page, "svc")
+
+    r.get_by_role("button", name="Override both").click()
+    editor = r.locator(".override-editor")
+    expect(editor.get_by_label("New value for password")).to_have_class(re.compile("masked-input"))
+    editor.get_by_label("New value for password").fill("rotated-pw")
+    editor.get_by_label("New key name").fill("rotated_at")
+    editor.get_by_role("button", name="＋ Add key").click()
+    editor.get_by_label("New value for rotated_at").fill("2026")
+    editor.locator(".override-row", has_text="rotated_at").get_by_label("JSON").check()
+    editor.get_by_role("button", name="Stage override").click()
+
+    expect(key_row(r, "password").locator(".override-tag")).to_have_count(2)
+    expect(r.locator(".override-new")).to_have_count(2)
+    expect(page.locator(".changeset-bar")).to_contain_text("4 keys staged in 1 secret")
+
+    page.get_by_role("button", name="Review & apply…").click()
+    dialog = page.locator("dialog.review")
+    expect(dialog.locator(".plan .badge", has_text="Will be written")).to_have_count(2)
+    expect(dialog.locator(".plan .muted", has_text="Typed values")).to_have_count(2)
+    expect(dialog.get_by_role("button", name="Save as plan")).to_be_disabled()
+    expect(dialog).not_to_contain_text("rotated-pw")  # values stay hidden in the review without Show values
+    dialog.locator("label.confirm input").check()
+    dialog.get_by_role("button", name="Apply").click()
+    expect(dialog.locator(".plan .badge", has_text=re.compile(r"^Written$"))).to_have_count(2)
+
+    for v in (vault_a, vault_b):
+        assert v.get("app-config", f"{sandbox}/svc") == {"password": "rotated-pw", "user": "app", "rotated_at": 2026}

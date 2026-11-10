@@ -37,6 +37,8 @@ vaults: []
 allowCustomConnections: false       # let users type any Vault address (SSRF risk; see docs)
 customUrlPatterns: []               # regexes a custom address must fully match
 maxTreeSecrets: 5000
+# Secret-engine exports hold values: any (users choose encrypted or plain) | encrypted | off
+exportMode: any
 
 vaultTls:
   verify: true

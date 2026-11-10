@@ -25,10 +25,11 @@ Compare **KV v2 secrets engines** across HashiCorp Vault clusters, or across two
 - **Copy with ← / →** per key or per secret. A review shows exactly what each target gets. Writes use KV v2 **check-and-set**: a target changed by someone else since you compared becomes a conflict, not an overwrite. Nothing is ever deleted. Every write is **audit-logged** (without values).
 - **Sync plans.** Save a reviewed set of copies as a signed file (paths, keys and versions, never values) that doubles as a report of what needs updating from where. Someone with write access opens it, checks it and applies it. If anything in it changed since it was made, nothing is written and the plan has to be made again. Read-only users can prepare plans.
 - **Command line too.** `lockstep compare` writes a YAML report of the differences (no values), with each secret's Vault UI link and `vault kv get` command. Set an action on the keys to change, and `lockstep apply` makes the copies, asking before each key is written. Logs in like the `vault` CLI, and works as a drift check in CI (exit code 1 on differences). See [Command line](docs/cli.md).
+- **Export and import a secret engine.** Export a mount with its values to a file, encrypted with a one-time key, leaving out what you choose. Compare a Vault against an export, copy from it, or import it into another Vault with rules and transforms (`application-dev-env` → `application-test-env`), previewed and written with check-and-set. In the UI and the CLI (`lockstep export`, `lockstep import`).
 - **Certificate expiry dashboard.** Scan one or both sides' mounts for every certificate (PEM, DER, base64, PKCS#12, JKS/JCEKS; keystores opened with the password stored beside them) and see what expires when. Only certificate details come back, never values.
 - **Value tools.** Each value is identified by its content: base64, PEM, DER, **X.509 certificates and chains** (validated link by link), **PKCS#12**, **JKS / JCEKS** keystores, keys, CSRs, images, ZIP/JAR, PDF… Inspect one or both sides, compare certificates field by field, preview images, download files.
 - **Last-updated metadata.** When each secret was written and when each key last changed (worked out from KV v2 versions), never part of the comparison.
-- **Sign in your way.** Token, userpass, LDAP, **OIDC redirect** (the same flow as the Vault UI), or the pod's **Kubernetes service account** with a mount and role you choose.
+- **Sign in your way.** Token, userpass, LDAP, **OIDC redirect** (the same flow as the Vault UI), **JWT**, or the pod's **Kubernetes service account** with a mount and role you choose.
 - **Built to run on Kubernetes.** Stateless (sessions live in an encrypted cookie), configured only through environment variables, runs on **Red Hat Hardened Images** (distroless, non-root), scanned in CI.
 
 ## Screenshots
@@ -40,6 +41,9 @@ Compare **KV v2 secrets engines** across HashiCorp Vault clusters, or across two
 | **Comparison profiles.** Map `prod` paths to `staging` paths, ignore keys meant to differ (here `host`); copies follow the mapping.<br><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/09-profile-dark.png"><img alt="A profile pairing prod and staging paths, with an ignored key" src="docs/images/09-profile-light.png"></picture> | **Profile editor.** Mappings with wildcards, ignored keys and paths. Shared profiles come from the server; personal ones live in your browser and export as JSON.<br><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/10-profile-editor-dark.png"><img alt="Profile editor" src="docs/images/10-profile-editor-light.png"></picture> |
 | **Inspect both sides.** A PKCS#12 opened with its sibling password key; certificates compared field by field.<br><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/06-inspect-pkcs12-dark.png"><img alt="PKCS#12 inspector, both sides" src="docs/images/06-inspect-pkcs12-light.png"></picture> | **Certificate chains**, validated link by link against the trust anchors you choose.<br><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/07-certificate-chain-dark.png"><img alt="Certificate chain validation" src="docs/images/07-certificate-chain-light.png"></picture> |
 | **Certificate expiry dashboard.** Every certificate in both mounts, including inside keystores, by time to expiry; filter, inspect, export CSV.<br><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/11-expiry-dark.png"><img alt="Certificate expiry dashboard" src="docs/images/11-expiry-light.png"></picture> | **Sync plans.** A saved plan, opened and checked against both Vaults before anyone applies it.<br><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/12-sync-plan-dark.png"><img alt="A sync plan checked in the Sync plans tab" src="docs/images/12-sync-plan-light.png"></picture> |
+| **Export and import.** An encrypted export with its one-time key, shown once.<br><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/16-export-dark.png"><img alt="Encrypted export with its one-time key" src="docs/images/16-export-light.png"></picture> | **Import with rules.** Rewrite paths and values (prod → staging), preview, then write with check-and-set.<br><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/17-import-dark.png"><img alt="Import preview with transforms" src="docs/images/17-import-light.png"></picture> |
+| **Pick what to ignore.** Click Ignore on secrets, folders and keys, check the effect, save it as a profile.<br><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/15-pick-ignore-dark.png"><img alt="Ignore mode with picked rules" src="docs/images/15-pick-ignore-light.png"></picture> | **Override values.** Type new values for one side or both; reviewed and written like a copy.<br><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/13-override-dark.png"><img alt="Override editor for one side" src="docs/images/13-override-light.png"></picture> |
+| **Keystore password finder.** The password lives in another folder: candidates are tried on the server, never shown.<br><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/14-password-finder-dark.png"><img alt="Password finder offering the key that opens the keystore" src="docs/images/14-password-finder-light.png"></picture> | |
 
 ## Quick start (local, with two demo Vaults)
 
@@ -57,16 +61,16 @@ This starts two dev-mode Vaults filled with demo data, Dex as an OIDC provider, 
 ## Deploy
 
 ```sh
-helm upgrade --install lockstep oci://ghcr.io/welshstew/charts/lockstep --version 0.2.0 \
+helm upgrade --install lockstep oci://ghcr.io/welshstew/charts/lockstep --version 0.3.0 \
   -n lockstep --create-namespace -f my-values.yaml
 ```
 
-Or run the container anywhere: `ghcr.io/welshstew/lockstep:0.2.0` (amd64 and arm64, signed with cosign, with an SBOM and build provenance; see [releases](https://github.com/welshstew/lockstep/releases)).
+Or run the container anywhere: `ghcr.io/welshstew/lockstep:0.3.0` (amd64 and arm64, signed with cosign, with an SBOM and build provenance; see [releases](https://github.com/welshstew/lockstep/releases)).
 
 For the command line, install from GitHub (it isn't on PyPI yet) or use the same image with `--entrypoint lockstep`. See [Command line: install](docs/cli.md#install):
 
 ```sh
-pipx install "git+https://github.com/welshstew/lockstep@v0.2.0#subdirectory=backend"
+pipx install "git+https://github.com/welshstew/lockstep@v0.3.0#subdirectory=backend"
 ```
 
 A hardened chart: non-root, read-only filesystem, a session key kept across upgrades, optional Ingress, NetworkPolicy and Kubernetes auth. See [Deploying on Kubernetes](docs/kubernetes.md) and the [chart README](charts/lockstep/README.md).
@@ -77,7 +81,7 @@ A hardened chart: non-root, read-only filesystem, a session key kept across upgr
 |---|---|
 | [Using the tool](docs/usage.md) | Comparing, statuses and permissions, copying values, value tools, timestamps |
 | [Command line](docs/cli.md) | `lockstep compare` reports and `lockstep apply`: install, logging in, the report format, exit codes |
-| [Authentication](docs/authentication.md) | Token, userpass/LDAP, OIDC redirect, **Kubernetes service account**: app settings *and* the Vault-side setup for each |
+| [Authentication](docs/authentication.md) | Token, userpass/LDAP, OIDC redirect, JWT, **Kubernetes service account**: app settings *and* the Vault-side setup for each |
 | [Configuration](docs/configuration.md) | Every `LOCKSTEP_*` setting |
 | [Deploying on Kubernetes](docs/kubernetes.md) | The Helm chart, a deployment checklist, OIDC callback and Kubernetes auth in a cluster ([chart values](charts/lockstep/README.md)) |
 | [Public demo](docs/demo.md) | Run the self-contained demo stack on a Docker host with Caddy and automatic HTTPS |

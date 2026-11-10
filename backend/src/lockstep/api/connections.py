@@ -47,12 +47,22 @@ class KubernetesAuth(BaseModel):
     mount: str | None = None
 
 
+JWT_MAX = 64 * 1024
+
+
+class JwtAuth(BaseModel):
+    method: Literal["jwt"]
+    jwt: str = Field(min_length=1, max_length=JWT_MAX)
+    role: str | None = Field(default=None, max_length=128)  # default: the mount's default_role
+    mount: str | None = None
+
+
 class ConnectionCreate(BaseModel):
     preset_id: int | None = None
     url: str | None = None
     namespace: str | None = None
     name: str | None = None
-    auth: TokenAuth | PasswordAuth | KubernetesAuth = Field(discriminator="method")
+    auth: TokenAuth | PasswordAuth | KubernetesAuth | JwtAuth = Field(discriminator="method")
 
 
 class ConnectionOut(BaseModel):
@@ -217,6 +227,9 @@ async def create_connection(body: ConnectionCreate, response: Response, session:
             elif isinstance(auth, KubernetesAuth):
                 jwt = read_k8s_token(auth, settings)
                 res = await anon.login_kubernetes(auth.role, jwt, auth.mount or settings.k8s_auth_mount)
+                token, minted = res["client_token"], True
+            elif isinstance(auth, JwtAuth):
+                res = await anon.login_jwt(auth.jwt.strip(), auth.role or None, auth.mount or "jwt")
                 token, minted = res["client_token"], True
             else:
                 login = anon.login_userpass if auth.method == "userpass" else anon.login_ldap

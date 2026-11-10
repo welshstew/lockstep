@@ -4,9 +4,12 @@
   (edit the actions in report.yaml)
   lockstep apply report.yaml
 
+  lockstep export --vault-addr https://vault-a --mount app-config -o export.json   (prints a one-time key)
+  lockstep import export.json --vault-addr https://vault-b --mount app-config --replace app-dev=app-test
+
 Exit codes, like diff(1): compare 0 = no differences, 1 = differences, 2 = couldn't compare.
-apply 0 = done, 1 = some secrets were skipped (changed since the report, or not writable),
-2 = couldn't apply (bad report, login failed, ...).
+apply/import 0 = done, 1 = some secrets were skipped (changed since the report or preview, or not
+writable), 2 = couldn't run (bad file, login failed, ...).
 """
 
 from __future__ import annotations
@@ -26,6 +29,7 @@ from ..rules import Profile, Rules
 from ..vault import VaultError
 from . import apply as apply_mod
 from . import report as report_mod
+from . import transfer
 from .connect import (CliError, SIDES, add_side_args, add_tls_args, cli_settings, connect_both, default_name,
                       resolve_targets, revoke)
 
@@ -81,9 +85,12 @@ def parser() -> argparse.ArgumentParser:
         add_side_args(a, which, locations=False)
     add_tls_args(a)
 
-    sub.add_parser("schema", help="print the report's JSON Schema",
-                   description=f"Print the JSON Schema of the report file (also at {report_mod.SCHEMA_URL}). "
-                               "Editors use it to complete and check `action:` values.")
+    transfer.add_parsers(sub)
+
+    s = sub.add_parser("schema", help="print a JSON Schema (report, export or import rules)",
+                       description=f"Print the JSON Schema of a Lockstep file. report (the default, also at "
+                                   f"{report_mod.SCHEMA_URL}): editors use it to complete and check `action:` values.")
+    s.add_argument("kind", nargs="?", choices=("report", "export", "import-rules"), default="report")
     return p
 
 
@@ -268,10 +275,14 @@ async def _apply(args) -> int:
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     if args.command == "schema":
-        print(json.dumps(report_mod.schema(), indent=2, ensure_ascii=False))
+        from .. import exports
+        schema = {"report": report_mod.schema, "export": exports.schema, "import-rules": exports.rules_schema}[args.kind]()
+        print(json.dumps(schema, indent=2, ensure_ascii=False))
         return 0
+    commands = {"compare": lambda: _compare(args), "apply": lambda: _apply(args),
+                "export": lambda: transfer.run_export(args, _load_profile), "import": lambda: transfer.run_import(args)}
     try:
-        return asyncio.run(_compare(args) if args.command == "compare" else _apply(args))
+        return asyncio.run(commands[args.command]())
     except CliError as e:
         print(f"lockstep: {e}", file=sys.stderr)
         return 2

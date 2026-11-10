@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api } from "../api";
+import { api, type SideRef } from "../api";
 import { downloadPlan, downloadReport, planFileName } from "../plans";
-import { type Changeset, toApiChanges } from "../staging";
+import { type Changeset, hasOverrides, toApiChanges } from "../staging";
 import type { ApplyResult, ChangePlan, CompareResult, PlanStatus, ResultStatus, SyncPlan } from "../types";
 import { formatValue } from "./ValueCell";
 
@@ -10,6 +10,8 @@ interface Props {
   changeset: Changeset;
   reveal: boolean;
   profile: string | null;
+  /** The two sides as compared (a Vault location or an opened export file) */
+  sides: { left: SideRef; right: SideRef };
   onClose: (applied: boolean) => void;
 }
 
@@ -24,11 +26,10 @@ const RESULT_LABEL: Record<ResultStatus, string> = {
 const tone = (s: string) =>
   s === "ready" || s === "applied" ? "equal" : s === "noop" ? "unknown" : s === "conflict" ? "different" : "error";
 
-function side(r: CompareResult["left"]) {
-  return { conn_id: r.conn_id, mount: r.mount, prefix: r.prefix };
-}
-
-export function ReviewDialog({ result, changeset, reveal, profile, onClose }: Props) {
+export function ReviewDialog({ result, changeset, reveal, profile, sides, onClose }: Props) {
+  // Plans name Vaults on both sides, so they can't involve an export file
+  const vaultSide = (s: SideRef) => ("conn_id" in s ? s : null);
+  const fileSide = !vaultSide(sides.left) || !vaultSide(sides.right);
   const ref = useRef<HTMLDialogElement>(null);
   const changes = useMemo(() => toApiChanges(changeset, result), [changeset, result]);
   const [plans, setPlans] = useState<ChangePlan[] | null>(null);
@@ -44,10 +45,11 @@ export function ReviewDialog({ result, changeset, reveal, profile, onClose }: Pr
   useEffect(() => {
     let live = true;
     setPlans(null);
-    api.syncPreview(side(result.left), side(result.right), changes, reveal)
+    api.syncPreview(sides.left, sides.right, changes, reveal)
       .then((p) => { if (live) setPlans(p); })
       .catch((e) => { if (live) setError(e.message); });
     return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [changes, reveal, result]);
 
   const ready = plans?.filter((p) => p.status === "ready") ?? [];
@@ -58,12 +60,14 @@ export function ReviewDialog({ result, changeset, reveal, profile, onClose }: Pr
   const writeDenied = (p: ChangePlan) => p.status === "denied" && p.keys.length > 0;
   const plannable = plans?.filter((p) => p.status === "ready" || writeDenied(p)) ?? [];
   const unplannable = plans?.filter((p) => !["ready", "noop"].includes(p.status) && !writeDenied(p)) ?? [];
+  // Plans never hold values, so typed values (overrides) can't go into one.
+  const overrides = hasOverrides(changeset);
 
   async function savePlan() {
     setPlanning(true);
     setError(null);
     try {
-      const plan = await api.planCreate(side(result.left), side(result.right), changes, note, profile);
+      const plan = await api.planCreate(vaultSide(sides.left)!, vaultSide(sides.right)!, changes, note, profile);
       downloadPlan(plan);
       setSaved(plan);
     } catch (e) {
@@ -78,7 +82,7 @@ export function ReviewDialog({ result, changeset, reveal, profile, onClose }: Pr
     setError(null);
     try {
       const readyChanges = changes.filter((c) => ready.some((p) => p.path === c.path && p.direction === c.direction));
-      setApplied(await api.syncApply(side(result.left), side(result.right), readyChanges));
+      setApplied(await api.syncApply(sides.left, sides.right, readyChanges));
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -117,7 +121,9 @@ export function ReviewDialog({ result, changeset, reveal, profile, onClose }: Pr
                   <span className={`badge ${tone(r.status)}`}>{RESULT_LABEL[r.status]}</span>
                 </div>
                 <div className="subtle">
-                  {r.status === "applied" ? `v${r.old_version ?? "—"} → v${r.new_version} · ${r.keys.join(", ")}` : r.message}
+                  {r.status === "applied"
+                    ? `v${r.old_version ?? "—"} → v${r.new_version} · ${r.keys.join(", ")}${r.overridden.length ? ` (typed: ${r.overridden.join(", ")})` : ""}`
+                    : r.message}
                 </div>
               </li>
             ))}
@@ -128,7 +134,7 @@ export function ReviewDialog({ result, changeset, reveal, profile, onClose }: Pr
               <li key={`${p.direction}${p.path}`} className={`plan ${p.status}`}>
                 <div className="plan-head">
                   <span className="mono">
-                    <span className="muted">{p.source.name} · {p.source.mount}/{p.source.path}</span>
+                    <span className="muted">{p.source.state === "unused" ? "Typed values" : `${p.source.name} · ${p.source.mount}/${p.source.path}`}</span>
                     <span className={p.direction === "left_to_right" ? "dir-r" : "dir-l"}> → </span>
                     {p.target.name} · {p.target.mount}/{p.target.path}
                   </span>
@@ -147,7 +153,8 @@ export function ReviewDialog({ result, changeset, reveal, profile, onClose }: Pr
                         <tr key={k.key} className={k.action}>
                           <td className="mono">{k.key}</td>
                           <td><span className={`action ${k.action}`}>{k.action === "add" ? "add" : k.action === "update" ? "update" : "same"}</span>
-                            {k.type_change && <span className="type-tag">type changes</span>}</td>
+                            {k.type_change && <span className="type-tag">type changes</span>}
+                            {k.override && <span className="type-tag" title="A value you typed, not copied from the other side">typed</span>}</td>
                           {reveal && (
                             <td className="mono vals">
                               {k.action === "update" && <><s>{formatValue(k.target_value, k.type_change)}</s> → </>}
@@ -186,12 +193,14 @@ export function ReviewDialog({ result, changeset, reveal, profile, onClose }: Pr
             {plans && ready.length === 0 && <span className="muted">Nothing can be written. See the notes above.</span>}
             {blocked.length > 0 && ready.length > 0 && <span className="subtle">{blocked.length} item(s) will be skipped</span>}
             <span className="spacer" />
-            {plans && plannable.length > 0 && !saved && (
+            {plans && plannable.length > 0 && !saved && !overrides && !fileSide && (
               <input type="text" className="plan-note-input" placeholder="Note for the plan (optional)" value={note}
                      maxLength={2000} onChange={(e) => setNote(e.target.value)} aria-label="Plan note" />
             )}
-            <button type="button" className="btn ghost" disabled={!plans || plannable.length === 0 || unplannable.length > 0 || planning || applying || Boolean(saved)}
-                    title={unplannable.length > 0 ? "Some changes conflict or can't be read: compare again first" : "Download these changes as a plan for someone else to apply"}
+            <button type="button" className="btn ghost" disabled={!plans || plannable.length === 0 || unplannable.length > 0 || overrides || fileSide || planning || applying || Boolean(saved)}
+                    title={fileSide ? "A plan needs a Vault on both sides, not an export file"
+                      : overrides ? "Plans never hold values, so overrides can't be saved as a plan: apply them directly"
+                      : unplannable.length > 0 ? "Some changes conflict or can't be read: compare again first" : "Download these changes as a plan for someone else to apply"}
                     onClick={savePlan}>
               {planning && <span className="spinner" />} {saved ? "Plan saved" : "Save as plan"}
             </button>

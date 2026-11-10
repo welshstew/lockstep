@@ -1,0 +1,365 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://getlockstep.cloud/schemas/lockstep-export-v1.json",
+  "title": "Lockstep secret-engine export",
+  "description": "A KV v2 secret engine exported by Lockstep, either as plain JSON with values or encrypted with a one-time key. Plain exports hold secret values.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/ExportDoc"
+    },
+    {
+      "$ref": "#/$defs/EncryptedExport"
+    }
+  ],
+  "$defs": {
+    "ExportRules": {
+      "description": "What was left out when exporting.",
+      "properties": {
+        "ignore_paths": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 200,
+          "title": "Ignore Paths",
+          "type": "array"
+        },
+        "ignore_keys": {
+          "items": {
+            "$ref": "#/$defs/IgnoreKey"
+          },
+          "maxItems": 200,
+          "title": "Ignore Keys",
+          "type": "array"
+        }
+      },
+      "title": "ExportRules",
+      "type": "object"
+    },
+    "ExportSecret": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "description": "Relative to source.prefix",
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "version": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Version"
+        },
+        "updated": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Updated"
+        },
+        "data": {
+          "additionalProperties": true,
+          "title": "Data",
+          "type": "object"
+        }
+      },
+      "required": [
+        "path",
+        "data"
+      ],
+      "title": "ExportSecret",
+      "type": "object"
+    },
+    "ExportSkipped": {
+      "properties": {
+        "ignored_paths": {
+          "default": 0,
+          "title": "Ignored Paths",
+          "type": "integer"
+        },
+        "ignored_keys": {
+          "default": 0,
+          "title": "Ignored Keys",
+          "type": "integer"
+        },
+        "unreadable": {
+          "description": "Secrets that couldn't be read",
+          "items": {
+            "type": "string"
+          },
+          "title": "Unreadable",
+          "type": "array"
+        },
+        "deleted": {
+          "description": "Secrets whose latest version is deleted",
+          "items": {
+            "type": "string"
+          },
+          "title": "Deleted",
+          "type": "array"
+        },
+        "denied_folders": {
+          "description": "Folders that couldn't be listed",
+          "items": {
+            "type": "string"
+          },
+          "title": "Denied Folders",
+          "type": "array"
+        },
+        "truncated": {
+          "default": false,
+          "description": "True if the listing hit the size limit",
+          "title": "Truncated",
+          "type": "boolean"
+        }
+      },
+      "title": "ExportSkipped",
+      "type": "object"
+    },
+    "ExportSource": {
+      "properties": {
+        "vault": {
+          "description": "The connection's name when exported",
+          "title": "Vault",
+          "type": "string"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The Vault address (left out for preset connections)",
+          "title": "Url"
+        },
+        "namespace": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Namespace"
+        },
+        "mount": {
+          "title": "Mount",
+          "type": "string"
+        },
+        "prefix": {
+          "default": "",
+          "description": "Paths below are relative to this prefix",
+          "title": "Prefix",
+          "type": "string"
+        },
+        "identity": {
+          "default": "",
+          "description": "Who exported it, as Vault reported them",
+          "title": "Identity",
+          "type": "string"
+        }
+      },
+      "required": [
+        "vault",
+        "mount"
+      ],
+      "title": "ExportSource",
+      "type": "object"
+    },
+    "IgnoreKey": {
+      "properties": {
+        "key": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Key",
+          "type": "string"
+        },
+        "path": {
+          "default": "**",
+          "maxLength": 512,
+          "title": "Path",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key"
+      ],
+      "title": "IgnoreKey",
+      "type": "object"
+    },
+    "EncryptedSource": {
+      "properties": {
+        "vault": {
+          "title": "Vault",
+          "type": "string"
+        },
+        "mount": {
+          "title": "Mount",
+          "type": "string"
+        },
+        "prefix": {
+          "default": "",
+          "title": "Prefix",
+          "type": "string"
+        },
+        "secrets": {
+          "title": "Secrets",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "vault",
+        "mount",
+        "secrets"
+      ],
+      "title": "EncryptedSource",
+      "type": "object"
+    },
+    "ExportDoc": {
+      "additionalProperties": false,
+      "description": "A secret-engine export with values. Treat it like the secrets themselves.",
+      "properties": {
+        "$schema": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": "https://getlockstep.cloud/schemas/lockstep-export-v1.json",
+          "title": "$Schema"
+        },
+        "format": {
+          "const": "lockstep.secret-export",
+          "default": "lockstep.secret-export",
+          "title": "Format",
+          "type": "string"
+        },
+        "version": {
+          "const": 1,
+          "default": 1,
+          "title": "Version",
+          "type": "integer"
+        },
+        "created_at": {
+          "title": "Created At",
+          "type": "string"
+        },
+        "tool": {
+          "default": "",
+          "title": "Tool",
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/ExportSource"
+        },
+        "rules": {
+          "$ref": "#/$defs/ExportRules"
+        },
+        "secrets": {
+          "items": {
+            "$ref": "#/$defs/ExportSecret"
+          },
+          "title": "Secrets",
+          "type": "array"
+        },
+        "skipped": {
+          "$ref": "#/$defs/ExportSkipped"
+        }
+      },
+      "required": [
+        "created_at",
+        "source",
+        "secrets"
+      ],
+      "title": "Lockstep secret-engine export",
+      "type": "object"
+    },
+    "EncryptedExport": {
+      "additionalProperties": false,
+      "description": "An encrypted export: open it with the one-time key shown when it was made.",
+      "properties": {
+        "$schema": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": "https://getlockstep.cloud/schemas/lockstep-export-v1.json",
+          "title": "$Schema"
+        },
+        "format": {
+          "const": "lockstep.secret-export.encrypted",
+          "default": "lockstep.secret-export.encrypted",
+          "title": "Format",
+          "type": "string"
+        },
+        "version": {
+          "const": 1,
+          "default": 1,
+          "title": "Version",
+          "type": "integer"
+        },
+        "created_at": {
+          "title": "Created At",
+          "type": "string"
+        },
+        "cipher": {
+          "const": "AES-256-GCM",
+          "default": "AES-256-GCM",
+          "title": "Cipher",
+          "type": "string"
+        },
+        "compression": {
+          "const": "zlib",
+          "default": "zlib",
+          "title": "Compression",
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/EncryptedSource"
+        },
+        "nonce": {
+          "description": "base64, 12 bytes",
+          "title": "Nonce",
+          "type": "string"
+        },
+        "ciphertext": {
+          "description": "base64: the zlib-compressed export document, encrypted",
+          "title": "Ciphertext",
+          "type": "string"
+        }
+      },
+      "required": [
+        "created_at",
+        "source",
+        "nonce",
+        "ciphertext"
+      ],
+      "title": "Lockstep secret-engine export (encrypted)",
+      "type": "object"
+    }
+  }
+}

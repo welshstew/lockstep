@@ -3,7 +3,7 @@
 Deploys [Lockstep](../../README.md): compare, inspect and sync KV secrets across HashiCorp Vault clusters.
 
 ```sh
-helm upgrade --install lockstep oci://ghcr.io/welshstew/charts/lockstep --version 0.2.0 \
+helm upgrade --install lockstep oci://ghcr.io/welshstew/charts/lockstep --version 0.3.0 \
   -n lockstep --create-namespace -f my-values.yaml
 helm test lockstep -n lockstep
 ```
@@ -46,6 +46,7 @@ vaults:
 | `allowCustomConnections` | `false` | Let users type any Vault address (the pods will call it) |
 | `customUrlPatterns` | `[]` | Regexes a custom address must fully match |
 | `maxTreeSecrets` | `5000` | Per side, most secrets listed in one comparison |
+| `exportMode` | `any` | Secret-engine exports (they hold values): `any`, `encrypted` (only with a one-time key) or `off` |
 | `vaultTls.verify` | `true` | |
 | `vaultTls.caBundle.configMap` / `.secret` | `""` | A PEM CA bundle for private-CA Vaults (one or the other) |
 | `vaultTls.caBundle.key` | `ca.crt` | Key in that ConfigMap or Secret |

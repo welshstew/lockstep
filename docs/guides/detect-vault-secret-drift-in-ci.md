@@ -21,7 +21,7 @@ A CI job that runs it fails when the environments have drifted. Its summary list
 
 Drift detection only reads. Give the job its own policy with `list` and `read` on the mounts it compares, and nothing else. The [security guide](../security.md#vault-policies) has an example.
 
-How the job gets a token depends on your CI. JWT/OIDC auth is the usual choice, because the pipeline's identity token is exchanged for a short-lived Vault token and no long-lived secret has to be stored. The CLI picks up the token from `VAULT_TOKEN`. For two clusters with separate tokens, use `LOCKSTEP_LEFT_TOKEN` and `LOCKSTEP_RIGHT_TOKEN`.
+The best way to get a token is the pipeline's own identity token. With Vault's JWT auth method, `lockstep compare --left-auth jwt` exchanges it for a short-lived Vault token, so no long-lived secret has to be stored. [Logging in to Vault with JWT from CI](vault-jwt-login-from-ci.md) sets this up for GitHub Actions and GitLab. Otherwise the CLI picks up a token from `VAULT_TOKEN`. For two clusters with separate tokens, use `LOCKSTEP_LEFT_TOKEN` and `LOCKSTEP_RIGHT_TOKEN`.
 
 ## GitHub Actions
 
@@ -37,17 +37,20 @@ jobs:
     permissions: {id-token: write, contents: read}
     steps:
       - name: Install the Lockstep CLI
-        run: pipx install "git+https://github.com/welshstew/lockstep@v0.2.0#subdirectory=backend"
+        run: pipx install "git+https://github.com/welshstew/lockstep@v0.3.0#subdirectory=backend"
 
-      # Log in to each Vault with the job's identity token (JWT auth), for example with
-      # hashicorp/vault-action or `vault write auth/jwt/login`. Export the tokens as
-      # LOCKSTEP_LEFT_TOKEN and LOCKSTEP_RIGHT_TOKEN.
+      - name: Get an ID token for Vault (JWT auth)
+        run: |
+          curl -sSf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=vault" | jq -r .value > "$RUNNER_TEMP/vault.jwt"
 
       - name: Compare production with staging
         run: |
           lockstep compare \
             --left-addr  https://vault-prod.example.com    --left-name prod \
+            --left-auth jwt  --left-jwt-file  "$RUNNER_TEMP/vault.jwt" --left-role  lockstep-ci \
             --right-addr https://vault-staging.example.com --right-name staging \
+            --right-auth jwt --right-jwt-file "$RUNNER_TEMP/vault.jwt" --right-role lockstep-ci \
             --mount app-config --profile .lockstep/prod-vs-staging.json \
             -o drift.yaml
 
@@ -68,7 +71,7 @@ Environments differ on purpose: hostnames, URLs, per-environment credentials. A 
 - **Ignore whole paths:** such as `legacy/**`.
 - **Map paths:** when the layouts differ, for example `services/*/prod/**` ⇄ `services/*/staging/**`.
 
-Build the profile in the web UI's profile editor, export it as JSON and commit it next to the workflow. `--profile` accepts the export directly; use `--profile-name` if the file holds several profiles.
+Build the profile in the web UI, most quickly by pressing **Pick what to ignore…** and clicking *Ignore* on the noise ([guide](build-a-comparison-profile.md)). Then export it as JSON and commit it next to the workflow. `--profile` accepts the export directly; use `--profile-name` if the file holds several profiles.
 
 ## Fixing the drift
 
@@ -83,4 +86,6 @@ To have a second person approve the change, open the same comparison in the web 
 
 - [How to compare secrets between two HashiCorp Vault clusters](compare-hashicorp-vault-clusters.md)
 - [Syncing secrets between Vault environments safely](sync-vault-secrets-between-environments.md)
+- [Logging in to Vault with JWT from CI](vault-jwt-login-from-ci.md)
+- [Building a comparison profile](build-a-comparison-profile.md)
 - [Command-line reference](../cli.md)

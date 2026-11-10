@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api } from "./api";
+import { api, type SideRef } from "./api";
 import { ExpiryView, type ScanTarget } from "./components/ExpiryView";
 import { PlansView } from "./components/PlansView";
 import { Results } from "./components/Results";
@@ -7,10 +7,13 @@ import { type InspectTarget, Inspector, type TrustCandidate } from "./components
 import { ProfileBar } from "./components/ProfileBar";
 import { ProfileEditor } from "./components/ProfileEditor";
 import { ReviewDialog } from "./components/ReviewDialog";
-import { exportProfiles, loadActive, loadPersonal, type ProfileRef, saveActive, savePersonal } from "./profiles";
+import {
+  emptyRules, exportProfiles, loadActive, loadPersonal, mergeRules, type ProfileRef, ruleCount, saveActive, savePersonal,
+} from "./profiles";
 import { type Changeset, changesetSize } from "./staging";
 import { SideCard } from "./components/SideCard";
-import type { AppConfig, CompareResult, Connection, Profile, SideSelection } from "./types";
+import { TransferView } from "./components/TransferView";
+import type { AppConfig, CompareResult, Connection, LoadedFile, Profile, ProfileRules, SideSelection } from "./types";
 
 const EMPTY: SideSelection = { connId: null, mount: null, prefix: "" };
 const STORE_KEY = "lockstep.sides";
@@ -19,12 +22,14 @@ const STORE_KEY = "lockstep.sides";
 function loadSides(): [SideSelection, SideSelection] {
   try {
     const v = JSON.parse(localStorage.getItem(STORE_KEY) ?? "null");
-    if (Array.isArray(v) && v.length === 2) return [{ ...EMPTY, ...v[0] }, { ...EMPTY, ...v[1] }];
+    // Opened export files live in memory only, so a remembered file side starts empty
+    if (Array.isArray(v) && v.length === 2) return [{ ...EMPTY, ...v[0], fileId: null }, { ...EMPTY, ...v[1], fileId: null }];
   } catch { /* storage unavailable */ }
   return [EMPTY, EMPTY];
 }
 function saveSides(s: [SideSelection, SideSelection]) {
-  try { localStorage.setItem(STORE_KEY, JSON.stringify(s)); } catch { /* ignore */ }
+  const plain = s.map(({ fileId: _f, ...rest }) => rest);
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(plain)); } catch { /* ignore */ }
 }
 
 /** Keys in this comparison holding certificates: offered as extra trust anchors in the inspector. */
@@ -57,17 +62,29 @@ export function App() {
   const [changeset, setChangeset] = useState<Changeset>({});
   const [reviewing, setReviewing] = useState(false);
   const [inspecting, setInspecting] = useState<InspectTarget[] | null>(null);
-  const [view, setView] = useState<"compare" | "expiry" | "plans">(() => {
+  const [view, setView] = useState<"compare" | "expiry" | "plans" | "transfer">(() => {
     try {
       const v = localStorage.getItem("lockstep.view");
-      return v === "expiry" || v === "plans" ? v : "compare";
+      return v === "expiry" || v === "plans" || v === "transfer" ? v : "compare";
     } catch { return "compare"; }
   });
+  // Export files opened in this page: in memory only (they hold values), gone on reload
+  const [files, setFiles] = useState<LoadedFile[]>([]);
+  const addFile = (f: LoadedFile) => setFiles((fs) => [...fs, f]);
+  const fileOf = (s: SideSelection) => files.find((f) => f.id === s.fileId) ?? null;
+  const sideRef = (s: SideSelection): SideRef => {
+    const f = fileOf(s);
+    return f ? { export: f.doc, name: f.name, prefix: s.prefix } : { conn_id: s.connId!, mount: s.mount!, prefix: s.prefix };
+  };
   useEffect(() => { try { localStorage.setItem("lockstep.view", view); } catch { /* ignore */ } }, [view]);
   const [sharedProfiles, setSharedProfiles] = useState<Profile[]>([]);
   const [personal, setPersonal] = useState<Profile[]>(loadPersonal);
   const [activeRef, setActiveRef] = useState<ProfileRef | null>(loadActive);
-  const [editing, setEditing] = useState<{ initial: Profile | null } | null>(null);
+  const [editing, setEditing] = useState<{ initial: Profile | null; fromDraft?: boolean } | null>(null);
+  // Ignore mode: rules picked from the results, not saved yet ("draft"), used by Compare again
+  const [ignoreMode, setIgnoreMode] = useState(false);
+  const [draft, setDraft] = useState<ProfileRules>(emptyRules);
+  const draftRules = ruleCount(draft);
   const activeProfile = activeRef
     ? (activeRef.source === "shared" ? sharedProfiles : personal).find((p) => p.name === activeRef.name) ?? null
     : null;
@@ -137,11 +154,13 @@ export function App() {
   };
 
   const label = (s: SideSelection) => {
+    const f = fileOf(s);
+    if (f) return `${f.name}${s.prefix ? `/${s.prefix.replace(/^\/+|\/+$/g, "")}` : ""}`;
     const c = connections.find((x) => x.id === s.connId);
     return c ? `${c.name} · ${s.mount ?? "?"}${s.prefix ? `/${s.prefix.replace(/^\/+|\/+$/g, "")}` : ""}` : "";
   };
 
-  const ready = sides.every((s) => s.connId && s.mount);
+  const ready = sides.every((s) => fileOf(s) || (s.connId && s.mount));
 
   async function runCompare() {
     const [l, r] = sides;
@@ -149,10 +168,8 @@ export function App() {
     setError(null);
     setChangeset({});
     try {
-      setResult(await api.compare(
-        { conn_id: l.connId!, mount: l.mount!, prefix: l.prefix },
-        { conn_id: r.connId!, mount: r.mount!, prefix: r.prefix },
-        activeProfile?.rules ?? null));
+      setResult(await api.compare(sideRef(l), sideRef(r),
+        draftRules ? mergeRules(activeProfile?.rules, draft) : activeProfile?.rules ?? null));
     } catch (e) {
       setError((e as Error).message);
       setResult(null);
@@ -187,22 +204,30 @@ export function App() {
 
       <div className="sides">
         <SideCard side="left" config={config} connections={connections} selection={sides[0]}
-                  onChange={setSide(0)} onConnected={() => refresh()} onDisconnect={disconnect} />
+                  onChange={setSide(0)} onConnected={() => refresh()} onDisconnect={disconnect}
+                  files={files} onFile={addFile} />
         <div className="swap-col">
           <button type="button" className="btn icon" title="Swap left and right" aria-label="Swap sides"
                   onClick={() => { setSides(([a, b]) => [b, a]); setResult(null); setChangeset({}); }}>⇄</button>
         </div>
         <SideCard side="right" config={config} connections={connections} selection={sides[1]}
-                  onChange={setSide(1)} onConnected={() => refresh()} onDisconnect={disconnect} />
+                  onChange={setSide(1)} onConnected={() => refresh()} onDisconnect={disconnect}
+                  files={files} onFile={addFile} />
       </div>
 
       <nav className="tabs" role="tablist" aria-label="View">
         <button type="button" role="tab" aria-selected={view === "compare"} onClick={() => setView("compare")}>Compare</button>
         <button type="button" role="tab" aria-selected={view === "expiry"} onClick={() => setView("expiry")}>Certificate expiry</button>
         <button type="button" role="tab" aria-selected={view === "plans"} onClick={() => setView("plans")}>Sync plans</button>
+        <button type="button" role="tab" aria-selected={view === "transfer"} onClick={() => setView("transfer")}>Export &amp; import</button>
       </nav>
 
-      {view === "plans" ? (
+      {view === "transfer" ? (
+        <TransferView config={config} reveal={reveal} files={files} onFile={addFile}
+                      sides={sides.map((s, i) => ({ side: i === 0 ? "left" as const : "right" as const, label: label(s),
+                        ref: s.connId && s.mount && !s.fileId ? { conn_id: s.connId, mount: s.mount, prefix: s.prefix } : null }))}
+                      profiles={[...sharedProfiles, ...personal]} />
+      ) : view === "plans" ? (
         <PlansView connections={connections} leftConnId={sides[0].connId} rightConnId={sides[1].connId} />
       ) : view === "expiry" ? (
         <ExpiryView
@@ -245,6 +270,7 @@ export function App() {
             const next = replacing ? personal.map((x) => (x.name === editing.initial!.name ? p : x)) : [...personal, p];
             updatePersonal(next);
             selectProfile({ source: "personal", name: p.name }, next);
+            if (editing.fromDraft) { setDraft(emptyRules()); setIgnoreMode(false); }
           }}
         />
       )}
@@ -253,18 +279,56 @@ export function App() {
         <button type="button" className="btn primary big" disabled={!ready || comparing} onClick={runCompare}>
           {comparing && <span className="spinner" />} {result ? "Compare again" : "Compare"}
         </button>
+        {result && (
+          <button type="button" className="btn big" aria-pressed={ignoreMode} onClick={() => setIgnoreMode(!ignoreMode)}
+                  title="Pick secrets and keys to ignore, and save them as a comparison profile">
+            {ignoreMode ? "Done picking" : "Pick what to ignore…"}
+          </button>
+        )}
       </div>
 
+      {result && (ignoreMode || draftRules > 0) && (
+        <section className="draft-bar card" aria-label="Profile draft">
+          <div>
+            <strong>{ignoreMode ? "Ignore mode" : "Unsaved ignore rules"}</strong>{" "}
+            <span className="subtle">
+              {ignoreMode && "Use Ignore on secrets, folders and keys below. "}
+              {draftRules === 0 ? "Nothing picked yet."
+                : `${draft.ignore_paths.length} secret/folder rule${draft.ignore_paths.length === 1 ? "" : "s"}, ${draft.ignore_keys.length} key rule${draft.ignore_keys.length === 1 ? "" : "s"}${activeProfile ? `, on top of “${activeProfile.name}”` : ""}.`}
+            </span>
+          </div>
+          {draftRules > 0 && (
+            <ul className="draft-rules">
+              {draft.ignore_paths.map((p) => <li key={`p${p}`}><span className="mono">{p}</span> <span className="subtle">left out</span></li>)}
+              {draft.ignore_keys.map((k) => <li key={`k${k.key}|${k.path}`}><span className="mono">{k.key}</span> <span className="subtle">ignored {k.path === "**" ? "everywhere" : <>in <span className="mono">{k.path}</span></>}</span></li>)}
+            </ul>
+          )}
+          <div className="draft-actions">
+            <button type="button" className="btn small" disabled={!draftRules || comparing} onClick={runCompare}>Compare with these rules</button>
+            <button type="button" className="btn primary small" disabled={!draftRules} onClick={() => {
+              const rules = mergeRules(activeProfile?.rules, draft);
+              const base: Profile = activeProfile && activeRef?.source === "personal" ? activeProfile
+                : activeProfile ? { ...activeProfile, name: `${activeProfile.name} (copy)` }
+                  : { name: "", description: "", rules };
+              setEditing({ initial: { ...base, rules }, fromDraft: true });
+            }}>{activeProfile && activeRef?.source === "personal" ? `Add to “${activeProfile.name}”…` : "Save as profile…"}</button>
+            <button type="button" className="btn ghost small" disabled={!draftRules} onClick={() => setDraft(emptyRules())}>Discard</button>
+          </div>
+        </section>
+      )}
+
       {error && <div className="notice error" role="alert">{error}</div>}
-      {result && activeProfile && (
+      {result && (activeProfile || draftRules > 0) && (
         <div className="notice info profile-effect">
-          Profile <strong>{activeProfile.name}</strong>: {result.summary.mapped ?? 0} pair{result.summary.mapped === 1 ? "" : "s"} matched by a mapping
+          {activeProfile ? <>Profile <strong>{activeProfile.name}</strong>{draftRules > 0 && " plus unsaved rules"}</> : "Unsaved rules"}: {result.summary.mapped ?? 0} pair{result.summary.mapped === 1 ? "" : "s"} matched by a mapping
           · {result.summary.ignored_keys ?? 0} key difference{result.summary.ignored_keys === 1 ? "" : "s"} ignored
           · {result.summary.ignored_paths ?? 0} path{result.summary.ignored_paths === 1 ? "" : "s"} left out
         </div>
       )}
       {result && <Results result={result} reveal={reveal} leftLabel={label(sides[0])} rightLabel={label(sides[1])}
-                          changeset={changeset} onChangeset={setChangeset} onInspect={setInspecting} />}
+                          fileDocs={{ left: fileOf(sides[0])?.doc, right: fileOf(sides[1])?.doc }}
+                          changeset={changeset} onChangeset={setChangeset} onInspect={setInspecting}
+                          ignoreMode={ignoreMode} draft={draft} onDraft={setDraft} />}
 
 
       {result && Object.keys(changeset).length > 0 && (() => {
@@ -281,6 +345,7 @@ export function App() {
 
       {reviewing && result && hasStaged && (
         <ReviewDialog result={result} changeset={changeset} reveal={reveal} profile={activeProfile?.name ?? null}
+                      sides={{ left: sideRef(sides[0]), right: sideRef(sides[1]) }}
                       onClose={(applied) => {
                         setReviewing(false);
                         if (applied) { setChangeset({}); runCompare(); }

@@ -9,6 +9,7 @@ export interface AppConfig {
   presets: Preset[];
   allow_custom_connections: boolean;
   demo_banner?: string;
+  export_mode?: "any" | "encrypted" | "off";
   k8s_auth: {
     available: boolean;
     mount: string;
@@ -82,6 +83,7 @@ export interface SecretDiff {
 }
 
 export interface SideSummary {
+  kind?: "vault" | "file";
   conn_id: string;
   mount: string;
   prefix: string;
@@ -110,6 +112,7 @@ export interface SideSelection {
   connId: string | null;
   mount: string | null;
   prefix: string;
+  fileId?: string | null; // an opened export file instead of a Vault connection
 }
 
 export type SyncDirection = "left_to_right" | "right_to_left";
@@ -119,6 +122,7 @@ export interface ApiChange {
   right_path: string;
   direction: SyncDirection;
   keys: string[] | null;
+  set?: Record<string, unknown>;
   expected_target_version: number | null;
   expected_source_version: number | null;
 }
@@ -136,6 +140,7 @@ export interface KeyPlan {
   key: string;
   action: "add" | "update" | "unchanged";
   type_change: boolean;
+  override: boolean;
   source_value: unknown;
   target_value: unknown;
 }
@@ -161,6 +166,7 @@ export interface ChangeResult {
   direction: SyncDirection;
   target: string;
   status: ResultStatus;
+  overridden: string[];
   old_version: number | null;
   new_version: number | null;
   keys: string[];
@@ -259,12 +265,36 @@ export interface Locator {
   key: string;
 }
 
+export interface PasswordRef {
+  path: string;
+  key: string;
+}
+
 export interface AnalyzeOptions {
   password?: string | null;
   password_key?: string | null;
+  password_ref?: PasswordRef | null;
   trust?: Locator[];
   trust_sha256?: string[];
   system_roots?: boolean;
+}
+
+export interface PasswordCandidate {
+  path: string;
+  key: string;
+  opens: boolean;
+  reasons: string[];
+}
+
+export interface PasswordSearch {
+  needs_password: boolean;
+  candidates: PasswordCandidate[];
+  default: string | null;
+  default_label: string | null;
+  searched: string;
+  secrets: number;
+  truncated: boolean;
+  denied: string[];
 }
 
 export interface AnalyzeResult {
@@ -366,4 +396,78 @@ export interface PlanCheck {
 
 export interface PlanApplyResult extends ApplyResult {
   plan_id: string;
+}
+
+// ---- Secret-engine exports (files with values) and imports
+
+export interface ExportSecret {
+  path: string;
+  version: number | null;
+  updated: string | null;
+  data: Record<string, unknown>;
+}
+
+export interface ExportSkipped {
+  ignored_paths: number;
+  ignored_keys: number;
+  unreadable: string[];
+  deleted: string[];
+  denied_folders: string[];
+  truncated: boolean;
+}
+
+export interface ExportDoc {
+  $schema?: string | null;
+  format: "lockstep.secret-export";
+  version: 1;
+  created_at: string;
+  tool: string;
+  source: { vault: string; url: string | null; namespace: string | null; mount: string; prefix: string; identity: string };
+  rules: { ignore_paths: string[]; ignore_keys: { key: string; path: string }[] };
+  secrets: ExportSecret[];
+  skipped: ExportSkipped;
+}
+
+/** An export opened in this page (memory only, never stored). */
+export interface LoadedFile {
+  id: string;
+  name: string;
+  encrypted: boolean;
+  doc: ExportDoc;
+}
+
+export interface ExportResult {
+  filename: string;
+  file: Record<string, unknown>;
+  key: string | null;
+  secrets: number;
+  keys: number;
+  skipped: ExportSkipped;
+}
+
+export type TransformOp = "replace" | "prefix" | "suffix" | "upper" | "lower";
+
+export interface Transform {
+  op: TransformOp;
+  target: "values" | "keys" | "paths";
+  find: string;
+  with: string;
+  path: string;
+  key: string;
+}
+
+export interface ImportRules {
+  $schema?: string;
+  ignore_paths: string[];
+  ignore_keys: { key: string; path: string }[];
+  transforms: Transform[];
+}
+
+export interface ImportPreview {
+  prepared: {
+    secrets: number; ignored_paths: number; ignored_keys: number;
+    paths_changed: number; keys_changed: number; values_changed: number;
+    problems: { path: string; message: string }[];
+  };
+  plans: ChangePlan[];
 }

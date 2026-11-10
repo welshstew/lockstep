@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
-import type { AnalysisNode, AnalyzeOptions, AnalyzeResult, CertInfo, Locator } from "../types";
+import type {
+  AnalysisNode, AnalyzeOptions, AnalyzeResult, CertInfo, Locator, PasswordCandidate, PasswordRef, PasswordSearch,
+} from "../types";
 import { CertCard, CertDiff } from "./CertCard";
 
 export interface InspectTarget {
@@ -123,11 +125,15 @@ function InspectColumn({ target, shared, reveal, onCert, onTrustRoot }: {
 }) {
   const [password, setPassword] = useState("");
   const [passwordKey, setPasswordKey] = useState<string | null>(null);
-  const [applied, setApplied] = useState<{ password: string | null; password_key: string | null }>({ password: null, password_key: null });
+  type Applied = { password: string | null; password_key: string | null; password_ref: PasswordRef | null; from: string | null };
+  const NONE: Applied = { password: null, password_key: null, password_ref: null, from: null };
+  const [applied, setApplied] = useState<Applied>(NONE);
+  const [search, setSearch] = useState<PasswordSearch | "searching" | { error: string } | null>(null);
   const [out, setOut] = useState<AnalyzeResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const opts: AnalyzeOptions = { ...shared, ...applied };
+  const opts: AnalyzeOptions = { ...shared, password: applied.password, password_key: applied.password_key,
+                                 password_ref: applied.password_ref };
   const optsKey = JSON.stringify(opts);
 
   useEffect(() => {
@@ -142,13 +148,23 @@ function InspectColumn({ target, shared, reveal, onCert, onTrustRoot }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [optsKey, target.loc]);
 
-  const showPassword = out && (anyNeedsPassword(out.root) || out.password_suggestions.length > 0 || applied.password || applied.password_key);
+  const showPassword = out && (anyNeedsPassword(out.root) || out.password_suggestions.length > 0 || applied.password
+    || applied.password_key || applied.password_ref);
+  const locked = !!out && anyNeedsPassword(out.root);
+
+  // A locked keystore: look for its password in nearby secrets straight away (read-only; the
+  // server tries each candidate and returns where they are, never their values).
+  useEffect(() => {
+    if (!locked || search !== null || applied.password_ref || applied.password_key || applied.password) return;
+    setSearch("searching");
+    api.findPasswords(target.loc).then(setSearch).catch((e) => setSearch({ error: e.message }));
+  }, [locked, search, applied, target.loc]);
 
   return (
     <section className={`inspect-col ${target.side}`}>
       <h3 className={`side-title`}>{target.side === "left" ? "◧ " : ""}{target.title}{target.side === "right" ? " ◨" : ""}</h3>
       {showPassword && (
-        <form className="pw-row" onSubmit={(e) => { e.preventDefault(); setApplied({ password: passwordKey ? null : password, password_key: passwordKey }); }}>
+        <form className="pw-row" onSubmit={(e) => { e.preventDefault(); setApplied({ ...NONE, password: passwordKey ? null : password, password_key: passwordKey, from: passwordKey }); }}>
           <span className="muted">Keystore password:</span>
           {out!.password_suggestions.length > 0 && (
             <select value={passwordKey ?? ""} onChange={(e) => setPasswordKey(e.target.value || null)} aria-label="Password source">
@@ -161,8 +177,13 @@ function InspectColumn({ target, shared, reveal, onCert, onTrustRoot }: {
                    autoComplete="off" placeholder="password" aria-label="Keystore password" />
           )}
           <button type="submit" className="btn small">Open</button>
-          {out!.password_used && <span className="check ok">✓ password accepted</span>}
+          {out!.password_used && <span className="check ok">✓ password accepted{applied.from ? ` (from ${applied.from})` : ""}</span>}
         </form>
+      )}
+      {showPassword && search && (
+        <PasswordFinder search={search} usedRef={applied.password_ref}
+                        onUse={(ref, label) => setApplied({ ...NONE, password_ref: ref, from: label })}
+                        onUseDefault={(pw, label) => setApplied({ ...NONE, password: pw, from: label })} />
       )}
       {error && <div className="notice error">{error}</div>}
       {loading && !out && <div className="empty"><span className="spinner" /> Analysing…</div>}
@@ -175,6 +196,55 @@ function InspectColumn({ target, shared, reveal, onCert, onTrustRoot }: {
         </div>
       )}
     </section>
+  );
+}
+
+function PasswordFinder({ search, usedRef, onUse, onUseDefault }: {
+  search: PasswordSearch | "searching" | { error: string };
+  usedRef: PasswordRef | null;
+  onUse: (ref: PasswordRef, label: string) => void;
+  onUseDefault: (password: string, label: string) => void;
+}) {
+  if (search === "searching") return <div className="subtle pw-finder"><span className="spinner" /> Looking for the password in nearby secrets…</div>;
+  if ("error" in search) return <div className="notice error">Couldn’t search for the password: {search.error}</div>;
+  if (!search.needs_password) return null;
+  const where = search.searched ? `${search.searched}` : "the whole mount";
+  const openers = search.candidates.filter((c) => c.opens);
+  const others = search.candidates.filter((c) => !c.opens);
+  const label = (c: PasswordCandidate) => `${c.path} · ${c.key}`;
+  const isUsed = (c: PasswordCandidate) => usedRef?.path === c.path && usedRef?.key === c.key;
+  return (
+    <div className="pw-finder" role="region" aria-label="Password finder">
+      {openers.map((c) => (
+        <div key={label(c)} className="pw-candidate opens">
+          <span className="check ok">✓ opens it</span>
+          <span className="mono">{label(c)}</span>
+          <span className="subtle">{c.reasons.join(" · ")}</span>
+          <button type="button" className="btn small" disabled={isUsed(c)} onClick={() => onUse({ path: c.path, key: c.key }, label(c))}>
+            {isUsed(c) ? "In use" : "Use"}
+          </button>
+        </div>
+      ))}
+      {search.default && (
+        <div className="pw-candidate opens">
+          <span className="check ok">✓ opens it</span>
+          <span>{search.default_label}</span>
+          <button type="button" className="btn small" onClick={() => onUseDefault(search.default!, search.default_label ?? "a default password")}>Use</button>
+        </div>
+      )}
+      {!openers.length && !search.default && (
+        <div className="subtle">
+          No password found: {search.candidates.length ? `none of the ${search.candidates.length} likely keys` : "no password-like keys"} in
+          <span className="mono"> {where}</span> ({search.secrets} secret{search.secrets === 1 ? "" : "s"} searched{search.truncated ? ", search cut short" : ""}) opened it.
+        </div>
+      )}
+      {others.length > 0 && (
+        <details className="pw-others">
+          <summary className="subtle">{others.length} other candidate{others.length === 1 ? "" : "s"} tried in <span className="mono">{where}</span></summary>
+          <ul>{others.map((c) => <li key={label(c)}><span className="mono">{label(c)}</span> <span className="subtle">{c.reasons.join(" · ")}</span></li>)}</ul>
+        </details>
+      )}
+    </div>
   );
 }
 

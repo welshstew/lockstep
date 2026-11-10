@@ -1,0 +1,134 @@
+{
+  "$defs": {
+    "IgnoreKey": {
+      "properties": {
+        "key": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Key",
+          "type": "string"
+        },
+        "path": {
+          "default": "**",
+          "maxLength": 512,
+          "title": "Path",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key"
+      ],
+      "title": "IgnoreKey",
+      "type": "object"
+    },
+    "Transform": {
+      "additionalProperties": false,
+      "description": "One change applied to an export before it's compared or imported.",
+      "properties": {
+        "op": {
+          "description": "replace: every occurrence of `find` with `with`; prefix/suffix: add `with` before/after; upper/lower: change case",
+          "enum": [
+            "replace",
+            "prefix",
+            "suffix",
+            "upper",
+            "lower"
+          ],
+          "title": "Op",
+          "type": "string"
+        },
+        "target": {
+          "default": "values",
+          "description": "What to change: string values, key names, or secret paths",
+          "enum": [
+            "values",
+            "keys",
+            "paths"
+          ],
+          "title": "Target",
+          "type": "string"
+        },
+        "find": {
+          "default": "",
+          "description": "replace: the text to find (case-sensitive)",
+          "maxLength": 1000,
+          "title": "Find",
+          "type": "string"
+        },
+        "with": {
+          "default": "",
+          "description": "replace/prefix/suffix: the new text",
+          "maxLength": 1000,
+          "title": "With",
+          "type": "string"
+        },
+        "path": {
+          "default": "**",
+          "description": "Only secrets whose path matches this glob",
+          "maxLength": 512,
+          "title": "Path",
+          "type": "string"
+        },
+        "key": {
+          "default": "*",
+          "description": "Only keys matching this pattern (values and keys)",
+          "maxLength": 256,
+          "title": "Key",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op"
+      ],
+      "title": "Transform",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Rules applied to an export before importing: what to leave out, then what to change.",
+  "properties": {
+    "$schema": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "$Schema"
+    },
+    "ignore_paths": {
+      "description": "Secrets to leave out (globs over the exported paths)",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 200,
+      "title": "Ignore Paths",
+      "type": "array"
+    },
+    "ignore_keys": {
+      "description": "Keys to leave out (key pattern, under a path glob)",
+      "items": {
+        "$ref": "#/$defs/IgnoreKey"
+      },
+      "maxItems": 200,
+      "title": "Ignore Keys",
+      "type": "array"
+    },
+    "transforms": {
+      "description": "Applied in order, after the ignores",
+      "items": {
+        "$ref": "#/$defs/Transform"
+      },
+      "maxItems": 50,
+      "title": "Transforms",
+      "type": "array"
+    }
+  },
+  "title": "Lockstep import rules",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://getlockstep.cloud/schemas/lockstep-import-rules-v1.json"
+}

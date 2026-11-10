@@ -22,7 +22,7 @@ Lockstep applies the same rules to every copy, from the web UI or the command li
 1. **Review first.** You stage copies key by key or secret by secret, in either direction. A review shows exactly what each target gets: which keys are added or updated, the version change, and whether you're allowed to write there.
 2. **Check-and-set on every write.** Each write tells Vault which version it expects to replace (KV v2 `cas`). If the target changed since you compared, Vault rejects the write and Lockstep reports a conflict instead of overwriting.
 3. **Merge, never delete.** Copied keys are merged into the target's current data. Keys that exist only on the target stay, and Lockstep never deletes a secret.
-4. **Values read fresh from the source.** When you apply, Lockstep reads the source again and writes what's there. Values never pass through the browser or through a file.
+4. **Values read fresh from the source.** When you apply, Lockstep reads the source again and writes what's there. Copied values never pass through the browser or through a file. (To set a value yourself, such as a rotated password, use an **override**: it goes through the same review and check-and-set write.)
 5. **Audit log without values.** Every write is logged with who made it, from where to where, the versions and the outcome, but never the values.
 6. **"No access" is not "missing".** A secret you can't read on either side can't be copied.
 

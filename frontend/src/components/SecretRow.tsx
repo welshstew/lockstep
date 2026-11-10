@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import {
-  canCopyKey, canCopySecret, type Changeset, type Direction, isKeyStaged, isSecretStaged,
-  stagedKeyCount, toggleKey, toggleSecret,
+  canCopyKey, canCopySecret, canOverride, type Changeset, type Direction, isKeyOverridden, isKeyStaged,
+  isSecretStaged, overridesFor, setOverride, type Side, stagedKeyCount, toggleKey, toggleSecret,
 } from "../staging";
+import { keyIgnored, literalSafe, pathIgnored, toggleIgnoreKey, toggleIgnorePath } from "../profiles";
 import { absoluteTime, relativeTime } from "../time";
-import type { Badge, KeyChange, KeyDiff, KeyHistory, KeyStatus, SecretDiff, SideInfo, SideSummary } from "../types";
+import type { Badge, ExportDoc, KeyChange, KeyDiff, KeyHistory, KeyStatus, ProfileRules, SecretDiff, SideInfo, SideSummary } from "../types";
 import type { InspectTarget } from "./Inspector";
+import { OverrideEditor } from "./OverrideEditor";
 import { typeName, ValueCell } from "./ValueCell";
 
 export const STATUS_LABEL: Record<string, string> = {
@@ -28,6 +30,11 @@ interface Props {
   onChangeset: (cs: Changeset) => void;
   onInspect: (targets: InspectTarget[]) => void;
   sideNames: { left: string; right: string };
+  /** Ignore mode: pick secrets and keys to leave out, building profile rules. */
+  ignoreMode?: boolean;
+  draft?: ProfileRules;
+  onDraft?: (r: ProfileRules) => void;
+  fileDocs?: { left?: ExportDoc; right?: ExportDoc };
 }
 
 type Values = Record<string, unknown> | null;
@@ -98,17 +105,25 @@ function Arrow({ dir, pressed, onClick, label }: { dir: Direction; pressed: bool
   );
 }
 
-export function SecretRow({ secret, left, right, reveal, changeset, onChangeset, onInspect, sideNames }: Props) {
+export function SecretRow({ secret, left, right, reveal, changeset, onChangeset, onInspect, sideNames, ignoreMode, draft, onDraft, fileDocs }: Props) {
+  // An export file side is read-only and has no history; its values are in the opened file.
+  const isFile = { left: left.kind === "file", right: right.kind === "file" };
+  const fileData = (s: SideSummary, path: string) => {
+    const d = fileDocs?.[s === left ? "left" : "right"];
+    return d?.secrets.find((x) => x.path === path)?.data ?? null;
+  };
+  const copyable = (d: Direction) => !isFile[d === "left_to_right" ? "right" : "left"];
   const [open, setOpen] = useState(false);
   const [values, setValues] = useState<{ left: Values; right: Values } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<{ left: KeyHistory | null; right: KeyHistory | null } | null>(null);
+  const [overriding, setOverriding] = useState<Side[] | null>(null);
 
   // When each key last changed: version numbers and times only, so no Reveal needed.
   useEffect(() => {
     if (!open || history) return;
     let live = true;
-    const load = (s: SideSummary, info: SideInfo) => info.state === "present"
+    const load = (s: SideSummary, info: SideInfo) => info.state === "present" && s.kind !== "file"
       ? api.history(s.conn_id, s.mount, fullPath(s, sidePath(secret, s === left ? "left" : "right"))).catch(() => null)
       : Promise.resolve(null);
     Promise.all([load(left, secret.left), load(right, secret.right)])
@@ -121,9 +136,12 @@ export function SecretRow({ secret, left, right, reveal, changeset, onChangeset,
     if (!reveal) { setValues(null); return; }
     if (!open || values) return;
     let live = true;
-    const read = (s: SideSummary, info: SideInfo) => info.state === "present"
-      ? api.secret(s.conn_id, s.mount, fullPath(s, sidePath(secret, s === left ? "left" : "right"))).then((r) => r.data)
-      : Promise.resolve(null);
+    const read = (s: SideSummary, info: SideInfo) => {
+      if (info.state !== "present") return Promise.resolve(null);
+      const path = fullPath(s, sidePath(secret, s === left ? "left" : "right"));
+      if (s.kind === "file") return Promise.resolve(fileData(s, path));
+      return api.secret(s.conn_id, s.mount, path).then((r) => r.data);
+    };
     Promise.all([read(left, secret.left), read(right, secret.right)])
       .then(([l, r]) => { if (live) setValues({ left: l, right: r }); })
       .catch((e) => { if (live) setError(e.message); });
@@ -136,17 +154,28 @@ export function SecretRow({ secret, left, right, reveal, changeset, onChangeset,
   const loading = reveal && open && !values && !error;
   const staged = stagedKeyCount(changeset, secret);
   const inspectTargets = (k: KeyDiff): InspectTarget[] => (["left", "right"] as const)
-    .filter((side) => onSide(k, side, secret[side]) && secret[side].state === "present")
+    .filter((side) => onSide(k, side, secret[side]) && secret[side].state === "present" && !isFile[side])
     .map((side) => {
       const s = side === "left" ? left : right;
       return { side, title: `${sideNames[side]} · ${k.key}`,
                loc: { conn_id: s.conn_id, mount: s.mount, path: fullPath(s, sidePath(secret, side)), key: k.key } };
     });
   const incoming = (k: KeyDiff, side: "left" | "right") =>
-    isKeyStaged(changeset, secret.path, k.key, side === "right" ? "left_to_right" : "right_to_left");
+    isKeyStaged(changeset, secret.path, k.key, side === "right" ? "left_to_right" : "right_to_left")
+    || isKeyOverridden(changeset, secret.path, k.key, side);
+  const overrideSides = (["left", "right"] as Side[]).filter((x) => canOverride(secret, x) && !isFile[x]);
+  const copySecret = (d: Direction) => copyable(d) && canCopySecret(secret, d);
+  const overridden = { left: overridesFor(changeset, secret.path, "left"), right: overridesFor(changeset, secret.path, "right") };
+  const addedKeys = (side: Side) => Object.keys(overridden[side] ?? {}).filter((k) => !secret.keys.some((x) => x.key === k));
+  const sameTargets = (a: Side[] | null, b: Side[]) => !!a && a.join() === b.join();
+  const lp = secret.left_path || secret.path, rp = secret.right_path || secret.path;
+  const folder = dir ? `${dir}**` : null;
+  const draftOut = !!draft && pathIgnored(draft, lp, rp);
+  const pick = !!(ignoreMode && draft && onDraft);
 
   return (
-    <div className="secret" data-open={open}>
+    <div className={`secret${draftOut ? " draft-ignored" : ""}`} data-open={open}>
+      <div className="secret-head-row">
       <button type="button" className="secret-head" aria-expanded={open} onClick={() => setOpen(!open)}>
         <span className="caret">▸</span>
         <span className="secret-path">
@@ -166,6 +195,20 @@ export function SecretRow({ secret, left, right, reveal, changeset, onChangeset,
           <span className={`badge ${secret.status}`}>{STATUS_LABEL[secret.status]}</span>
         </span>
       </button>
+      {pick && (
+        <span className="ignore-tools" role="group" aria-label={`Ignore ${secret.path}`}>
+          {draftOut && <span className="subtle">left out</span>}
+          <button type="button" className="btn ghost small" aria-pressed={draft!.ignore_paths.includes(secret.path)}
+                  disabled={!literalSafe(secret.path)} title="Leave this secret out of the comparison"
+                  onClick={() => onDraft!(toggleIgnorePath(draft!, secret.path))}>Ignore secret</button>
+          {folder && (
+            <button type="button" className="btn ghost small" aria-pressed={draft!.ignore_paths.includes(folder)}
+                    disabled={!literalSafe(folder.slice(0, -2))} title={`Leave out everything under ${dir}`}
+                    onClick={() => onDraft!(toggleIgnorePath(draft!, folder))}>Ignore {folder}</button>
+          )}
+        </span>
+      )}
+      </div>
 
       {open && (
         <div className="keys">
@@ -179,31 +222,77 @@ export function SecretRow({ secret, left, right, reveal, changeset, onChangeset,
             <div className="notice error">{secret.left.error || secret.right.error}</div>
           )}
           {error && <div className="notice error">Couldn’t read values: {error}</div>}
-          {(canCopySecret(secret, "left_to_right") || canCopySecret(secret, "right_to_left")) && (
+          {(copySecret("left_to_right") || copySecret("right_to_left") || overrideSides.length > 0) && (
             <div className="secret-actions">
-              <span className="subtle">Copy whole secret:</span>
-              {canCopySecret(secret, "right_to_left") && (
+              {(copySecret("left_to_right") || copySecret("right_to_left")) && <span className="subtle">Copy whole secret:</span>}
+              {copySecret("right_to_left") && (
                 <button type="button" className="btn small to-left-btn" aria-pressed={isSecretStaged(changeset, secret.path, "right_to_left")}
                         onClick={() => onChangeset(toggleSecret(changeset, secret, "right_to_left"))}>
                   ← all keys to left
                 </button>
               )}
-              {canCopySecret(secret, "left_to_right") && (
+              {copySecret("left_to_right") && (
                 <button type="button" className="btn small to-right-btn" aria-pressed={isSecretStaged(changeset, secret.path, "left_to_right")}
                         onClick={() => onChangeset(toggleSecret(changeset, secret, "left_to_right"))}>
                   all keys to right →
                 </button>
               )}
-              <span className="subtle">Keys only on the target are kept.</span>
+              {(copySecret("left_to_right") || copySecret("right_to_left")) && (
+                <span className="subtle">Keys only on the target are kept.</span>
+              )}
+              {overrideSides.length > 0 && (
+                <span className="override-actions">
+                  <span className="subtle">Set values:</span>
+                  {overrideSides.map((x) => (
+                    <button key={x} type="button" className={`btn small override-${x}`}
+                            aria-pressed={!!overridden[x]} aria-expanded={sameTargets(overriding, [x])}
+                            onClick={() => setOverriding(sameTargets(overriding, [x]) ? null : [x])}>
+                      Override {x}{overridden[x] ? ` (${Object.keys(overridden[x]!).length})` : ""}
+                    </button>
+                  ))}
+                  {overrideSides.length === 2 && (
+                    <button type="button" className="btn small" aria-expanded={sameTargets(overriding, ["left", "right"])}
+                            onClick={() => setOverriding(sameTargets(overriding, ["left", "right"]) ? null : ["left", "right"])}>
+                      Override both
+                    </button>
+                  )}
+                </span>
+              )}
             </div>
           )}
+          {overriding && (
+            <OverrideEditor
+              key={overriding.join()}
+              targets={overriding} sideNames={sideNames} reveal={reveal}
+              keys={secret.keys.map((k) => k.key)}
+              initial={overridden[overriding[0]] ?? {}}
+              current={reveal && values ? values[overriding[0]] : null}
+              onCancel={() => setOverriding(null)}
+              onSave={(v) => {
+                onChangeset(overriding.reduce((cs, x) => setOverride(cs, secret, x, v), changeset));
+                setOverriding(null);
+              }} />
+          )}
+          {(["left", "right"] as Side[]).filter((x) => addedKeys(x).length > 0).map((x) => (
+            <div key={x} className="subtle override-new">New keys to set on {sideNames[x]}: <span className="mono">{addedKeys(x).join(", ")}</span></div>
+          ))}
           {secret.keys.length === 0 && <div className="subtle">No keys.</div>}
           {secret.keys.map((k) => (
-            <div className={`key-row${k.ignored ? " ignored" : ""}`} key={k.key}
+            <div className={`key-row${k.ignored ? " ignored" : ""}${draft && !k.ignored && keyIgnored(draft, k.key, lp, rp) ? " draft-ignored" : ""}`} key={k.key}
                  data-incoming={incoming(k, "right") ? "right" : incoming(k, "left") ? "left" : undefined}>
               <div className="key-name">
-                {k.key}
+                <span className="key-label">{k.key}</span>
                 {k.ignored && <span className="badge ignored" title="The profile ignores differences in this key">ignored</span>}
+                {pick && k.status !== "equal" && (
+                  <span className="ignore-tools key" role="group" aria-label={`Ignore key ${k.key}`}>
+                    <button type="button" className="btn ghost small" aria-pressed={draft!.ignore_keys.some((x) => x.key === k.key && x.path === secret.path)}
+                            disabled={!literalSafe(k.key) || !literalSafe(secret.path)} title="Ignore differences in this key, in this secret"
+                            onClick={() => onDraft!(toggleIgnoreKey(draft!, k.key, secret.path))}>Ignore here</button>
+                    <button type="button" className="btn ghost small" aria-pressed={draft!.ignore_keys.some((x) => x.key === k.key && x.path === "**")}
+                            disabled={!literalSafe(k.key)} title="Ignore differences in this key in every secret"
+                            onClick={() => onDraft!(toggleIgnoreKey(draft!, k.key, "**"))}>Ignore everywhere</button>
+                  </span>
+                )}
                 {k.type_differs && (
                   <span className="subtle" title="The values look alike but are stored as different JSON types">
                     type differs{values ? `: ${typeName(values.left?.[k.key])} vs ${typeName(values.right?.[k.key])}` : ""}
@@ -215,13 +304,18 @@ export function SecretRow({ secret, left, right, reveal, changeset, onChangeset,
                          meta={<><BadgeChip b={secret.badges?.[k.key]?.left} /><Changed c={history?.left?.keys[k.key]} /></>} />
               <div className="key-mid">
                 <span className={`badge ${k.status}`}>{STATUS_LABEL[k.status]}</span>
+                {(["left", "right"] as Side[]).filter((x) => isKeyOverridden(changeset, secret.path, k.key, x)).map((x) => (
+                  <span key={x} className={`badge override-tag ${x}`} title={`A typed value will be written to ${sideNames[x]}`}>
+                    {x === "left" ? "← set" : "set →"}
+                  </span>
+                ))}
                 <div className="arrows">
-                  {canCopyKey(secret, k, "right_to_left") && (
+                  {copyable("right_to_left") && canCopyKey(secret, k, "right_to_left") && (
                     <Arrow dir="right_to_left" pressed={isKeyStaged(changeset, secret.path, k.key, "right_to_left")}
                            label={`Copy ${k.key} from right to left`}
                            onClick={() => onChangeset(toggleKey(changeset, secret, k.key, "right_to_left"))} />
                   )}
-                  {canCopyKey(secret, k, "left_to_right") && (
+                  {copyable("left_to_right") && canCopyKey(secret, k, "left_to_right") && (
                     <Arrow dir="left_to_right" pressed={isKeyStaged(changeset, secret.path, k.key, "left_to_right")}
                            label={`Copy ${k.key} from left to right`}
                            onClick={() => onChangeset(toggleKey(changeset, secret, k.key, "left_to_right"))} />

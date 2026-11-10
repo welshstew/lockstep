@@ -48,7 +48,7 @@ export function ProfileEditor({ initial, takenNames, current, onSave, onClose }:
     <dialog ref={ref} className="review profile-editor" onClose={onClose}>
       <form onSubmit={save}>
         <header className="review-head">
-          <h2>{initial ? "Edit profile" : "New comparison profile"}</h2>
+          <h2>{initial?.name ? "Edit profile" : "New comparison profile"}</h2>
           <button type="button" className="btn ghost icon small" aria-label="Close" onClick={() => ref.current?.close()}>✕</button>
         </header>
         <div className="review-body">

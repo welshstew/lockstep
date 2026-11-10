@@ -28,7 +28,7 @@ With [pipx](https://pipx.pypa.io/), which installs the CLI into its own virtual 
 
 ```sh
 # a release (recommended); the CLI is in v0.2.0 and later
-pipx install "git+https://github.com/welshstew/lockstep@v0.2.0#subdirectory=backend"
+pipx install "git+https://github.com/welshstew/lockstep@v0.3.0#subdirectory=backend"
 
 # or the latest code on main
 pipx install "git+https://github.com/welshstew/lockstep#subdirectory=backend"
@@ -39,7 +39,7 @@ lockstep --version
 [uv](https://docs.astral.sh/uv/) works the same way:
 
 ```sh
-uv tool install "git+https://github.com/welshstew/lockstep@v0.2.0#subdirectory=backend"
+uv tool install "git+https://github.com/welshstew/lockstep@v0.3.0#subdirectory=backend"
 ```
 
 To move to another release, run the same command with the new tag and `--force` (`pipx install --force ...`, `uv tool install --force ...`). To remove the CLI, run `pipx uninstall lockstep` or `uv tool uninstall lockstep`.
@@ -48,7 +48,7 @@ If you'd rather use a plain virtual environment:
 
 ```sh
 python3 -m venv ~/.venvs/lockstep
-~/.venvs/lockstep/bin/pip install "git+https://github.com/welshstew/lockstep@v0.2.0#subdirectory=backend"
+~/.venvs/lockstep/bin/pip install "git+https://github.com/welshstew/lockstep@v0.3.0#subdirectory=backend"
 ~/.venvs/lockstep/bin/lockstep --help
 ```
 
@@ -62,7 +62,7 @@ Every release image (`ghcr.io/welshstew/lockstep`, v0.2.0 and later, for amd64 a
 docker run --rm -it --entrypoint lockstep \
   -e VAULT_ADDR -e VAULT_TOKEN \
   -v "$PWD:/work" -w /work \
-  ghcr.io/welshstew/lockstep:0.2.0 \
+  ghcr.io/welshstew/lockstep:0.3.0 \
   compare --mount app-config -o report.yaml
 ```
 
@@ -80,7 +80,7 @@ A shell alias makes the image feel like an installed command:
 
 ```sh
 alias lockstep='docker run --rm -it --entrypoint lockstep -e VAULT_ADDR -e VAULT_TOKEN -e VAULT_NAMESPACE \
-  -e LOCKSTEP_LEFT_TOKEN -e LOCKSTEP_RIGHT_TOKEN -v "$PWD:/work" -w /work ghcr.io/welshstew/lockstep:0.2.0'
+  -e LOCKSTEP_LEFT_TOKEN -e LOCKSTEP_RIGHT_TOKEN -v "$PWD:/work" -w /work ghcr.io/welshstew/lockstep:0.3.0'
 ```
 
 ## Logging in
@@ -95,6 +95,12 @@ Each side looks for its settings in this order; the first one found wins.
 | Token | `LOCKSTEP_LEFT_TOKEN`, `--left-token-file`, `VAULT_TOKEN`, `~/.vault-token` | `LOCKSTEP_RIGHT_TOKEN`, `--right-token-file`, `VAULT_TOKEN`, `~/.vault-token` |
 
 - **Userpass or LDAP:** `--left-auth userpass --left-user alice` asks for the password, or reads it from `LOCKSTEP_LEFT_PASSWORD`. Use `--left-auth-mount` if the method isn't mounted at its default path. The token that login creates is revoked when the command finishes.
+- **JWT:** `--left-auth jwt` logs in with Vault's JWT auth method, using the JWT in `LOCKSTEP_LEFT_JWT` or the file given by `--left-jwt-file`, for example a CI job's OIDC token. `--left-role` picks the Vault role (default: the mount's `default_role`) and `--left-auth-mount` the mount (default: `jwt`). The token that login creates is revoked when the command finishes.
+
+  ```sh
+  # GitLab CI, with an id_tokens entry named VAULT_ID_TOKEN
+  LOCKSTEP_LEFT_JWT=$VAULT_ID_TOKEN lockstep compare --left-auth jwt --left-role lockstep-ci …
+  ```
 - **OIDC and other methods:** run `vault login -method=oidc` first, and the CLI picks up the token from `~/.vault-token`. To use two different Vaults, give each side its own token, for example:
 
   ```sh
@@ -103,7 +109,7 @@ Each side looks for its settings in this order; the first one found wins.
 - **Same Vault on both sides:** to compare two mounts or prefixes in one Vault, give only the left address. The right side then reuses the left side's connection.
 - **TLS:** `--ca-cert` or `VAULT_CACERT`; `--tls-skip-verify` or `VAULT_SKIP_VERIFY` (insecure).
 
-The CLI never takes tokens or passwords as arguments, because arguments show up in `ps` and shell history.
+The CLI never takes tokens, JWTs or passwords as arguments, because arguments show up in `ps` and shell history.
 
 ## Compare
 
@@ -279,6 +285,28 @@ The keys you confirm for a secret are written together, as one new version.
 - 2: nothing was applied (a bad report, a failed login and so on).
 
 Without a terminal, apply can't ask questions, so it refuses to run unless you pass `--yes` or `--dry-run`.
+
+## Export and import
+
+`lockstep export` writes a [secret-engine export](usage.md#6-export-and-import) of one mount (or prefix), with values; `lockstep import` writes one into a mount. They act on one Vault, logged in like the other commands but with `--vault-*` options: `--vault-addr` (or `LOCKSTEP_VAULT_ADDR`, `VAULT_ADDR`), `--vault-auth userpass|ldap|jwt`, `--vault-user`, `--vault-token-file` and so on, falling back to `VAULT_TOKEN` and `~/.vault-token`.
+
+```sh
+# Encrypted with a one-time key, printed once (or written to --key-file, mode 600)
+lockstep export --vault-addr https://vault-prod --mount app-config --prefix payments \
+    --ignore-path 'legacy/**' --ignore-key 'password@services/**' -o payments.json --key-file payments.key
+
+# Preview, then import into another Vault with rules
+lockstep import payments.json --vault-addr https://vault-test --mount app-config --prefix payments \
+    --key-file payments.key --rules rules.yaml --replace application-dev-env=application-test-env --dry-run
+```
+
+- **Export:** `--ignore-path GLOB` and `--ignore-key KEY[@PATH]` (repeatable) leave things out; `--profile` takes a comparison profile's ignore rules too. `--no-encrypt` writes plain text (with a warning), and `-o -` writes to stdout. The export file is created readable by you only.
+- **Import:** the key comes from `--key-file`, `LOCKSTEP_EXPORT_KEY`, or a prompt. `--rules FILE` reads import rules (YAML or JSON: `ignore_paths`, `ignore_keys`, `transforms`, the same file the web UI's **Save rules** writes; see `lockstep schema import-rules`). `--ignore-path`, `--ignore-key`, `--replace FIND=WITH` (values) and `--replace-path FIND=WITH` add to them. Text starting with `-` needs the `=` form: `--replace=-dev-=-test-`.
+- **What import shows:** a preview: what the rules left out and changed, then per secret `new` or `update` with the keys (`--show-values` adds old and new values; it prints secrets). Then it asks once before writing, unless `--yes`. `--dry-run` stops after the preview.
+- **How it writes:** like `apply`. Values are merged into each target secret with check-and-set against the version the preview saw; keys only on the target are kept and nothing is deleted. `--audit-log FILE` appends a JSON line per write.
+- **Exit codes:** 0 done (or nothing to do), 1 some secrets weren't written (changed meanwhile, no permission, or left out by a collision), 2 couldn't run.
+
+`lockstep schema export` and `lockstep schema import-rules` print the files' JSON Schemas.
 
 ## Reports and sync plans
 

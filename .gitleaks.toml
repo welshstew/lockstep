@@ -9,4 +9,6 @@ description = "Dev seed fixtures: fake values used to test diffs, never real cre
 regexTarget = "match"
 regexes = [
   '''ak_live_1234567890''',
+  # Dex's dev client secret (dev/dex/config.yaml, compose.yaml), e.g. in the docs' curl for a test ID token
+  '''vault-dev-secret''',
 ]

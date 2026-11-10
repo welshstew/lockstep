@@ -23,6 +23,7 @@ All configuration comes from environment variables prefixed `LOCKSTEP_`. Lists a
 | `LOCKSTEP_VAULT_CA_BUNDLE` | — | Path to a PEM bundle, for Vaults with a private CA |
 | `LOCKSTEP_PROFILES` | `[]` | Shared [comparison profiles](usage.md#comparison-profiles), JSON: `[{"name", "description"?, "left_mount"?, "left_prefix"?, "right_mount"?, "right_prefix"?, "rules": {"mappings": [{"left", "right"}], "ignore_keys": [{"key", "path"?}], "ignore_paths": [...]}}]`. Validated at startup: a malformed profile stops the server with a clear message. With the Helm chart, set the `profiles` value instead ([example](../charts/lockstep/README.md#examples)) |
 | `LOCKSTEP_MAX_TREE_SECRETS` | `5000` | Per side, the most secrets a comparison will list before reporting it as truncated. Use a path prefix for bigger mounts |
+| `LOCKSTEP_EXPORT_MODE` | `any` | [Secret-engine exports](usage.md#6-export-and-import), which hold values: `any` lets users choose encrypted or plain, `encrypted` allows only exports encrypted with a one-time key, `off` turns exporting off. Importing isn't affected: it writes with the user's own token |
 
 ## Kubernetes auth
 

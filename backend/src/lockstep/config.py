@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from functools import lru_cache
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     # If set, custom Vault URLs must fully match one of these regexes (limits SSRF exposure).
     custom_url_patterns: Annotated[list[str], NoDecode] = []
     max_tree_secrets: int = 5000
+    # Secret-engine exports (they hold values): "any" lets users choose plain or encrypted,
+    # "encrypted" allows encrypted exports only, "off" disables exporting. Import is unaffected.
+    export_mode: Literal["any", "encrypted", "off"] = "any"
     # Optional notice shown at the top of the UI (e.g. for a public demo)
     demo_banner: str = ""
     # Shared comparison profiles (JSON list), offered read-only to every user

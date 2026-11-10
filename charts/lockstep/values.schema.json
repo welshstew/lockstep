@@ -108,6 +108,10 @@
       "type": "integer",
       "minimum": 1
     },
+    "exportMode": {
+      "type": "string",
+      "enum": ["any", "encrypted", "off"]
+    },
     "vaultTls": {
       "type": "object",
       "additionalProperties": false,

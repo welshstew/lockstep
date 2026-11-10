@@ -9,6 +9,7 @@ import base64
 import datetime as dt
 import json
 import os
+import secrets
 import sys
 import time
 
@@ -239,12 +240,29 @@ def configure_auth(v: Vault) -> None:
         "token_policies": ["lockstep-readonly"],
         "token_ttl": "8h",
     })
-    # alice@example.com gets admin via an identity entity; bob@example.com stays read-only.
+    # JWT auth: log in with an ID token from Dex (tests get one with the password grant).
+    jwt_accessor = v.enable_auth("jwt", "jwt")
+    v.req("POST", "auth/jwt/config", {
+        "oidc_discovery_url": os.environ["OIDC_DISCOVERY_URL"],
+        "bound_issuer": os.environ["OIDC_DISCOVERY_URL"],
+        "default_role": "default",
+    })
+    v.req("POST", "auth/jwt/role/default", {
+        "role_type": "jwt",
+        "user_claim": "email",
+        "bound_audiences": [os.environ["OIDC_CLIENT_ID"]],
+        "token_policies": ["lockstep-readonly"],
+        "token_ttl": "1h",
+    })
+
+    # alice@example.com gets admin via an identity entity (from OIDC or JWT); bob@example.com
+    # stays read-only.
     ent = v.req("POST", "identity/entity", {"name": "alice", "policies": ["lockstep-admin"]}, ok=(200, 204))
     ent_id = (ent.get("data") or {}).get("id") or v.req("GET", "identity/entity/name/alice")["data"]["id"]
-    v.req("POST", "identity/entity-alias",
-          {"name": "alice@example.com", "canonical_id": ent_id, "mount_accessor": accessor},
-          ok=(200, 204, 400))  # 400: alias already exists on re-run
+    for acc in (accessor, jwt_accessor):
+        v.req("POST", "identity/entity-alias",
+              {"name": "alice@example.com", "canonical_id": ent_id, "mount_accessor": acc},
+              ok=(200, 204, 400))  # 400: alias already exists on re-run
 
 
 # --------------------------------------------------------------------------- test data
@@ -378,6 +396,19 @@ def seed_value_tool_fixtures(a: Vault, b: Vault, pki: dict) -> None:
     b.kv_put("app-config", "crypto/keys", {"aes_key": b64(os.urandom(32)), "hmac_key": b64(os.urandom(64))})
 
 
+def seed_password_finder(a: Vault, b: Vault, pki: dict) -> None:
+    """A keystore whose password lives elsewhere in the tree, among decoys (password finder)."""
+    pw = secrets.token_urlsafe(12)  # different each seed: nothing may depend on the value
+    p12 = pkcs12.serialize_key_and_certificates(
+        b"app", pki["app_key"], pki["app"], [pki["inter"]], serialization.BestAvailableEncryption(pw.encode()))
+    for v in (a, b):
+        v.kv_put("certs", "some-secrets/files/certs.p12", {"certs.p12": b64(p12)})
+        v.kv_put("certs", "some-secrets/passwords/CERT_PASSWORD", {"value": "not-the-store-password"})
+        v.kv_put("certs", "some-secrets/strings/KEYSTORE_PASSWORD", {"value": pw})
+        v.kv_put("certs", "some-secrets/passwords/DB_PASSWORD", {"value": "db-password"})
+        v.kv_put("certs", "some-secrets/strings/API_URL", {"value": "https://api.example.com"})
+
+
 def main() -> None:
     a = Vault("vault-a", os.environ["VAULT_A_ADDR"], os.environ["VAULT_A_TOKEN"])
     b = Vault("vault-b", os.environ["VAULT_B_ADDR"], os.environ["VAULT_B_TOKEN"])
@@ -388,6 +419,7 @@ def main() -> None:
     pki = build_pki()
     seed_data(a, b, pki)
     seed_value_tool_fixtures(a, b, pki)
+    seed_password_finder(a, b, pki)
     print("seed complete")
 
 

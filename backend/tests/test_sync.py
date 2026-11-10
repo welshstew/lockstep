@@ -219,3 +219,110 @@ def test_audit_log_has_no_values(env):
     assert entry["keys"] == ["pw"] and entry["target"]["new_version"] == 1
     assert entry["actor"]["target_identity"] == "token"
     assert "very-secret-value" not in records[0]
+
+
+# --------------------------------------------------------------------------- overrides (typed values)
+
+
+def override(env, diff, side, values, keys=None):
+    """A change that sets typed values on `side` (optionally also copying `keys` there)."""
+    ch = env.change(diff, direction="left_to_right" if side == "right" else "right_to_left",
+                    keys=keys if keys is not None else [])
+    return ch | {"set": values}
+
+
+def test_override_sets_typed_values_and_keeps_other_keys(env):
+    env.a.put(f"{env.prefix}/cfg", {"pw": "A", "host": "h"})
+    env.b.put(f"{env.prefix}/cfg", {"pw": "B", "host": "h", "only_b": "keep"})
+    d = env.compare()["cfg"]
+    ch = override(env, d, "right", {"pw": "typed-new", "port": 5432, "new": "added"})
+
+    p = env.preview([ch], reveal=True).json()[0]
+    assert p["status"] == "ready"
+    keys = {k["key"]: k for k in p["keys"]}
+    assert {k: v["action"] for k, v in keys.items()} == {"pw": "update", "port": "add", "new": "add"}
+    assert all(k["override"] for k in p["keys"])
+    assert keys["pw"]["source_value"] == "typed-new" and keys["pw"]["target_value"] == "B"
+
+    res = env.apply([ch]).json()["results"][0]
+    assert res["status"] == "applied" and res["overridden"] == ["new", "port", "pw"]
+    data, _ = env.b.get(f"{env.prefix}/cfg")
+    assert data == {"pw": "typed-new", "host": "h", "only_b": "keep", "port": 5432, "new": "added"}
+    assert isinstance(data["port"], int)
+    assert env.a.get(f"{env.prefix}/cfg")[0] == {"pw": "A", "host": "h"}  # the other side is untouched
+
+
+def test_override_both_sides(env):
+    env.a.put(f"{env.prefix}/cfg", {"pw": "A"})
+    env.b.put(f"{env.prefix}/cfg", {"pw": "B"})
+    d = env.compare()["cfg"]
+    both = [override(env, d, "left", {"pw": "rotated"}), override(env, d, "right", {"pw": "rotated"})]
+    assert env.apply(both).json()["summary"]["applied"] == 2
+    assert env.a.get(f"{env.prefix}/cfg")[0] == env.b.get(f"{env.prefix}/cfg")[0] == {"pw": "rotated"}
+    assert env.compare()["cfg"]["status"] == "equal"
+
+
+def test_override_creates_a_secret_missing_on_the_target(env):
+    env.a.put(f"{env.prefix}/only-a", {"k": "v"})
+    d = env.compare()["only-a"]
+    res = env.apply([override(env, d, "right", {"k": "typed"})]).json()["results"][0]
+    assert res["status"] == "applied" and res["new_version"] == 1
+    assert env.b.get(f"{env.prefix}/only-a")[0] == {"k": "typed"}
+
+
+def test_override_combined_with_copies_in_one_write(env):
+    env.a.put(f"{env.prefix}/cfg", {"user": "app-A", "pw": "A"})
+    env.b.put(f"{env.prefix}/cfg", {"user": "app-B", "pw": "B"})
+    d = env.compare()["cfg"]
+    ch = override(env, d, "right", {"pw": "typed"}, keys=["user"])
+    res = env.apply([ch]).json()["results"][0]
+    assert res["status"] == "applied" and res["keys"] == ["pw", "user"] and res["overridden"] == ["pw"]
+    assert res["new_version"] == res["old_version"] + 1  # one write
+    assert env.b.get(f"{env.prefix}/cfg")[0] == {"user": "app-A", "pw": "typed"}
+
+
+def test_override_unchanged_value_is_a_noop(env):
+    env.a.put(f"{env.prefix}/cfg", {"pw": "A"})
+    env.b.put(f"{env.prefix}/cfg", {"pw": "B"})
+    d = env.compare()["cfg"]
+    assert env.preview([override(env, d, "right", {"pw": "B"})]).json()[0]["status"] == "noop"
+
+
+def test_override_respects_cas(env):
+    env.a.put(f"{env.prefix}/cfg", {"pw": "A"})
+    env.b.put(f"{env.prefix}/cfg", {"pw": "B"})
+    ch = override(env, env.compare()["cfg"], "right", {"pw": "typed"})
+    env.b.put(f"{env.prefix}/cfg", {"pw": "rotated meanwhile"})
+    assert env.apply([ch]).json()["results"][0]["status"] == "conflict"
+    assert env.b.get(f"{env.prefix}/cfg")[0] == {"pw": "rotated meanwhile"}
+
+
+@pytest.mark.parametrize("bad", [
+    {"keys": [], "set": {}},  # nothing to do
+    {"keys": ["pw"], "set": {"pw": "x"}},  # a key both copied and set
+    {"keys": [], "set": {"": "x"}},  # empty key name
+])
+def test_override_validation(env, bad):
+    env.a.put(f"{env.prefix}/cfg", {"pw": "A"})
+    d = env.compare()["cfg"]
+    assert env.preview([env.change(d) | bad]).status_code == 422
+
+
+def test_override_audit_names_keys_never_values(env):
+    records: list[str] = []
+
+    class H(logging.Handler):
+        def emit(self, rec):
+            records.append(rec.getMessage())
+
+    log = logging.getLogger("lockstep.audit")
+    h = H()
+    log.addHandler(h)
+    try:
+        env.a.put(f"{env.prefix}/cfg", {"pw": "A"})
+        env.apply([override(env, env.compare()["cfg"], "right", {"pw": "typed-secret-value"})])
+    finally:
+        log.removeHandler(h)
+    entry = json.loads(records[0])
+    assert entry["overridden"] == ["pw"] and entry["keys"] == ["pw"]
+    assert "typed-secret-value" not in records[0]

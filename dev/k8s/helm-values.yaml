@@ -1,7 +1,7 @@
 # Values for installing the chart into the dev k3s cluster (make helm-test).
 image:
   repository: localhost/lockstep   # imported into k3s by make helm-test
-  tag: "0.2.0"
+  tag: "0.3.0"
   pullPolicy: Never
 replicaCount: 2
 vaults:

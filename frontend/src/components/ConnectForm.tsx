@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, type AuthInput } from "../api";
 import type { AppConfig, Connection } from "../types";
 
-type Method = "token" | "userpass" | "ldap" | "oidc" | "kubernetes";
+type Method = "token" | "userpass" | "ldap" | "oidc" | "jwt" | "kubernetes";
 
 interface Props {
   config: AppConfig;
@@ -15,7 +15,9 @@ interface Props {
 }
 
 type LoginMethod = { path: string; type: string; description: string };
-const OIDC_TYPES = ["oidc", "jwt"];
+// Pre-select the redirect login when the Vault offers an OIDC mount. JWT mounts can serve
+// either flow, but are more often set up for tokens from machines (role_type=jwt).
+const OIDC_TYPES = ["oidc"];
 
 export function ConnectForm({ config, onConnected, onCancel, initialPresetId, side }: Props) {
   const firstPreset = config.presets[0]?.id ?? null;
@@ -30,6 +32,7 @@ export function ConnectForm({ config, onConnected, onCancel, initialPresetId, si
   const [password, setPassword] = useState("");
   const [authMount, setAuthMount] = useState("");
   const [role, setRole] = useState("");
+  const [jwt, setJwt] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [methods, setMethods] = useState<LoginMethod[] | null>(null);
@@ -40,6 +43,8 @@ export function ConnectForm({ config, onConnected, onCancel, initialPresetId, si
   const custom = target === "custom";
   const preset = custom ? null : config.presets.find((p) => String(p.id) === target) ?? null;
   const targetBody = custom ? { url } : { preset_id: preset?.id };
+  // The JWT mount this Vault advertises, used when the mount field is left empty.
+  const jwtMount = methods?.find((x) => x.type === "jwt")?.path ?? "jwt";
 
   // Ask the Vault which login methods it advertises (like the Vault UI's login screen),
   // and pre-select OIDC when it's offered, unless the user has already chosen a method.
@@ -84,6 +89,8 @@ export function ConnectForm({ config, onConnected, onCancel, initialPresetId, si
       ? { method, token }
       : method === "kubernetes"
         ? { method, role, ...(authMount ? { mount: authMount } : {}) }
+        : method === "jwt"
+          ? { method, jwt: jwt.trim(), ...(role ? { role } : {}), mount: authMount || jwtMount }
         : { method, username, password, ...(authMount ? { mount: authMount } : {}) };
     try {
       const conn = await api.connect({
@@ -93,6 +100,7 @@ export function ConnectForm({ config, onConnected, onCancel, initialPresetId, si
       });
       setPassword("");
       setToken("");
+      setJwt("");
       onConnected(conn);
     } catch (err) {
       setError((err as Error).message);
@@ -130,10 +138,10 @@ export function ConnectForm({ config, onConnected, onCancel, initialPresetId, si
       <div className="field">
         <span>Sign in with</span>
         <div className="segmented" role="group" aria-label="Authentication method">
-          {(["userpass", "ldap", "token", "oidc", ...(k8s.available ? ["kubernetes"] : [])] as Method[]).map((m) => (
+          {(["userpass", "ldap", "token", "oidc", "jwt", ...(k8s.available ? ["kubernetes"] : [])] as Method[]).map((m) => (
             <button key={m} type="button" aria-pressed={method === m}
                     onClick={() => { picked.current = true; setMethod(m); setAuthMount(""); setRole(m === "kubernetes" && k8s.roles.length ? k8s.roles[0] : ""); }}>
-              {{ userpass: "Username", ldap: "LDAP", token: "Token", oidc: "OIDC", kubernetes: "Kubernetes" }[m]}
+              {{ userpass: "Username", ldap: "LDAP", token: "Token", oidc: "OIDC", jwt: "JWT", kubernetes: "Kubernetes" }[m]}
             </button>
           ))}
         </div>
@@ -184,6 +192,28 @@ export function ConnectForm({ config, onConnected, onCancel, initialPresetId, si
           </div>
           <div className="subtle" style={{ marginBottom: 8 }}>
             You'll be sent to your identity provider to sign in, then brought back here.
+          </div>
+        </>
+      ) : method === "jwt" ? (
+        <>
+          <label className="field">
+            <span>JWT</span>
+            <input type="password" value={jwt} onChange={(e) => setJwt(e.target.value)} placeholder="eyJ…" required
+                   autoComplete="off" spellCheck={false} />
+          </label>
+          <div className="row">
+            <label className="field grow">
+              <span>Auth mount path <span className="subtle">(default: jwt)</span></span>
+              <input type="text" value={authMount} onChange={(e) => setAuthMount(e.target.value)}
+                     placeholder={jwtMount} />
+            </label>
+            <label className="field grow">
+              <span>Role <span className="subtle">(optional)</span></span>
+              <input type="text" value={role} onChange={(e) => setRole(e.target.value)} placeholder="the mount's default role" />
+            </label>
+          </div>
+          <div className="subtle" style={{ marginBottom: 8 }}>
+            A token from your identity provider or CI system, for Vault’s JWT auth method. It’s sent to Vault once and not kept.
           </div>
         </>
       ) : method === "token" ? (

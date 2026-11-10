@@ -3,12 +3,14 @@
     make screenshots     # → docs/images/<scene>-<theme>.png (dark and light)
 
 Everything shown is dev fixture data from dev/seed. The script only reads, except for
-staging a copy and saving it as a plan, which it never applies.
+staging a copy and saving it as a plan, which it never applies, and opening an export in
+the browser (never imported).
 """
 
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 from playwright.sync_api import Page, expect, sync_playwright
@@ -185,6 +187,73 @@ def scenes(page: Page, theme: str) -> None:
     expect(page.locator(".expiry-table tbody tr").first).to_be_visible()
     scroll_to(page.locator(".tabs"))
     shot(page, "11-expiry", theme)
+    page.get_by_role("tab", name="Compare").click()
+
+    # 13. Typed override values for one side (staged, never applied).
+    sign_in(page, "app-config")
+    compare(page)
+    reveal(page)
+    r = open_row(page, "payments/db")
+    r.get_by_role("button", name="Override right").click()
+    editor = r.locator(".override-editor")
+    editor.get_by_label("New value for password").fill("rotated-2026-11")
+    scroll_to(r)
+    shot(page, "13-override", theme)
+    editor.get_by_role("button", name="Cancel").click()
+
+    # 14. The keystore password finder: the password lives in another folder of the tree.
+    sign_in(page, "certs", "some-secrets")
+    page.get_by_role("button", name="Compare", exact=True).click()
+    page.locator(".chip", has_text="Everything").click()  # both sides match: nothing under "All changes"
+    r = open_row(page, "files/certs.p12")
+    r.locator(".key-row").filter(has_text="certs.p12").get_by_role("button", name="Inspect").click()
+    insp = page.locator("dialog.inspector")
+    expect(insp.locator(".inspect-col.left .pw-candidate.opens")).to_have_count(1)
+    shot(page, "14-password-finder", theme)
+    insp.get_by_role("button", name="Close").click()
+
+    # 15. Building a profile by picking what to ignore in the results.
+    sign_in(page, "app-config")
+    compare(page)
+    page.get_by_role("button", name="Pick what to ignore…").click()
+    row(page, "legacy/old-service").get_by_role("button", name="Ignore secret").click()
+    row(page, "new-service/config").get_by_role("button", name="Ignore new-service/**").click()
+    db = open_row(page, "payments/db")
+    db.locator(".key-row").filter(has_text="password").first.get_by_role("button", name="Ignore everywhere").click()
+    scroll_to(page.locator("section.draft-bar"))
+    shot(page, "15-pick-ignore", theme)
+    page.locator("section.draft-bar").get_by_role("button", name="Discard").click()
+
+    # 16. An encrypted export of Vault A's services/ prefix, with its one-time key.
+    sign_in(page, "app-config", "services")
+    page.get_by_role("tab", name="Export & import").click()
+    exp = page.locator("section[aria-label=Export]")
+    with page.expect_download() as dl:
+        exp.get_by_role("button", name="Export and download").click()
+    export_file = Path("/tmp") / dl.value.suggested_filename
+    dl.value.save_as(export_file)
+    key = exp.get_by_label("Export key").inner_text()
+    scroll_to(page.locator("nav.tabs"))
+    shot(page, "16-export", theme)
+    exp.get_by_role("button", name=re.compile("saved the key")).click()
+
+    # 17. Importing it into Vault B as staging, with transforms, previewed (never imported).
+    imp = page.locator("section[aria-label=Import]")
+    imp.get_by_label("Export file").set_input_files(export_file)
+    imp.get_by_label("Export key").fill(key)
+    imp.get_by_role("button", name="Open").click()
+    imp.get_by_label("Import into").select_option("right")
+    imp.get_by_role("button", name="＋ Add transform").click()
+    imp.get_by_label("Transform 1 applies to").select_option("paths")
+    imp.get_by_label("Transform 1 find").fill("/prod/")
+    imp.get_by_label("Transform 1 replace with").fill("/staging/")
+    imp.get_by_role("button", name="＋ Add transform").click()
+    imp.get_by_label("Transform 2 find").fill("-prod")
+    imp.get_by_label("Transform 2 replace with").fill("-staging")
+    imp.get_by_role("button", name="Preview import").click()
+    expect(imp.locator(".import-preview .plan").first).to_be_visible()
+    scroll_to(imp.locator(".transform-row").first, 80)
+    shot(page, "17-import", theme)
     page.get_by_role("tab", name="Compare").click()
 
 
