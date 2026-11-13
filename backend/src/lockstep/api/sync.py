@@ -12,7 +12,10 @@ Safety rules, applied the same way by preview and apply:
     Override values are the only values the browser sends, and only to be written.
   * Each target write uses KV v2 check-and-set (CAS) against the target version the user
     saw when comparing. If the target changed since, the item is a conflict and isn't written.
-  * Keys that exist only on the target are kept (no deletes in v1).
+  * Keys that exist only on the target are kept, unless a change says `exact` (an import that
+    deletes what isn't in the file): then the new version holds only the copied keys.
+  * A `delete` change soft-deletes the target's latest version (KV v2; `vault kv undelete`
+    brings it back). It's checked against the version the user saw, like a write.
   * Every attempted write is audit-logged (who, what, where, versions, outcome), never values.
 """
 
@@ -43,6 +46,7 @@ MAX_CHANGES = 500
 MAX_SET_KEYS = 200
 MAX_SET_BYTES = 1024 * 1024  # all override values in one change, as JSON (Vault's default request limit is ~32 MB)
 WRITE_CAPS = {"create", "update", "root", "sudo"}
+DELETE_CAPS = {"delete", "root", "sudo"}
 
 
 # --------------------------------------------------------------------------- models
@@ -57,9 +61,15 @@ class Change(BaseModel):
     set: dict[str, Any] | None = Field(default=None, max_length=MAX_SET_KEYS)
     expected_target_version: int | None = None  # from the compare; None means the target was absent
     expected_source_version: int | None = None  # informational: warns if the source moved
+    exact: bool = False  # the new version holds only the copied/set keys: other target keys are removed
+    delete: bool = False  # soft-delete the target's latest version (nothing is copied)
 
     @model_validator(mode="after")
     def _check(self):
+        if self.delete:
+            if self.keys or self.set or self.exact:
+                raise ValueError(f"{self.path}: a delete can't also copy or set values")
+            return self
         if self.keys is not None and not self.keys and not self.set:
             raise ValueError(f"nothing to do for {self.path}: no keys to copy and no values to set")
         if self.set:
@@ -74,7 +84,7 @@ class Change(BaseModel):
 
     @property
     def copies(self) -> bool:
-        return self.keys is None or bool(self.keys)
+        return not self.delete and (self.keys is None or bool(self.keys))
 
 
 class SyncRequest(BaseModel):
@@ -87,6 +97,8 @@ class SyncRequest(BaseModel):
     def _unique(self):
         seen = set()
         for c in self.changes:
+            if c.delete or c.exact:  # only an import that deletes what isn't in its file does these
+                raise ValueError(f"{c.path}: deleting or removing keys is only possible when importing")
             k = (c.path, c.right_path or c.path, c.direction)
             if k in seen:
                 raise ValueError(f"duplicate change for {c.path} ({c.direction})")
@@ -109,7 +121,7 @@ class Endpoint(BaseModel):
 
 class KeyPlan(BaseModel):
     key: str
-    action: Literal["add", "update", "unchanged"]
+    action: Literal["add", "update", "unchanged", "remove"]
     type_change: bool = False
     override: bool = False  # a value the user typed, not copied from the source
     source_value: Any = None  # only when reveal=true (for an override: the new value)
@@ -120,6 +132,7 @@ class ChangePlan(BaseModel):
     path: str
     right_path: str
     direction: Direction
+    action: Literal["write", "delete"] = "write"
     source: Endpoint
     target: Endpoint
     keys: list[KeyPlan]
@@ -134,6 +147,7 @@ class ChangeResult(BaseModel):
     right_path: str
     direction: Direction
     target: str  # "<conn name> · <mount>/<path>"
+    action: Literal["write", "delete"] = "write"
     status: Literal["applied", "noop", "conflict", "denied", "invalid", "error"]
     overridden: list[str] = []  # keys set from typed values
     old_version: int | None = None
@@ -229,7 +243,8 @@ async def evaluate(ctx: _Ctx, change: Change, reveal: bool,
     tgt_ep = endpoint(tconn, tmount, tpath, tgt.version if tgt else None, tgt.state if tgt else "no_access")
 
     def plan(status, keys=(), can_write=False) -> ChangePlan:
-        return ChangePlan(path=lrel, right_path=rrel, direction=change.direction, source=src_ep, target=tgt_ep,
+        return ChangePlan(path=lrel, right_path=rrel, direction=change.direction,
+                          action="delete" if change.delete else "write", source=src_ep, target=tgt_ep,
                           keys=list(keys), can_write=can_write, problems=problems, warnings=warnings,
                           status=status)
 
@@ -237,6 +252,8 @@ async def evaluate(ctx: _Ctx, change: Change, reveal: bool,
         kind, msg = serr or terr
         problems.append(f"Can't read the {'source' if serr else 'target'}: {msg}")
         return plan("denied" if kind == "denied" else "error"), None, 0
+    if change.delete:
+        return _evaluate_delete(change, tgt, caps, reveal, any_target_version, problems, plan, tconn, tmount, tpath)
     if change.copies and src.state != "present":
         problems.append("The source has no current data (missing or deleted).")
         return plan("invalid"), None, 0
@@ -276,6 +293,9 @@ async def evaluate(ctx: _Ctx, change: Change, reveal: bool,
             type_change=action == "update" and _type(target_data[k]) != _type(new),
             source_value=new if reveal else None,
             target_value=target_data.get(k) if reveal else None))
+    if change.exact:  # target keys the import doesn't have
+        key_plans += [KeyPlan(key=k, action="remove", target_value=target_data[k] if reveal else None)
+                      for k in sorted(set(target_data) - set(new_values))]
 
     can_write = bool(WRITE_CAPS & set(caps))
     if actual != expected:
@@ -288,7 +308,26 @@ async def evaluate(ctx: _Ctx, change: Change, reveal: bool,
     if all(k.action == "unchanged" for k in key_plans):
         return plan("noop", key_plans, can_write), None, actual
 
-    return plan("ready", key_plans, can_write), target_data | new_values, actual
+    return plan("ready", key_plans, can_write), new_values if change.exact else target_data | new_values, actual
+
+
+def _evaluate_delete(change: Change, tgt, caps, reveal, any_target_version, problems, plan, tconn, tmount, tpath):
+    """A delete: the target's current keys all go (soft delete of the latest version)."""
+    if tgt.state != "present":
+        return plan("noop"), None, tgt.version or 0  # absent, or already deleted
+    key_plans = [KeyPlan(key=k, action="remove", target_value=v if reveal else None)
+                 for k, v in sorted((tgt.data or {}).items())]
+    actual = tgt.version or 0
+    expected = actual if any_target_version else (change.expected_target_version or 0)
+    can_delete = bool(DELETE_CAPS & set(caps))
+    if actual != expected:
+        problems.append(f"The target changed since the preview (expected v{expected or '—'}, now "
+                        f"v{actual or '—'}). Preview again before deleting.")
+        return plan("conflict", key_plans, can_delete), None, actual
+    if not can_delete:
+        problems.append(f"{tconn.display_name or tconn.name} can't delete {tmount}/{tpath}.")
+        return plan("denied", key_plans, can_delete), None, actual
+    return plan("ready", key_plans, can_delete), None, actual
 
 
 def _audit(ctx: _Ctx, plan: ChangePlan, result: ChangeResult, plan_id: str | None = None) -> None:
@@ -304,6 +343,7 @@ def _audit(ctx: _Ctx, plan: ChangePlan, result: ChangeResult, plan_id: str | Non
         "target": {"vault": tconn.name, "url": tconn.url, "mount": plan.target.mount,
                    "path": plan.target.path, "old_version": result.old_version,
                    "new_version": result.new_version},
+        "action": plan.action,
         "keys": result.keys,
         "overridden": result.overridden,  # names only: typed values are never logged
         "message": result.message,
@@ -341,7 +381,7 @@ async def apply_changes(ctx: _Ctx, changes: list[Change], plan_id: str | None = 
         plan, new_data, cas = await evaluate(ctx, c, reveal=False)
         (_, _, _, _), (tconn, tv, tmount, _) = ctx.ends(c.direction)
         changed = [k.key for k in plan.keys if k.action != "unchanged"]
-        res = ChangeResult(path=c.path, right_path=c.right_path or c.path, direction=c.direction,
+        res = ChangeResult(path=c.path, right_path=c.right_path or c.path, direction=c.direction, action=plan.action,
                            target=f"{tconn.name} · {tmount}/{plan.target.path}",
                            overridden=[k.key for k in plan.keys if k.override and k.action != "unchanged"],
                            # "ready" becomes applied/conflict/denied/error once the write is attempted
@@ -350,7 +390,10 @@ async def apply_changes(ctx: _Ctx, changes: list[Change], plan_id: str | None = 
                            message="; ".join(plan.problems))
         if plan.status == "ready":
             try:
-                res.new_version = await tv.kv_write(tmount, plan.target.path, new_data or {}, cas=cas)
+                if c.delete:
+                    await tv.kv_delete(tmount, plan.target.path)
+                else:
+                    res.new_version = await tv.kv_write(tmount, plan.target.path, new_data or {}, cas=cas)
                 res.status = "applied"
             except VaultError as e:
                 if e.status == 400 and "check-and-set" in e.message:

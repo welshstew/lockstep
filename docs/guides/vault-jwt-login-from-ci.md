@@ -51,7 +51,7 @@ jobs:
     permissions: {id-token: write, contents: read}   # id-token: write lets the job request a JWT
     steps:
       - uses: actions/checkout@v4
-      - run: pipx install "git+https://github.com/welshstew/lockstep@v0.3.0#subdirectory=backend"
+      - run: pipx install "git+https://github.com/welshstew/lockstep@v0.4.0#subdirectory=backend"
 
       - name: Get an ID token for Vault
         run: |
@@ -97,7 +97,7 @@ vault-drift:
   id_tokens:
     VAULT_ID_TOKEN: {aud: vault}
   script:
-    - pip install pipx && pipx install "git+https://github.com/welshstew/lockstep@v0.3.0#subdirectory=backend"
+    - pip install pipx && pipx install "git+https://github.com/welshstew/lockstep@v0.4.0#subdirectory=backend"
     - export PATH="$HOME/.local/bin:$PATH"
     - export LOCKSTEP_LEFT_JWT="$VAULT_ID_TOKEN" LOCKSTEP_RIGHT_JWT="$VAULT_ID_TOKEN"
     - lockstep compare

@@ -5,6 +5,17 @@ the image, the Helm chart and the app share one version.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-13
+
+### Added
+
+- **Imports can delete what isn't in the file:** **Make the target match the file** in the import panel (`lockstep import --delete-missing`) writes each imported secret with only the file's keys and soft-deletes secrets under the target's prefix that the file doesn't have (`vault kv undelete` restores them). Entries with `"keep": true` and no data protect a target secret: it's neither written nor deleted. The preview lists every removed key and deleted secret; deletes are checked against the version the preview saw and audit-logged with `"action": "delete"`.
+- **Proposal:** [connection probes](docs/proposals/connection-probes.md), a design for checking that database, LDAP and HTTP credentials stored in Vault still work. Not implemented; written down for discussion.
+
+### Security
+
+- Rebuilt on updated Red Hat Hardened base images: Python 3.14.10 (CVE-2026-115791, CVE-2026-19552) and glibc 2.43-9.3 (CVE-2026-84243).
+
 ## [0.3.0] - 2026-11-10
 
 ### Added
@@ -46,6 +57,7 @@ First public release.
 - **Helm chart:** hardened defaults, session key kept across upgrades, Ingress, NetworkPolicy, PodDisruptionBudget, Kubernetes auth, shared profiles; validated by a schema and tested in k3s.
 - Runs on Red Hat Hardened Images (distroless, non-root). Every change is scanned (CVEs, secrets, misconfigurations, base image signatures) and tested end to end in a browser.
 
+[0.4.0]: https://github.com/welshstew/lockstep/releases/tag/v0.4.0
 [0.3.0]: https://github.com/welshstew/lockstep/releases/tag/v0.3.0
 [0.2.0]: https://github.com/welshstew/lockstep/releases/tag/v0.2.0
 [0.1.0]: https://github.com/welshstew/lockstep/releases/tag/v0.1.0

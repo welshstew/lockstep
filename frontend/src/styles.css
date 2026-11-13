@@ -339,6 +339,7 @@ dialog.review::backdrop { background: rgba(10, 12, 16, .55); }
 .action.add { background: var(--equal-soft); color: var(--equal); }
 .action.update { background: var(--diff-soft); color: var(--diff); }
 .action.unchanged { background: var(--noaccess-soft); color: var(--noaccess); }
+.action.remove { background: var(--error-soft); color: var(--error); }
 .confirm { display: flex; align-items: center; gap: 8px; }
 .confirm input { width: 16px; height: 16px; }
 

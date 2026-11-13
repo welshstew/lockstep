@@ -100,7 +100,7 @@
           </article>
           <article>
             <h3>Export, import and migrate</h3>
-            <p>Export a mount to an encrypted file, compare a Vault against it, or import it elsewhere with rules: leave paths and keys out, and turn <code>dev</code> into <code>test</code> on the way.</p>
+            <p>Export a mount to an encrypted file, compare a Vault against it, or import it elsewhere with rules: leave paths and keys out, and turn <code>dev</code> into <code>test</code> on the way. Optionally make the target an exact match, keeping the secrets you mark.</p>
           </article>
           <article>
             <h3>Set values yourself</h3>
@@ -235,12 +235,12 @@ open http://localhost:8080</code></pre>
           </div>
           <div class="span">
             <h3>Command line</h3>
-<pre><code>pipx install "git+https://github.com/welshstew/lockstep@v0.3.0#subdirectory=backend"
+<pre><code>pipx install "git+https://github.com/welshstew/lockstep@v0.4.0#subdirectory=backend"
 lockstep compare --help
 lockstep export --help    # and lockstep import
 
 # or run it from the image
-docker run --rm -it --entrypoint lockstep ghcr.io/welshstew/lockstep:0.3.0 --help</code></pre>
+docker run --rm -it --entrypoint lockstep ghcr.io/welshstew/lockstep:0.4.0 --help</code></pre>
           </div>
         </div>
         <p class="more">Configuration, authentication, deployment and <a href="/docs/cli/">command-line</a> guides are in the <a href="/docs/">documentation</a>.</p>

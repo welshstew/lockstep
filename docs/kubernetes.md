@@ -11,7 +11,7 @@ Lockstep is one stateless container, so any number of replicas can serve any req
 ## With Helm (recommended)
 
 ```sh
-helm upgrade --install lockstep oci://ghcr.io/welshstew/charts/lockstep --version 0.3.0 \
+helm upgrade --install lockstep oci://ghcr.io/welshstew/charts/lockstep --version 0.4.0 \
   -n lockstep --create-namespace -f my-values.yaml
 helm test lockstep -n lockstep
 ```
@@ -35,8 +35,8 @@ The [chart README](../charts/lockstep/README.md) has every value and more exampl
 
 1. **Image:** by default the chart runs the release image `ghcr.io/welshstew/lockstep:<appVersion>`. Pin `image.digest` for an immutable deployment, or set `image.repository` to a mirror or your own build. Verify a release image before you trust it:
    ```sh
-   cosign verify ghcr.io/welshstew/lockstep:0.3.0 \
-     --certificate-identity https://github.com/welshstew/lockstep/.github/workflows/release.yml@refs/tags/v0.3.0 \
+   cosign verify ghcr.io/welshstew/lockstep:0.4.0 \
+     --certificate-identity https://github.com/welshstew/lockstep/.github/workflows/release.yml@refs/tags/v0.4.0 \
      --certificate-oidc-issuer https://token.actions.githubusercontent.com
    ```
 2. **Vaults:** list them in `vaults`. `allowCustomConnections` is **off** in the chart, so the pods only call Vaults you list.

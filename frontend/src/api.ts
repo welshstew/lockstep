@@ -116,10 +116,10 @@ export const api = {
     call<ExportResult>("POST", "/api/exports", { side, rules, encrypt }),
   exportOpen: (file: unknown, key?: string) =>
     call<{ export: ExportDoc; encrypted: boolean }>("POST", "/api/exports/open", { file, ...(key ? { key } : {}) }),
-  importPreview: (exp: ExportDoc, name: string, rules: ImportRules, target: VaultSide, reveal: boolean) =>
-    call<ImportPreview>("POST", "/api/import/preview", { export: exp, name, rules, target, reveal }),
-  importApply: (exp: ExportDoc, name: string, rules: ImportRules, target: VaultSide, expected: Record<string, number | null>) =>
-    call<ApplyResult>("POST", "/api/import/apply", { export: exp, name, rules, target, expected, confirm: true }),
+  importPreview: (exp: ExportDoc, name: string, rules: ImportRules, target: VaultSide, reveal: boolean, deleteMissing: boolean) =>
+    call<ImportPreview>("POST", "/api/import/preview", { export: exp, name, rules, target, reveal, delete_missing: deleteMissing }),
+  importApply: (exp: ExportDoc, name: string, rules: ImportRules, target: VaultSide, expected: Record<string, number | null>, deleteMissing: boolean) =>
+    call<ApplyResult>("POST", "/api/import/apply", { export: exp, name, rules, target, expected, delete_missing: deleteMissing, confirm: true }),
   history: (id: string, mount: string, path: string) =>
     call<KeyHistory>("GET", `/api/connections/${id}/history?${q({ mount, path })}`),
   secret: (id: string, mount: string, path: string) =>

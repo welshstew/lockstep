@@ -37,6 +37,32 @@
     },
     "ExportSecret": {
       "additionalProperties": false,
+      "description": "A secret with its data, or a keep entry: a path with \"keep\": true and no data.",
+      "oneOf": [
+        {
+          "properties": {
+            "keep": {
+              "const": false
+            }
+          },
+          "required": [
+            "data"
+          ]
+        },
+        {
+          "properties": {
+            "keep": {
+              "const": true
+            },
+            "data": {
+              "maxProperties": 0
+            }
+          },
+          "required": [
+            "keep"
+          ]
+        }
+      ],
       "properties": {
         "path": {
           "description": "Relative to source.prefix",
@@ -69,14 +95,28 @@
           "title": "Updated"
         },
         "data": {
-          "additionalProperties": true,
-          "title": "Data",
-          "type": "object"
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The secret's keys and values (not with keep)",
+          "title": "Data"
+        },
+        "keep": {
+          "default": false,
+          "description": "Leave the target's secret at this path as it is, with no data: it's neither written nor deleted, even when an import deletes what isn't in the file",
+          "title": "Keep",
+          "type": "boolean"
         }
       },
       "required": [
-        "path",
-        "data"
+        "path"
       ],
       "title": "ExportSecret",
       "type": "object"

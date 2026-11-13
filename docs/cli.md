@@ -28,7 +28,7 @@ With [pipx](https://pipx.pypa.io/), which installs the CLI into its own virtual 
 
 ```sh
 # a release (recommended); the CLI is in v0.2.0 and later
-pipx install "git+https://github.com/welshstew/lockstep@v0.3.0#subdirectory=backend"
+pipx install "git+https://github.com/welshstew/lockstep@v0.4.0#subdirectory=backend"
 
 # or the latest code on main
 pipx install "git+https://github.com/welshstew/lockstep#subdirectory=backend"
@@ -39,7 +39,7 @@ lockstep --version
 [uv](https://docs.astral.sh/uv/) works the same way:
 
 ```sh
-uv tool install "git+https://github.com/welshstew/lockstep@v0.3.0#subdirectory=backend"
+uv tool install "git+https://github.com/welshstew/lockstep@v0.4.0#subdirectory=backend"
 ```
 
 To move to another release, run the same command with the new tag and `--force` (`pipx install --force ...`, `uv tool install --force ...`). To remove the CLI, run `pipx uninstall lockstep` or `uv tool uninstall lockstep`.
@@ -48,7 +48,7 @@ If you'd rather use a plain virtual environment:
 
 ```sh
 python3 -m venv ~/.venvs/lockstep
-~/.venvs/lockstep/bin/pip install "git+https://github.com/welshstew/lockstep@v0.3.0#subdirectory=backend"
+~/.venvs/lockstep/bin/pip install "git+https://github.com/welshstew/lockstep@v0.4.0#subdirectory=backend"
 ~/.venvs/lockstep/bin/lockstep --help
 ```
 
@@ -62,7 +62,7 @@ Every release image (`ghcr.io/welshstew/lockstep`, v0.2.0 and later, for amd64 a
 docker run --rm -it --entrypoint lockstep \
   -e VAULT_ADDR -e VAULT_TOKEN \
   -v "$PWD:/work" -w /work \
-  ghcr.io/welshstew/lockstep:0.3.0 \
+  ghcr.io/welshstew/lockstep:0.4.0 \
   compare --mount app-config -o report.yaml
 ```
 
@@ -80,7 +80,7 @@ A shell alias makes the image feel like an installed command:
 
 ```sh
 alias lockstep='docker run --rm -it --entrypoint lockstep -e VAULT_ADDR -e VAULT_TOKEN -e VAULT_NAMESPACE \
-  -e LOCKSTEP_LEFT_TOKEN -e LOCKSTEP_RIGHT_TOKEN -v "$PWD:/work" -w /work ghcr.io/welshstew/lockstep:0.3.0'
+  -e LOCKSTEP_LEFT_TOKEN -e LOCKSTEP_RIGHT_TOKEN -v "$PWD:/work" -w /work ghcr.io/welshstew/lockstep:0.4.0'
 ```
 
 ## Logging in
@@ -304,6 +304,7 @@ lockstep import payments.json --vault-addr https://vault-test --mount app-config
 - **Import:** the key comes from `--key-file`, `LOCKSTEP_EXPORT_KEY`, or a prompt. `--rules FILE` reads import rules (YAML or JSON: `ignore_paths`, `ignore_keys`, `transforms`, the same file the web UI's **Save rules** writes; see `lockstep schema import-rules`). `--ignore-path`, `--ignore-key`, `--replace FIND=WITH` (values) and `--replace-path FIND=WITH` add to them. Text starting with `-` needs the `=` form: `--replace=-dev-=-test-`.
 - **What import shows:** a preview: what the rules left out and changed, then per secret `new` or `update` with the keys (`--show-values` adds old and new values; it prints secrets). Then it asks once before writing, unless `--yes`. `--dry-run` stops after the preview.
 - **How it writes:** like `apply`. Values are merged into each target secret with check-and-set against the version the preview saw; keys only on the target are kept and nothing is deleted. `--audit-log FILE` appends a JSON line per write.
+- **`--delete-missing`:** make the target match the file. Imported secrets are written with only the file's keys (the preview shows other keys as `(remove)`), and secrets under `--prefix` that aren't in the file are soft-deleted (`delete` in the preview; `vault kv undelete` restores them). Entries with `"keep": true` and no data are left alone. See [deleting what isn't in the file](usage.md#deleting-what-isnt-in-the-file).
 - **Exit codes:** 0 done (or nothing to do), 1 some secrets weren't written (changed meanwhile, no permission, or left out by a collision), 2 couldn't run.
 
 `lockstep schema export` and `lockstep schema import-rules` print the files' JSON Schemas.

@@ -61,16 +61,16 @@ This starts two dev-mode Vaults filled with demo data, Dex as an OIDC provider, 
 ## Deploy
 
 ```sh
-helm upgrade --install lockstep oci://ghcr.io/welshstew/charts/lockstep --version 0.3.0 \
+helm upgrade --install lockstep oci://ghcr.io/welshstew/charts/lockstep --version 0.4.0 \
   -n lockstep --create-namespace -f my-values.yaml
 ```
 
-Or run the container anywhere: `ghcr.io/welshstew/lockstep:0.3.0` (amd64 and arm64, signed with cosign, with an SBOM and build provenance; see [releases](https://github.com/welshstew/lockstep/releases)).
+Or run the container anywhere: `ghcr.io/welshstew/lockstep:0.4.0` (amd64 and arm64, signed with cosign, with an SBOM and build provenance; see [releases](https://github.com/welshstew/lockstep/releases)).
 
 For the command line, install from GitHub (it isn't on PyPI yet) or use the same image with `--entrypoint lockstep`. See [Command line: install](docs/cli.md#install):
 
 ```sh
-pipx install "git+https://github.com/welshstew/lockstep@v0.3.0#subdirectory=backend"
+pipx install "git+https://github.com/welshstew/lockstep@v0.4.0#subdirectory=backend"
 ```
 
 A hardened chart: non-root, read-only filesystem, a session key kept across upgrades, optional Ingress, NetworkPolicy and Kubernetes auth. See [Deploying on Kubernetes](docs/kubernetes.md) and the [chart README](charts/lockstep/README.md).

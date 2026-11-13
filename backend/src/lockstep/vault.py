@@ -257,6 +257,12 @@ class VaultClient:
         res = await self.request("POST", f"{mount}/data/{_q(path)}", json=body)
         return res["data"]["version"]
 
+    async def kv_delete(self, mount: str, path: str) -> None:
+        """Soft-delete the latest version: the data stays in Vault's history and
+        `vault kv undelete` restores it. KV v2 has no check-and-set for deletes, so callers
+        check the version just before."""
+        await self.request("DELETE", f"{mount}/data/{_q(path)}")
+
     async def capabilities(self, paths: list[str]) -> dict[str, list[str]]:
         """This token's capabilities on each path (sys/capabilities-self)."""
         if not paths:

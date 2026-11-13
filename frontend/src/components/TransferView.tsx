@@ -198,6 +198,7 @@ function ImportPanel({ reveal, files, onFile, sides }: Props) {
   const [paths, setPaths] = useState("");
   const [keys, setKeys] = useState<KeyRule[]>([]);
   const [transforms, setTransforms] = useState<Transform[]>([]);
+  const [deleteMissing, setDeleteMissing] = useState(false);
   const [preview, setPreview] = useState<ImportPreview | null>(null);
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -220,7 +221,7 @@ function ImportPanel({ reveal, files, onFile, sides }: Props) {
   async function runPreview() {
     if (!file || !target?.ref) return;
     setBusy(true); setError(null); setApplied(null); setConfirmed(false);
-    try { setPreview(await api.importPreview(file.doc, file.name, rules(), target.ref, reveal)); }
+    try { setPreview(await api.importPreview(file.doc, file.name, rules(), target.ref, reveal, deleteMissing)); }
     catch (e) { setError((e as Error).message); setPreview(null); }
     finally { setBusy(false); }
   }
@@ -231,18 +232,24 @@ function ImportPanel({ reveal, files, onFile, sides }: Props) {
     setBusy(true); setError(null);
     try {
       setApplied(await api.importApply(file.doc, file.name, rules(), target.ref,
-        Object.fromEntries(ready.map((p) => [p.path, p.target.state === "absent" ? null : p.target.version]))));
+        Object.fromEntries(ready.map((p) => [p.path, p.target.state === "absent" ? null : p.target.version])), deleteMissing));
     } catch (e) { setError((e as Error).message); }
     finally { setBusy(false); }
   }
 
   const ready = preview?.plans.filter((p) => p.status === "ready") ?? [];
-  const counts = preview ? preview.plans.reduce<Record<string, number>>((n, p) => ({ ...n, [p.status]: (n[p.status] ?? 0) + 1 }), {}) : {};
+  const writes = preview?.plans.filter((p) => p.action !== "delete") ?? [];
+  const counts = writes.reduce<Record<string, number>>((n, p) => ({ ...n, [p.status]: (n[p.status] ?? 0) + 1 }), {});
+  const toDelete = ready.filter((p) => p.action === "delete").length;
+  const toWrite = ready.length - toDelete;
+  const blocked = (preview?.plans ?? []).filter((p) => !["ready", "noop"].includes(p.status)).length;
+  const deleted = applied?.results.filter((r) => r.action === "delete" && r.status === "applied").length ?? 0;
+  const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
 
   return (
     <section className="card transfer-card" aria-label="Import">
       <h2>Import into a Vault</h2>
-      <p className="subtle">Write an export into a mount, after leaving out and changing what you choose. Like copying: values are merged into each target secret with check-and-set, keys only on the target are kept, and nothing is deleted.</p>
+      <p className="subtle">Write an export into a mount, after leaving out and changing what you choose. Like copying: values are merged into each target secret with check-and-set, and keys only on the target are kept, unless you choose to delete what isn’t in the file.</p>
 
       <h3 className="editor-h">1. File</h3>
       {file ? (
@@ -317,6 +324,19 @@ function ImportPanel({ reveal, files, onFile, sides }: Props) {
         </div>
       </div>
 
+      <h3 className="editor-h">4. Delete what isn’t in the file <span className="subtle">(optional)</span></h3>
+      <label className="inline-check">
+        <input type="checkbox" checked={deleteMissing} onChange={(e) => { setDeleteMissing(e.target.checked); stale(); }} />
+        Make the target match the file: remove keys the file doesn’t have, and delete secrets under the target that aren’t in it
+      </label>
+      {deleteMissing && (
+        <div className="notice warn">
+          Secrets are soft-deleted (<span className="mono">vault kv undelete</span> restores them) and removed keys stay in the version history.
+          To protect a secret, add it to the file with no data: <span className="mono">{'{"path": "…", "keep": true}'}</span>.
+          The preview lists everything before anything changes.
+        </div>
+      )}
+
       {error && <div className="notice error" role="alert">{error}</div>}
       <div className="row">
         <button type="button" className="btn primary" disabled={busy || !file || !target?.ref} onClick={runPreview}>
@@ -332,14 +352,18 @@ function ImportPanel({ reveal, files, onFile, sides }: Props) {
             {preview.prepared.paths_changed + preview.prepared.keys_changed + preview.prepared.values_changed > 0 &&
               `; changed: ${preview.prepared.paths_changed} path(s), ${preview.prepared.keys_changed} key name(s), ${preview.prepared.values_changed} value(s)`}.
             {" "}{counts.ready ?? 0} to write, {counts.noop ?? 0} already the same
-            {(preview.plans.length - (counts.ready ?? 0) - (counts.noop ?? 0)) > 0 && `, ${preview.plans.length - (counts.ready ?? 0) - (counts.noop ?? 0)} can’t be written`}.
+            {deleteMissing && `, ${toDelete} to delete`}
+            {blocked > 0 && `, ${blocked} can’t be done`}.
+            {preview.prepared.kept > 0 && ` ${plural(preview.prepared.kept, "secret")} kept as they are.`}
           </div>
+          {toDelete > 0 && <div className="notice warn">{plural(toDelete, "secret")} on the target {toDelete === 1 ? "isn’t" : "aren’t"} in the file and will be deleted.</div>}
+          {preview.warnings.map((w) => <div key={w} className="notice warn">{w}</div>)}
           {preview.prepared.problems.map((p) => <div key={p.path} className="notice error">Left out <span className="mono">{p.path}</span>: {p.message}</div>)}
           <PlanList plans={preview.plans.filter((p) => p.status !== "noop")} reveal={reveal} />
           {ready.length > 0 && (
             <div className="row">
               <label className="confirm"><input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} />
-                Write {ready.length} secret{ready.length === 1 ? "" : "s"} to <strong>{target?.label}</strong></label>
+                {toWrite > 0 ? `Write ${plural(toWrite, "secret")}` : ""}{toWrite > 0 && toDelete > 0 ? " and " : ""}{toDelete > 0 ? `${toWrite > 0 ? "delete" : "Delete"} ${plural(toDelete, "secret")}` : ""} {toDelete > 0 ? "in" : "to"} <strong>{target?.label}</strong></label>
               <span className="spacer" />
               <button type="button" className="btn primary" disabled={!confirmed || busy} onClick={runImport}>{busy && <span className="spinner" />} Import</button>
             </div>
@@ -349,16 +373,16 @@ function ImportPanel({ reveal, files, onFile, sides }: Props) {
       {applied && (
         <div className="import-preview" role="status">
           <div className={`notice ${applied.summary.applied ? "info" : "warn"}`}>
-            {applied.summary.applied} written{applied.summary.conflict + applied.summary.denied + applied.summary.error > 0 &&
+            {applied.summary.applied - deleted} written{deleted > 0 && `, ${deleted} deleted`}{applied.summary.conflict + applied.summary.denied + applied.summary.error > 0 &&
               `, ${applied.summary.conflict + applied.summary.denied + applied.summary.error} not written`}.
           </div>
           <ul className="plan-list">
             {applied.results.map((r) => (
               <li key={r.path} className="plan"><div className="plan-head"><span className="mono">{r.target}</span>
                 <span className={`badge ${r.status === "applied" ? "equal" : r.status === "noop" ? "unknown" : r.status === "conflict" ? "different" : "error"}`}>
-                  {{ applied: "Written", noop: "No change", conflict: "Conflict: not written", denied: "Denied", invalid: "Skipped", error: "Failed" }[r.status]}
+                  {r.action === "delete" && r.status === "applied" ? "Deleted" : { applied: "Written", noop: "No change", conflict: "Conflict: not written", denied: "Denied", invalid: "Skipped", error: "Failed" }[r.status]}
                 </span></div>
-                <div className="subtle">{r.status === "applied" ? `v${r.old_version ?? "—"} → v${r.new_version} · ${r.keys.join(", ")}` : r.message}</div></li>
+                <div className="subtle">{r.status !== "applied" ? r.message : r.action === "delete" ? `v${r.old_version} deleted` : `v${r.old_version ?? "—"} → v${r.new_version} · ${r.keys.join(", ")}`}</div></li>
             ))}
           </ul>
         </div>
@@ -368,20 +392,22 @@ function ImportPanel({ reveal, files, onFile, sides }: Props) {
 }
 
 const PLAN_LABEL: Record<string, string> = {
-  ready: "Will be written", noop: "Already the same", conflict: "Changed", denied: "No permission", invalid: "Can’t import", error: "Error",
+  ready: "Will be written", delete: "Will be deleted", noop: "Already the same", conflict: "Changed", denied: "No permission", invalid: "Can’t import", error: "Error",
 };
 
 function PlanList({ plans, reveal }: { plans: ChangePlan[]; reveal: boolean }) {
-  if (!plans.length) return <div className="subtle">Nothing to write: the target already has these values.</div>;
+  if (!plans.length) return <div className="subtle">Nothing to do: the target already matches.</div>;
   return (
     <ul className="plan-list">
       {plans.map((p) => (
         <li key={p.path} className={`plan ${p.status}`}>
           <div className="plan-head">
             <span className="mono"><span className="muted">{p.source.path}</span> <span className="dir-r">→</span> {p.target.name} · {p.target.mount}/{p.target.path}</span>
-            <span className={`badge ${p.status === "ready" ? "equal" : p.status === "conflict" ? "different" : "error"}`}>{PLAN_LABEL[p.status]}</span>
+            <span className={`badge ${p.status === "ready" && p.action !== "delete" ? "equal" : p.status === "conflict" || p.status === "ready" ? "different" : "error"}`}>
+              {PLAN_LABEL[p.status === "ready" && p.action === "delete" ? "delete" : p.status]}</span>
           </div>
-          <div className="subtle">{p.target.state === "absent" ? "New secret on the target" : `Target v${p.target.version ?? "—"} → v${(p.target.version ?? 0) + 1}`}</div>
+          <div className="subtle">{p.action === "delete" ? `Not in the file: target v${p.target.version ?? "—"} is soft-deleted`
+            : p.target.state === "absent" ? "New secret on the target" : `Target v${p.target.version ?? "—"} → v${(p.target.version ?? 0) + 1}`}</div>
           {p.problems.map((m) => <div key={m} className="notice error">{m}</div>)}
           {p.warnings.map((m) => <div key={m} className="notice warn">{m}</div>)}
           <table className="plan-keys"><tbody>
@@ -389,7 +415,8 @@ function PlanList({ plans, reveal }: { plans: ChangePlan[]; reveal: boolean }) {
               <tr key={k.key} className={k.action}>
                 <td className="mono">{k.key}</td>
                 <td><span className={`action ${k.action}`}>{k.action}</span>{k.type_change && <span className="type-tag">type changes</span>}</td>
-                {reveal && <td className="mono vals">{k.action === "update" && <><s>{formatValue(k.target_value, k.type_change)}</s> → </>}{formatValue(k.source_value, k.type_change)}</td>}
+                {reveal && <td className="mono vals">{k.action === "remove" ? <s>{formatValue(k.target_value, false)}</s>
+                  : <>{k.action === "update" && <><s>{formatValue(k.target_value, k.type_change)}</s> → </>}{formatValue(k.source_value, k.type_change)}</>}</td>}
               </tr>
             ))}
           </tbody></table>

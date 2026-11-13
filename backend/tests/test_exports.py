@@ -106,6 +106,39 @@ def test_collisions_and_empty_results_are_left_out_with_a_reason():
     assert p.ignored_paths == 1  # c: every key ignored
 
 
+def test_keep_entries_have_no_data_and_only_protect():
+    with pytest.raises(ValueError, match="keep entry has no data"):
+        ex.ExportSecret(path="a", keep=True, data={"k": "v"})
+    with pytest.raises(ValueError, match="data is required"):
+        ex.ExportSecret(path="a")
+    d = doc(("dev/app", {"k": "v"}))
+    d.secrets.append(ex.ExportSecret(path="dev/precious", keep=True))
+    dumped = d.dump()["secrets"]
+    assert dumped[0] == {"path": "dev/app", "version": 1, "updated": None, "data": {"k": "v"}}  # no "keep": false
+    assert dumped[1] == {"path": "dev/precious", "version": None, "updated": None, "keep": True}
+    assert ex.load(json.loads(json.dumps(d.dump()))) == d
+
+    # Keep entries follow path renames, ignore no rule, and are never written
+    p = prep(d, ignore_paths=["dev/**"], transforms=[{"op": "replace", "find": "dev/", "with": "test/",
+                                                      "target": "paths"}])
+    assert by_path(p) == {} and p.kept == ["test/precious"] and p.ignored_paths == 1
+
+    # A keep entry that collides with a secret: both are left out, and both target paths are held
+    d2 = doc(("a", {"k": "v"}), ("b", {"k": "v"}))
+    d2.secrets.append(ex.ExportSecret(path="old/a", keep=True))
+    p = prep(d2, transforms=[{"op": "replace", "find": "old/", "with": "", "target": "paths"}])
+    assert by_path(p) == {"b": {"k": "v"}} and p.kept == [] and p.held == {"a"}
+
+
+def test_an_export_file_side_skips_keep_entries():
+    import asyncio
+    d = doc(("a", {"k": "v"}))
+    d.secrets.append(ex.ExportSecret(path="kept", keep=True))
+    fv = ex.FileVault(d)
+    assert asyncio.run(fv.kv_tree("export")).secrets == ["a"]
+    assert asyncio.run(fv.kv_read("export", "kept")).state == "absent"
+
+
 def test_replace_needs_text_to_find():
     with pytest.raises(ValueError):
         ex.ImportRules.model_validate({"transforms": [{"op": "replace", "find": ""}]})
@@ -260,7 +293,7 @@ def test_import_with_transforms_preview_apply_and_cas(env, client):
     assert pv.status_code == 200, pv.text
     out = pv.json()
     assert out["prepared"] | {"problems": []} == {"secrets": 1, "ignored_paths": 1, "ignored_keys": 0,
-                                                  "paths_changed": 1, "keys_changed": 0, "values_changed": 2,
+                                                  "paths_changed": 1, "keys_changed": 0, "values_changed": 2, "kept": 0,
                                                   "problems": []}
     (plan,) = out["plans"]
     assert plan["status"] == "ready" and plan["target"]["path"] == f"{env.prefix}/test/app"
@@ -281,6 +314,65 @@ def test_import_with_transforms_preview_apply_and_cas(env, client):
     assert r["results"][0]["status"] == "conflict"
     assert client.post("/api/import/apply", json=body | {"expected": {"nope": None}, "confirm": True}).status_code == 400
     assert client.post("/api/import/apply", json=body | {"expected": expected, "confirm": False}).status_code == 400
+
+
+def test_import_delete_missing_makes_the_target_match_except_keeps(env, client):
+    env.a.put(f"{env.prefix}/dev/app", {"env": "application-dev-env"})
+    env.b.put(f"{env.prefix}/test/app", {"env": "old", "only_b": "goes"})
+    env.b.put(f"{env.prefix}/test/stale", {"x": "1"})
+    env.b.put(f"{env.prefix}/test/deep/er", {"y": "2"})
+    v_precious = env.b.put(f"{env.prefix}/test/precious", {"z": "3"})
+    f = env.export()["file"]
+    f["secrets"].append({"path": "dev/precious", "keep": True})
+    rules = {"transforms": [{"op": "replace", "find": "-dev-", "with": "-test-"},
+                            {"op": "replace", "find": "dev/", "with": "test/", "target": "paths"}]}
+    body = {"export": f, "name": "a.json", "rules": rules, "target": env.side_b}
+
+    # Without delete_missing nothing is removed or deleted, and keep entries do nothing
+    out = client.post("/api/import/preview", json=body).json()
+    assert [(p["path"], p["action"]) for p in out["plans"]] == [("test/app", "write")]
+    assert {k["key"]: k["action"] for k in out["plans"][0]["keys"]} == {"env": "update"}
+    assert out["prepared"]["kept"] == 1
+
+    body["delete_missing"] = True
+    pv = client.post("/api/import/preview", json=body | {"reveal": True})
+    assert pv.status_code == 200, pv.text
+    plans = {p["path"]: p for p in pv.json()["plans"]}
+    assert {p: (x["action"], x["status"]) for p, x in plans.items()} == {
+        "test/app": ("write", "ready"), "test/stale": ("delete", "ready"), "test/deep/er": ("delete", "ready")}
+    assert {k["key"]: k["action"] for k in plans["test/app"]["keys"]} == {"env": "update", "only_b": "remove"}
+    assert plans["test/stale"]["keys"] == [{"key": "x", "action": "remove", "type_change": False, "override": False,
+                                            "source_value": None, "target_value": "1"}]
+
+    # Apply refuses to delete what the file keeps (or what the preview didn't list as a delete)
+    bad = body | {"expected": {"test/precious": v_precious}, "confirm": True}
+    assert client.post("/api/import/apply", json=bad).status_code == 400
+    assert client.post("/api/import/apply", json=bad | {"delete_missing": False}).status_code == 400
+
+    expected = {p: x["target"]["version"] for p, x in plans.items()}
+    r = client.post("/api/import/apply", json=body | {"expected": expected, "confirm": True}).json()
+    assert r["summary"]["applied"] == 3, r
+    assert {x["path"]: x["action"] for x in r["results"]} == {"test/app": "write", "test/stale": "delete",
+                                                                "test/deep/er": "delete"}
+    assert env.b.get(f"{env.prefix}/test/app")[0] == {"env": "application-test-env"}
+    assert env.b.get(f"{env.prefix}/test/stale") == (None, None)  # soft-deleted
+    assert env.b.get(f"{env.prefix}/test/precious")[0] == {"z": "3"}
+    again = client.post("/api/import/preview", json=body).json()["plans"]
+    assert {p["path"]: p["status"] for p in again} == {"test/app": "noop", "test/stale": "noop", "test/deep/er": "noop"}
+
+    # The copy API can't delete: only an import can
+    sides = {"left": env.side_a, "right": env.side_b}
+    for extra in ({"delete": True}, {"exact": True}):
+        ch = {"path": "test/precious", "direction": "left_to_right"} | extra
+        assert client.post("/api/sync/apply", json=sides | {"changes": [ch], "confirm": True}).status_code == 422
+
+    # A secret changed after the preview isn't deleted
+    env.b.put(f"{env.prefix}/test/new", {"n": "1"})
+    plan = {p["path"]: p for p in client.post("/api/import/preview", json=body).json()["plans"]}["test/new"]
+    env.b.put(f"{env.prefix}/test/new", {"n": "2"})
+    r = client.post("/api/import/apply", json=body | {"expected": {"test/new": plan["target"]["version"]},
+                                                      "confirm": True}).json()
+    assert r["results"][0]["status"] == "conflict" and env.b.get(f"{env.prefix}/test/new")[0] == {"n": "2"}
 
 
 # --------------------------------------------------------------------------- CLI
@@ -325,6 +417,34 @@ def test_cli_export_encrypted_then_import_with_rules(cli_env, monkeypatch, capsy
     assert e.b.get(f"{e.prefix}/test/app")[0] == {"env": "application-test-env", "port": 1}
     assert main(args + ["--yes"]) == 0
     assert "0 to write, 1 already the same." in capsys.readouterr().out
+
+
+def test_cli_import_delete_missing(cli_env, monkeypatch, capsys):
+    from lockstep.cli import main
+    e = cli_env
+    e.a.put(f"{e.prefix}/app", {"k": "v"})
+    e.b.put(f"{e.prefix}/app", {"k": "old", "extra": "x"})
+    e.b.put(f"{e.prefix}/stale", {"s": "1"})
+    e.b.put(f"{e.prefix}/precious", {"p": "1"})
+    monkeypatch.setenv("VAULT_TOKEN", "root-a")
+    assert main(["export", "--vault-addr", e.addr_a, "--mount", "app-config", "--prefix", e.prefix,
+                 "--no-encrypt", "-o", "x.json"]) == 0
+    f = json.loads((e.dir / "x.json").read_text())
+    f["secrets"].append({"path": "precious", "keep": True})
+    (e.dir / "x.json").write_text(json.dumps(f))
+    capsys.readouterr()
+    monkeypatch.setenv("VAULT_TOKEN", "root-b")
+    args = ["import", "x.json", "--vault-addr", e.addr_b, "--mount", "app-config", "--prefix", e.prefix,
+            "--delete-missing"]
+    assert main(args + ["--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert "Kept as they are: precious." in out
+    assert "update    app    k (update), extra (remove)" in out and "delete    stale  1 key, v1" in out
+    assert "1 to write, 0 already the same, 1 to delete." in out
+    assert main(args + ["--yes"]) == 0
+    assert "Wrote 1 secret, deleted 1." in capsys.readouterr().out
+    assert e.b.get(f"{e.prefix}/app")[0] == {"k": "v"} and e.b.get(f"{e.prefix}/stale") == (None, None)
+    assert e.b.get(f"{e.prefix}/precious")[0] == {"p": "1"}
 
 
 def test_cli_import_needs_the_key_and_a_terminal(cli_env, monkeypatch, capsys):

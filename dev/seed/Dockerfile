@@ -1,8 +1,8 @@
 # Dev-only seed job, on the same Red Hat Hardened Images as the app.
-ARG PY_BUILDER=registry.access.redhat.com/hi/python:3.14-builder@sha256:cff3c96ae1f37cc7ef71ea4af4088a0e15d4df48e79ee8cf0cca68baed75826b
-ARG PY_RUNTIME=registry.access.redhat.com/hi/python:3.14@sha256:a9ad325f34cf0806b810a58a71a352a8b6321737d5ee669ed962ad26038ca5ae
+ARG PY_BUILDER=registry.access.redhat.com/hi/python:3.14-builder@sha256:4786c5d9367b270bc62fec7890d06fa1463ec03e46993123d1b9946f2f9b46ac
+ARG PY_RUNTIME=registry.access.redhat.com/hi/python:3.14@sha256:59e4dfed0956348b4157a36b4444e379d068e767102a63c4264d04a8d67f6918
 
-ARG JDK_BUILDER=registry.access.redhat.com/hi/openjdk:21-builder@sha256:020e63a80161a01f022bb99c083a344f78c297c76aad0f1df73b87ec81ecf946
+ARG JDK_BUILDER=registry.access.redhat.com/hi/openjdk:21-builder@sha256:c30899bfc6c0d4989e76225db8ac7aca9b86b139a65f542639381c3cac7c9ffa
 
 # Real Java keystores made by keytool, so the JKS/JCEKS reader is tested against genuine files.
 FROM ${JDK_BUILDER} AS keystores

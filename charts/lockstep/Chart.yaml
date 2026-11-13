@@ -2,8 +2,8 @@ apiVersion: v2
 name: lockstep
 description: Compare, inspect and sync KV secrets across HashiCorp Vault clusters.
 type: application
-version: 0.3.0
-appVersion: "0.3.0"
+version: 0.4.0
+appVersion: "0.4.0"
 kubeVersion: ">=1.27.0-0"
 keywords: [vault, hashicorp-vault, secrets, kv, compare, sync, certificates]
 icon: https://getlockstep.cloud/icon.svg
@@ -17,20 +17,14 @@ annotations:
   # The image this chart version runs: update with every release (scripts/check-version.sh checks it)
   artifacthub.io/images: |
     - name: lockstep
-      image: ghcr.io/welshstew/lockstep:0.3.0
+      image: ghcr.io/welshstew/lockstep:0.4.0
       platforms: [linux/amd64, linux/arm64]
   # What changed in this chart version, shown on Artifact Hub: rewrite for every release
   artifacthub.io/changes: |
     - kind: added
-      description: Secret-engine export and import (encrypted by default), with import rules and transforms; compare a Vault against an export file
-    - kind: added
-      description: Override values on one side or both, typed in the UI
-    - kind: added
-      description: Keystore password finder; build comparison profiles by picking what to ignore
-    - kind: added
-      description: JWT sign-in (Vault's JWT auth method), in the UI and the CLI
-    - kind: added
-      description: exportMode value (any, encrypted or off) to control exports
+      description: Imports can make the target match the file, removing keys and soft-deleting secrets it doesn't have; keep entries protect secrets
+    - kind: security
+      description: Rebuilt on updated base images (Python 3.14.10, glibc security fixes)
   artifacthub.io/links: |
     - name: Website
       url: https://getlockstep.cloud

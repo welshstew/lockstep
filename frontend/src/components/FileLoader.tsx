@@ -68,11 +68,13 @@ export function FileLoader({ onLoaded, label = "Open an export file…" }: {
 /** One line describing an opened export. */
 export function FileSummary({ f }: { f: LoadedFile }) {
   const s = f.doc.source;
+  const kept = f.doc.secrets.filter((x) => x.keep).length;
+  const n = f.doc.secrets.length - kept;
   return (
     <span className="file-summary">
       <span className="mono">{f.name}</span>
       <span className="subtle">
-        {s.vault} · {s.mount}{s.prefix ? `/${s.prefix}` : ""} · {f.doc.secrets.length} secret{f.doc.secrets.length === 1 ? "" : "s"}
+        {s.vault} · {s.mount}{s.prefix ? `/${s.prefix}` : ""} · {n} secret{n === 1 ? "" : "s"}{kept ? ` (+${kept} kept)` : ""}
         {" "}· exported {relativeTime(f.doc.created_at)}{f.encrypted ? " · was encrypted" : ""}
       </span>
     </span>

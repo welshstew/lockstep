@@ -100,3 +100,40 @@ def test_export_compare_against_the_file_and_import(page, sandbox, vault_a, vaul
     prev.get_by_role("button", name="Import").click()
     expect(imp.locator(".import-preview .notice")).to_contain_text("1 written")
     assert vault_b.get("app-config", f"{sandbox}/test/app") == {"env": "application-test-env", "dba": "testDBA"}
+
+
+def test_import_that_deletes_what_isnt_in_the_file(page, sandbox, vault_a, vault_b, tmp_path):
+    vault_b.put("app-config", f"{sandbox}/app", {"k": "old", "extra": "goes"})
+    vault_b.put("app-config", f"{sandbox}/stale", {"s": "1"})
+    vault_b.put("app-config", f"{sandbox}/precious", {"p": "1"})
+    f = tmp_path / "hand-made.json"
+    f.write_text(json.dumps({
+        "format": "lockstep.secret-export", "version": 1, "created_at": "2026-11-13T09:00:00Z",
+        "source": {"vault": "Hand made", "mount": "app-config"},
+        "secrets": [{"path": "app", "data": {"k": "new"}}, {"path": "precious", "keep": True}]}))
+    sign_in_userpass(page, "left", "alice", vault="Vault A")
+    sign_in_userpass(page, "right", "alice", vault="Vault B")
+    choose_mount(page, "left", "app-config", sandbox)
+    choose_mount(page, "right", "app-config", sandbox)
+
+    page.get_by_role("tab", name="Export & import").click()
+    imp = page.locator("section[aria-label=Import]")
+    imp.get_by_label("Export file").set_input_files(str(f))
+    expect(imp.locator(".file-chip")).to_contain_text("1 secret (+1 kept)")
+    imp.get_by_label("Import into").select_option("right")
+    imp.get_by_label(re.compile("Make the target match the file")).check()
+    expect(imp.locator(".notice.warn").first).to_contain_text("vault kv undelete")
+    imp.get_by_role("button", name="Preview import").click()
+    prev = imp.locator(".import-preview")
+    expect(prev.locator(".notice.info")).to_contain_text("1 to write, 0 already the same, 1 to delete")
+    expect(prev.locator(".notice.info")).to_contain_text("1 secret kept as they are")
+    expect(prev.locator(".plan", has_text=f"{sandbox}/stale").locator(".badge")).to_have_text("Will be deleted")
+    expect(prev.locator(".plan", has_text=f"{sandbox}/app").locator(".action.remove")).to_have_count(1)
+    expect(prev.locator(".plan", has_text=f"{sandbox}/precious")).to_have_count(0)
+    expect(prev.locator("label.confirm")).to_contain_text("Write 1 secret and delete 1 secret in")
+    prev.locator("label.confirm input").check()
+    prev.get_by_role("button", name="Import").click()
+    expect(imp.locator(".import-preview[role=status] .notice")).to_contain_text("1 written, 1 deleted")
+    assert vault_b.get("app-config", f"{sandbox}/app") == {"k": "new"}
+    assert vault_b.get("app-config", f"{sandbox}/stale") is None
+    assert vault_b.get("app-config", f"{sandbox}/precious") == {"p": "1"}

@@ -21,7 +21,8 @@ from pydantic import ValidationError
 from .. import exports as ex
 from ..api.compare import FileSide, Side, side_connection
 from ..api.connections import client_for
-from ..api.sync import Change, _Ctx, apply_changes, evaluate
+from ..api.exports import ImportScopeError, import_changes, plan_import
+from ..api.sync import _Ctx, apply_changes
 from ..rules import IgnoreKey
 from ..vault import VaultError
 from .connect import CliError, add_side_args, add_tls_args, cli_settings, connect, default_name, revoke
@@ -48,7 +49,8 @@ def add_parsers(sub) -> None:
     i = sub.add_parser("import", help="import an export file into a KV v2 mount",
                        description="Import an export into a mount, after optional rules: leave out paths and "
                                    "keys, then transforms. Values are merged into each target secret with "
-                                   "check-and-set; keys only on the target are kept and nothing is deleted. "
+                                   "check-and-set; keys only on the target are kept and nothing is deleted, unless "
+                                   "--delete-missing makes the target match the file. "
                                    f"An encrypted file's key comes from --key-file, ${KEY_ENV}, or a prompt.")
     i.add_argument("file", help="the export file")
     i.add_argument("--mount", required=True, help="KV v2 mount to import into")
@@ -62,6 +64,10 @@ def add_parsers(sub) -> None:
                         "Text starting with '-' needs the = form: --replace=-dev-=-test-")
     i.add_argument("--replace-path", metavar="FIND=WITH", action="append", default=[],
                    help="replace text in secret paths (repeatable)")
+    i.add_argument("--delete-missing", action="store_true",
+                   help="make the target match the file: remove keys the file doesn't have from each imported "
+                        "secret, and soft-delete secrets under --prefix that aren't in the file (entries with "
+                        "\"keep\": true are left alone). Deleted versions can be restored with vault kv undelete")
     i.add_argument("-y", "--yes", action="store_true", help="don't ask before writing")
     i.add_argument("-n", "--dry-run", action="store_true", help="show what would be written; write nothing")
     i.add_argument("--show-values", action="store_true", help="show old and new values (prints secrets!)")
@@ -139,7 +145,7 @@ async def run_export(args, load_profile) -> int:
     else:
         _write_private(Path(args.output), text)
     log = sys.stderr if to_stdout else sys.stdout
-    n_keys = sum(len(s.data) for s in doc.secrets)
+    n_keys = sum(len(s.data or {}) for s in doc.secrets)
     where = f"{args.mount.strip('/')}" + (f"/{doc.source.prefix}" if doc.source.prefix else "")
     print(f"Exported {len(doc.secrets)} secret{'s' if len(doc.secrets) != 1 else ''} ({n_keys} keys) from "
           f"{t.addr} {where}{'' if to_stdout else f' to {args.output}'}"
@@ -247,23 +253,26 @@ async def run_import(args) -> int:
         target = Side(conn_id=conn.id, mount=args.mount, prefix=args.prefix)
         ctx = _Ctx.direct(side_connection(fside, None), conn, fside, target, settings)
         async with ctx:
-            plans = [(await evaluate(ctx, Change(path=s.path, direction="left_to_right"), args.show_values,
-                                     any_target_version=True))[0] for s in prep.doc.secrets]
-            _print_preview(prep, plans, doc, t.addr, args)
+            try:
+                plans, warnings = await plan_import(ctx, prep, args.delete_missing, args.show_values,
+                                                    settings.max_tree_secrets)
+            except ImportScopeError as e:
+                raise CliError(str(e)) from e
+            _print_preview(prep, plans, warnings, doc, t.addr, args)
             ready = [p for p in plans if p.status == "ready"]
             if not ready or args.dry_run:
                 if args.dry_run:
                     print("Dry run: nothing written.")
                 return 0 if all(p.status in ("ready", "noop") for p in plans) else 1
             if not args.yes:
-                answer = input(f"Write {len(ready)} secret{'s' if len(ready) != 1 else ''} to {t.addr} "
-                               f"{args.mount.strip('/')}? [y/N] ").strip().lower()
+                n_del = sum(p.action == "delete" for p in ready)
+                what = _count(len(ready) - n_del, "secret") + (f" and delete {_count(n_del, 'secret')}" if n_del else "")
+                answer = input(f"Write {what} in {t.addr} {args.mount.strip('/')}? [y/N] ").strip().lower()
                 if answer not in ("y", "yes"):
                     print("Nothing written.")
                     return 1
-            changes = [Change(path=p.path, direction="left_to_right",
-                              expected_target_version=p.target.version if p.target.state != "absent" else None)
-                       for p in ready]
+            changes = import_changes(prep, {p.path: p.target.version if p.target.state != "absent" else None
+                                            for p in ready}, args.delete_missing)
             out = await apply_changes(ctx, changes)
     finally:
         await revoke(conn, settings)
@@ -271,13 +280,18 @@ async def run_import(args) -> int:
         if r.status != "applied":
             print(f"  {r.status:<9} {r.path}: {r.message}")
     s = out.summary
-    print(f"Wrote {s['applied']} secret{'s' if s['applied'] != 1 else ''}"
+    n_del = sum(r.status == "applied" and r.action == "delete" for r in out.results)
+    print(f"Wrote {_count(s['applied'] - n_del, 'secret')}" + (f", deleted {n_del}" if n_del else "")
           + (f"; {s['conflict']} changed meanwhile (not written)" if s["conflict"] else "")
           + (f"; {s['denied'] + s['error']} failed" if s["denied"] + s["error"] else "") + ".")
     return 0 if s["applied"] == len(changes) and all(p.status in ("ready", "noop") for p in plans) else 1
 
 
-def _print_preview(prep: ex.Prepared, plans, doc: ex.ExportDoc, addr: str, args) -> None:
+def _count(n: int, noun: str) -> str:
+    return f"{n} {noun}{'s' if n != 1 else ''}"
+
+
+def _print_preview(prep: ex.Prepared, plans, warnings: list[str], doc: ex.ExportDoc, addr: str, args) -> None:
     src = doc.source
     print(f"From: {args.file} ({src.vault} {src.mount}{'/' + src.prefix if src.prefix else ''}, "
           f"exported {doc.created_at}, {len(doc.secrets)} secrets)")
@@ -287,22 +301,36 @@ def _print_preview(prep: ex.Prepared, plans, doc: ex.ExportDoc, addr: str, args)
     if prep.paths_changed or prep.keys_changed or prep.values_changed:
         print(f"Transforms changed {prep.paths_changed} path(s), {prep.keys_changed} key name(s), "
               f"{prep.values_changed} value(s).")
+    if prep.kept:
+        print(f"Kept as they are: {', '.join(prep.kept)}.")
     for path, msg in sorted(prep.problems.items()):
         print(f"  skipped   {path}: {msg}")
+    for w in warnings:
+        print(f"  warning   {w}")
     width = max((len(p.path) for p in plans), default=0)
     print()
     for p in plans:
         changed = [k for k in p.keys if k.action != "unchanged"]
         if p.status == "noop":
             continue
-        label = {"ready": "new" if p.target.state == "absent" else "update"}.get(p.status, p.status)
-        detail = ", ".join(f"{k.key} ({k.action})" for k in changed) if p.status == "ready" else "; ".join(p.problems)
+        if p.action == "delete":
+            label = "delete" if p.status == "ready" else p.status
+            detail = f"{_count(len(p.keys), 'key')}, v{p.target.version}" if p.status == "ready" else "; ".join(p.problems)
+        else:
+            label = {"ready": "new" if p.target.state == "absent" else "update"}.get(p.status, p.status)
+            detail = ", ".join(f"{k.key} ({k.action})" for k in changed) if p.status == "ready" else "; ".join(p.problems)
         print(f"  {label:<9} {p.path:<{width}}  {detail}")
         if args.show_values and p.status == "ready":
             for k in changed:
+                if k.action == "remove":
+                    print(f"            {k.key}: {json.dumps(k.target_value)} -> (removed)")
+                    continue
                 old = "" if k.action == "add" else f"{json.dumps(k.target_value)} -> "
                 print(f"            {k.key}: {old}{json.dumps(k.source_value)}")
-    ready = sum(p.status == "ready" for p in plans)
-    noop = sum(p.status == "noop" for p in plans)
-    blocked = len(plans) - ready - noop
-    print(f"\n{ready} to write, {noop} already the same" + (f", {blocked} can't be written" if blocked else "") + ".")
+    writes = [p for p in plans if p.action == "write"]
+    ready = sum(p.status == "ready" for p in writes)
+    noop = sum(p.status == "noop" for p in writes)
+    dels = sum(p.status == "ready" for p in plans if p.action == "delete")
+    blocked = sum(p.status not in ("ready", "noop") for p in plans)
+    print(f"\n{ready} to write, {noop} already the same" + (f", {dels} to delete" if args.delete_missing else "")
+          + (f", {blocked} can't be done" if blocked else "") + ".")

@@ -5,9 +5,9 @@
 # have a shell and package tools for build stages. The runtime image is distroless: no
 # shell, no package manager, non-root (65532). That means no shell-form RUN/CMD/HEALTHCHECK
 # in the final stage. Base images are pinned by digest; bump them deliberately.
-ARG PY_BUILDER=registry.access.redhat.com/hi/python:3.14-builder@sha256:cff3c96ae1f37cc7ef71ea4af4088a0e15d4df48e79ee8cf0cca68baed75826b
-ARG PY_RUNTIME=registry.access.redhat.com/hi/python:3.14@sha256:a9ad325f34cf0806b810a58a71a352a8b6321737d5ee669ed962ad26038ca5ae
-ARG NODE_BUILDER=registry.access.redhat.com/hi/nodejs:24-builder@sha256:a79f666c9127faee19a0514e269b9af6a2cdfc6e7f61d9b3832d019b861abb3a
+ARG PY_BUILDER=registry.access.redhat.com/hi/python:3.14-builder@sha256:4786c5d9367b270bc62fec7890d06fa1463ec03e46993123d1b9946f2f9b46ac
+ARG PY_RUNTIME=registry.access.redhat.com/hi/python:3.14@sha256:59e4dfed0956348b4157a36b4444e379d068e767102a63c4264d04a8d67f6918
+ARG NODE_BUILDER=registry.access.redhat.com/hi/nodejs:24-builder@sha256:2bf3f076ad2eb179d8882a3fd8fa740eeb8b21197d95fd0078367698ebb6343c
 
 # The built SPA is the same on every architecture, so build it natively (no emulation in
 # multi-arch builds).

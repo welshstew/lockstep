@@ -37,7 +37,7 @@ jobs:
     permissions: {id-token: write, contents: read}
     steps:
       - name: Install the Lockstep CLI
-        run: pipx install "git+https://github.com/welshstew/lockstep@v0.3.0#subdirectory=backend"
+        run: pipx install "git+https://github.com/welshstew/lockstep@v0.4.0#subdirectory=backend"
 
       - name: Get an ID token for Vault (JWT auth)
         run: |

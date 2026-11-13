@@ -72,12 +72,27 @@ class ExportRules(BaseModel):
 
 
 class ExportSecret(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    """A secret with its data, or a keep entry: a path with "keep": true and no data."""
+
+    model_config = ConfigDict(extra="forbid", json_schema_extra={"oneOf": [
+        {"required": ["data"], "properties": {"keep": {"const": False}}},
+        {"required": ["keep"], "properties": {"keep": {"const": True}, "data": {"maxProperties": 0}}}]})
 
     path: str = Field(min_length=1, description="Relative to source.prefix")
     version: int | None = None
     updated: str | None = None
-    data: dict[str, Any]
+    data: dict[str, Any] | None = Field(default=None, description="The secret's keys and values (not with keep)")
+    keep: bool = Field(default=False, description=(
+        "Leave the target's secret at this path as it is, with no data: it's neither written nor "
+        "deleted, even when an import deletes what isn't in the file"))
+
+    @model_validator(mode="after")
+    def _data_or_keep(self):
+        if self.keep and self.data:
+            raise ValueError(f"{self.path}: a keep entry has no data")
+        if not self.keep and self.data is None:
+            raise ValueError(f"{self.path}: data is required (or keep: true)")
+        return self
 
 
 class ExportSkipped(BaseModel):
@@ -115,7 +130,13 @@ class ExportDoc(BaseModel):
         return v
 
     def dump(self) -> dict:
-        return self.model_dump(mode="json", by_alias=True)
+        out = self.model_dump(mode="json", by_alias=True)
+        for s in out["secrets"]:  # only keep entries say keep (and they have no data)
+            if s["keep"]:
+                s.pop("data", None)
+            else:
+                s.pop("keep")
+        return out
 
 
 class EncryptedSource(BaseModel):
@@ -372,6 +393,10 @@ class Prepared:
     values_changed: int = 0
     # Problems that leave a secret out: two paths renamed onto one, two keys onto one, empty path…
     problems: dict[str, str] = field(default_factory=dict)
+    # Target paths (after transforms) of keep entries: never written or deleted
+    kept: list[str] = field(default_factory=list)
+    # Target paths of entries left out by a problem: never deleted either, since the file meant them
+    held: set[str] = field(default_factory=set)
 
 
 def _norm(p: str) -> str:
@@ -385,8 +410,11 @@ def prepare(doc: ExportDoc, rules: ImportRules | None) -> Prepared:
     ign_paths = [compile_glob(_norm(p)) for p in rules.ignore_paths if p.strip()]
     ign_keys = [(compile_glob(_norm(k.path) or "**"), k.key) for k in rules.ignore_keys]
     out = Prepared(doc=doc)
-    work: list[tuple[str, str, dict]] = []  # (original path, current path, data)
+    work: list[tuple[str, str, dict | None]] = []  # (original path, current path, data; None = keep)
     for s in doc.secrets:
+        if s.keep:  # ignores don't apply: a keep entry only protects
+            work.append((s.path, s.path, None))
+            continue
         if any(rx.match(s.path) for rx in ign_paths):
             out.ignored_paths += 1
             continue
@@ -413,6 +441,9 @@ def prepare(doc: ExportDoc, rules: ImportRules | None) -> Prepared:
                 if new != path:
                     out.paths_changed += 1
                 nxt.append((orig, new, data))
+                continue
+            if data is None:
+                nxt.append((orig, path, data))
                 continue
             new_data: dict[str, Any] = {}
             for k, v in data.items():
@@ -443,7 +474,9 @@ def prepare(doc: ExportDoc, rules: ImportRules | None) -> Prepared:
                 out.problems[o] = f"{len(origs)} secrets become '{path}': {', '.join(sorted(origs))}"
     versions = {s.path: s for s in doc.secrets}
     secrets = [ExportSecret(path=path, version=versions[orig].version, updated=versions[orig].updated, data=data)
-               for orig, path, data in work if orig not in out.problems]
+               for orig, path, data in work if orig not in out.problems and data is not None]
+    out.kept = sorted(path for orig, path, data in work if orig not in out.problems and data is None)
+    out.held = {path for orig, path, _ in work if orig in out.problems and path}
     out.doc = doc.model_copy(update={"secrets": sorted(secrets, key=lambda s: s.path)})
     return out
 
@@ -457,7 +490,7 @@ class FileVault:
 
     def __init__(self, doc: ExportDoc):
         self.doc = doc
-        self._secrets = {s.path: s for s in doc.secrets}
+        self._secrets = {s.path: s for s in doc.secrets if not s.keep}
 
     async def __aenter__(self) -> "FileVault":
         return self
@@ -481,6 +514,9 @@ class FileVault:
         raise VaultError(404, "export files keep no version history", path)
 
     async def kv_write(self, mount: str, path: str, data: dict, cas: int | None) -> int:
+        raise VaultError(403, "an export file is read-only", path)
+
+    async def kv_delete(self, mount: str, path: str) -> None:
         raise VaultError(403, "an export file is read-only", path)
 
     async def capabilities(self, paths: list[str]) -> dict[str, list[str]]:

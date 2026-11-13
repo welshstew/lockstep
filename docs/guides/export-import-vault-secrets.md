@@ -107,12 +107,49 @@ lockstep import dev.json --vault-addr https://vault-test.example.com --mount app
 ### How it writes
 
 An import writes the same way a copy does:
-- **Merge:** values are merged into each target secret. Keys that exist only on the target are kept, and nothing is deleted.
+- **Merge:** values are merged into each target secret. Keys that exist only on the target are kept, and nothing is deleted (unless you [delete what isn't in the file](#make-the-target-match-the-file)).
 - **Check-and-set:** each write is checked against the version the preview saw. A secret that changed in the meantime is reported as a conflict, not overwritten. Preview again and re-run.
 - **Collisions:** if the rules would map two exported paths (or keys) onto the same target, that secret is left out, with the reason. Lockstep doesn't guess which one should win.
 - **Audit:** every write is audit-logged, without values.
 
 The CLI exits `0` when everything was written (or there was nothing to do). It exits `1` when some secrets weren't written, and `2` when it couldn't run.
+
+## Make the target match the file
+
+A merge never removes anything, so a key renamed in dev leaves its old name behind in test, and a secret retired in dev lives on in test. To make the target an exact copy, tick **Make the target match the file** (step 4), or pass `--delete-missing`:
+- each imported secret is written with only the file's keys; other keys are **removed** in the new version (the old version stays in Vault's history);
+- secrets under the target's mount and prefix that the file doesn't have are **soft-deleted**. `vault kv undelete` brings them back.
+
+The preview lists every removed key and every deleted secret before anything happens:
+
+```text
+  update    test/app      env (update), legacy_flag (remove)
+  delete    test/old-job  3 keys, v7
+
+1 to write, 4 already the same, 1 to delete.
+```
+
+### Keeping secrets the file doesn't have
+
+Some target secrets belong to the target only: test's own credentials, a secret another team manages. Add them to the file with `"keep": true` and no data, and the import leaves them exactly as they are:
+
+```json
+{
+  "format": "lockstep.secret-export",
+  "secrets": [
+    {"path": "dev/app", "version": 12, "data": {"env": "application-dev-env"}},
+    {"path": "dev/test-only-creds", "keep": true}
+  ]
+}
+```
+
+Keep entries go through the path transforms like everything else, so `dev/test-only-creds` above protects `test/test-only-creds` after a `dev/` → `test/` rename. Leave-out rules don't apply to them. To add keep entries to an encrypted export, export it again with **Encrypt** unticked (or `--no-encrypt`), edit it, and handle the plain file like the secrets it holds.
+
+Things to know:
+- Secrets left out by your **Leave out** rules count as *not in the file*, so they're deleted unless kept.
+- Only what the preview listed is deleted, at the version it saw. A secret changed since then is a conflict; one created since then is left alone. Preview again to include it.
+- Folders the token can't list are reported, and nothing in them is deleted.
+- The token needs the `delete` capability on `<mount>/data/…` as well as `create` and `update`.
 
 ## Next steps
 

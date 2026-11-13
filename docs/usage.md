@@ -249,10 +249,28 @@ Exporting reads every secret with your token, so you only export what you can re
    - **Leave out** secrets and keys, as when exporting.
    - **Transforms**, applied in order: **Replace text**, **Add prefix**, **Add suffix**, **UPPERCASE**, **lowercase**, on **values** (text values only), **key names** or **paths**. Each can be limited to paths matching a glob, and to keys matching a pattern. For example, replace `application-dev-env` with `application-test-env` in values, `devDBA` with `testDBA`, and `dev/` with `test/` in paths. A transform's path filter sees the path as earlier transforms left it.
    - **Save rules** downloads them as JSON ([schema](https://getlockstep.cloud/schemas/lockstep-import-rules-v1.json)); **Load rules** reads them back, and `lockstep import --rules` takes the same file.
-4. **Preview import** shows what the rules did (left out, changed) and, per target secret, the keys to add or update and the version it will become. Secrets that two paths (or keys) would collide on are left out with the reason, never merged by guesswork.
-5. Tick the confirmation and **Import**.
+4. **Delete what isn't in the file** (optional): make the target match the file. See [below](#deleting-what-isnt-in-the-file).
+5. **Preview import** shows what the rules did (left out, changed) and, per target secret, the keys to add, update or remove and the version it will become, and any secrets it will delete. Secrets that two paths (or keys) would collide on are left out with the reason, never merged by guesswork.
+6. Tick the confirmation and **Import**.
 
 Importing writes like [copying](#3-copy-values-between-the-sides): values are merged into each target secret (keys only on the target are kept, nothing is deleted), with check-and-set against the version the preview saw, so a secret changed in the meantime is reported as a conflict, not overwritten. Every write is audit-logged without values, with `"source_auth": "file"`.
+
+#### Deleting what isn't in the file
+
+With **Make the target match the file** ticked (`lockstep import --delete-missing`), the import treats the file as the whole truth for the target's mount and prefix:
+- each imported secret is written with only the file's keys, so keys only on the target are removed (the new version replaces the old one, which stays in the version history);
+- secrets under the target's prefix that aren't in the file are **soft-deleted**: their latest version is deleted, and `vault kv undelete` restores it. Nothing is destroyed.
+
+To protect a secret, list it in the file with `"keep": true` and no data. It's left exactly as it is: neither written nor deleted. Keep entries follow path transforms, like the other paths in the file:
+
+```json
+"secrets": [
+  {"path": "payments/db", "version": 4, "data": {"user": "app", "password": "…"}},
+  {"path": "payments/legacy-api", "keep": true}
+]
+```
+
+Only what the preview listed is deleted, and only at the version the preview saw: a secret changed in the meantime is a conflict, and one created since the preview is left alone. Secrets left out by **Leave out** rules count as not in the file, so they're deleted too unless kept. Folders the token can't list are reported and nothing in them is deleted. If the target holds more secrets than Lockstep lists in one go (`LOCKSTEP_MAX_TREE_SECRETS`), the preview refuses rather than guess: import under a narrower prefix. Deleting needs the `delete` capability on `<mount>/data/…`. Every delete is audit-logged with `"action": "delete"`.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/17-import-dark.png">

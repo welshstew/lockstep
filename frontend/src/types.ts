@@ -138,7 +138,7 @@ export interface SyncEndpoint {
 
 export interface KeyPlan {
   key: string;
-  action: "add" | "update" | "unchanged";
+  action: "add" | "update" | "unchanged" | "remove";
   type_change: boolean;
   override: boolean;
   source_value: unknown;
@@ -150,6 +150,7 @@ export type PlanStatus = "ready" | "noop" | "conflict" | "denied" | "invalid" | 
 export interface ChangePlan {
   path: string;
   direction: SyncDirection;
+  action?: "write" | "delete";
   source: SyncEndpoint;
   target: SyncEndpoint;
   keys: KeyPlan[];
@@ -164,6 +165,7 @@ export type ResultStatus = "applied" | "noop" | "conflict" | "denied" | "invalid
 export interface ChangeResult {
   path: string;
   direction: SyncDirection;
+  action?: "write" | "delete";
   target: string;
   status: ResultStatus;
   overridden: string[];
@@ -404,7 +406,9 @@ export interface ExportSecret {
   path: string;
   version: number | null;
   updated: string | null;
-  data: Record<string, unknown>;
+  data?: Record<string, unknown> | null;
+  /** A keep entry (no data): the target's secret is left as it is, never written or deleted. */
+  keep?: boolean;
 }
 
 export interface ExportSkipped {
@@ -466,8 +470,9 @@ export interface ImportRules {
 export interface ImportPreview {
   prepared: {
     secrets: number; ignored_paths: number; ignored_keys: number;
-    paths_changed: number; keys_changed: number; values_changed: number;
+    paths_changed: number; keys_changed: number; values_changed: number; kept: number;
     problems: { path: string; message: string }[];
   };
   plans: ChangePlan[];
+  warnings: string[];
 }
