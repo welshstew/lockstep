@@ -1,6 +1,6 @@
-// The changeset: which values the user has chosen to copy, and in which direction, plus
-// values typed in to override a side. Nothing here talks to Vault: the server re-reads
-// everything at preview/apply time. Override values are the only values kept here.
+// The changeset: which values the user has chosen to copy, and in which direction, values
+// typed in to override a side, and keys to remove from a side. Nothing here talks to Vault:
+// the server re-reads everything at preview/apply time. Typed values are the only values kept here.
 import type { CompareResult, KeyDiff, SecretDiff } from "./types";
 
 export type Direction = "left_to_right" | "right_to_left";
@@ -10,6 +10,7 @@ export interface Staged {
   direction: Direction; // left_to_right writes the right side
   keys: "all" | string[]; // copied from the source; "all" = every key the source has, [] = none
   set?: Record<string, unknown>; // override: typed values written to the target
+  remove?: string[]; // keys removed from the target
 }
 
 export type Side = "left" | "right";
@@ -38,9 +39,29 @@ function sourceKeys(s: SecretDiff, d: Direction): string[] {
   return s.keys.filter((k) => k.status !== other && k.status !== "unknown").map((k) => k.key);
 }
 
+/** Keys an entry takes over itself (typed or removed): those aren't copied. */
+const claimed = (e: Staged | undefined) => new Set([...Object.keys(e?.set ?? {}), ...(e?.remove ?? [])]);
+
+/** Write an entry back, tidied: empty parts dropped, the entry dropped when nothing is left. */
+function put(cs: Changeset, s: SecretDiff, d: Direction, e: Omit<Staged, "path" | "direction">): Changeset {
+  const next = { ...cs };
+  const set = e.set && Object.keys(e.set).length ? e.set : undefined;
+  const remove = e.remove && e.remove.length ? [...e.remove].sort() : undefined;
+  const keys = e.keys === "all" ? "all" : e.keys.filter((k) => !(set && k in set) && !remove?.includes(k));
+  if (keys === "all" || keys.length || set || remove) {
+    next[id(s.path, d)] = { path: s.path, direction: d, keys, ...(set ? { set } : {}), ...(remove ? { remove } : {}) };
+  } else {
+    delete next[id(s.path, d)];
+  }
+  return next;
+}
+
+const explicit = (s: SecretDiff, d: Direction, e: Staged | undefined): string[] =>
+  !e ? [] : e.keys === "all" ? sourceKeys(s, d).filter((k) => !claimed(e).has(k)) : e.keys;
+
 export function isKeyStaged(cs: Changeset, path: string, key: string, d: Direction): boolean {
   const e = cs[id(path, d)];
-  return !!e && !(e.set && key in e.set) && (e.keys === "all" || e.keys.includes(key));
+  return !!e && !claimed(e).has(key) && (e.keys === "all" || e.keys.includes(key));
 }
 
 /** Override values staged for one side of a secret, if any. */
@@ -50,7 +71,12 @@ export function overridesFor(cs: Changeset, path: string, side: Side): Record<st
 }
 
 export function isKeyOverridden(cs: Changeset, path: string, key: string, side: Side): boolean {
-  return !!overridesFor(cs, path, side) && key in overridesFor(cs, path, side)!;
+  const set = overridesFor(cs, path, side);
+  return !!set && key in set;
+}
+
+export function isKeyRemoved(cs: Changeset, path: string, key: string, side: Side): boolean {
+  return !!cs[id(path, targetDirection(side))]?.remove?.includes(key);
 }
 
 export function hasOverrides(cs: Changeset): boolean {
@@ -63,43 +89,56 @@ export function canOverride(s: SecretDiff, side: Side): boolean {
   return ["present", "absent", "deleted"].includes(s[side].state);
 }
 
-/** Stage (or with null, remove) typed values for one side. Those keys stop being copied there. */
-export function setOverride(cs: Changeset, s: SecretDiff, side: Side, values: Record<string, unknown> | null): Changeset {
+/** Stage a typed value for one key on one side (undefined: drop it). That key stops being copied or removed there. */
+export function setKeyValue(cs: Changeset, s: SecretDiff, side: Side, key: string, value: unknown | undefined): Changeset {
   const d = targetDirection(side);
-  const next = { ...cs };
-  const e = next[id(s.path, d)];
-  const set = values && Object.keys(values).length ? { ...values } : undefined;
-  let keys: Staged["keys"] = e?.keys ?? [];
-  if (set && keys === "all") keys = sourceKeys(s, d);
-  if (set && keys !== "all") keys = keys.filter((k) => !(k in set));
-  if ((keys === "all" || keys.length) || set) next[id(s.path, d)] = { path: s.path, direction: d, keys, ...(set ? { set } : {}) };
-  else delete next[id(s.path, d)];
-  return next;
+  const e = cs[id(s.path, d)];
+  const set = { ...(e?.set ?? {}) };
+  if (value === undefined) delete set[key];
+  else set[key] = value;
+  const keys = e?.keys === "all" && value !== undefined ? explicit(s, d, e) : e?.keys ?? [];
+  return put(cs, s, d, { keys, set, remove: (e?.remove ?? []).filter((k) => k !== key) });
 }
 
-export function isSecretStaged(cs: Changeset, path: string, d: Direction): boolean {
-  return cs[id(path, d)]?.keys === "all";
+/** Stage (or unstage) removing a key from one side. A removed key isn't copied or typed there. */
+export function toggleRemove(cs: Changeset, s: SecretDiff, side: Side, key: string): Changeset {
+  const d = targetDirection(side);
+  const e = cs[id(s.path, d)];
+  if (e?.remove?.includes(key)) return put(cs, s, d, { ...e, remove: e.remove.filter((k) => k !== key) });
+  const set = Object.fromEntries(Object.entries(e?.set ?? {}).filter(([k]) => k !== key));
+  return put(cs, s, d, { keys: explicit(s, d, e).filter((k) => k !== key), set, remove: [...(e?.remove ?? []), key] });
+}
+
+/** Keys of this secret that could be copied this way and aren't typed or removed on the target. */
+function copyCandidates(cs: Changeset, s: SecretDiff, d: Direction): string[] {
+  const taken = claimed(cs[id(s.path, d)]);
+  return s.keys.filter((k) => canCopyKey(s, k, d) && !taken.has(k.key)).map((k) => k.key);
+}
+
+/** Is every key that can be copied this way staged? (With the "all keys" button, or one by one.) */
+export function isSecretStaged(cs: Changeset, s: SecretDiff, d: Direction): boolean {
+  const e = cs[id(s.path, d)];
+  if (!e) return false;
+  if (e.keys === "all") return true;
+  const want = copyCandidates(cs, s, d);
+  return want.length > 0 && want.every((k) => (e.keys as string[]).includes(k));
 }
 
 export function stagedKeyCount(cs: Changeset, s: SecretDiff): number {
   return (["left_to_right", "right_to_left"] as Direction[]).reduce((n, d) => {
     const e = cs[id(s.path, d)];
     if (!e) return n;
-    const set = Object.keys(e.set ?? {});
-    const copied = e.keys === "all" ? s.keys.filter((k) => canCopyKey(s, k, d) && !set.includes(k.key)).length : e.keys.length;
-    return n + copied + set.length;
+    const taken = claimed(e);
+    const copied = e.keys === "all" ? s.keys.filter((k) => canCopyKey(s, k, d) && !taken.has(k.key)).length : e.keys.length;
+    return n + copied + taken.size;
   }, 0);
 }
 
-/** Remove one key from an entry, expanding "all" into an explicit list first. */
+/** Remove one copied key from an entry, expanding "all" into an explicit list first. */
 function without(cs: Changeset, s: SecretDiff, d: Direction, key: string): Changeset {
   const e = cs[id(s.path, d)];
   if (!e) return cs;
-  const keys = (e.keys === "all" ? sourceKeys(s, d) : e.keys).filter((k) => k !== key);
-  const next = { ...cs };
-  if (keys.length || e.set) next[id(s.path, d)] = { ...e, keys };
-  else delete next[id(s.path, d)];
-  return next;
+  return put(cs, s, d, { ...e, keys: explicit(s, d, e).filter((k) => k !== key) });
 }
 
 export function toggleKey(cs: Changeset, s: SecretDiff, key: string, d: Direction): Changeset {
@@ -107,24 +146,47 @@ export function toggleKey(cs: Changeset, s: SecretDiff, key: string, d: Directio
   // A key can only travel one way: staging it here unstages the other direction.
   const next = without(cs, s, opposite(d), key);
   const e = next[id(s.path, d)];
-  const keys = e ? (e.keys === "all" ? sourceKeys(s, d) : e.keys) : [];
-  const set = e?.set ? Object.fromEntries(Object.entries(e.set).filter(([k]) => k !== key)) : undefined;
-  return { ...next, [id(s.path, d)]: { path: s.path, direction: d, keys: [...keys, key].sort(),
-                                        ...(set && Object.keys(set).length ? { set } : {}) } };
+  const set = Object.fromEntries(Object.entries(e?.set ?? {}).filter(([k]) => k !== key));
+  return put(next, s, d, { keys: [...explicit(s, d, e), key].sort(), set, remove: (e?.remove ?? []).filter((k) => k !== key) });
 }
 
+/** Copy every key this way (or, when they all are already, none). Typed and removed keys stay. */
 export function toggleSecret(cs: Changeset, s: SecretDiff, d: Direction): Changeset {
+  return stageSecret(cs, s, d, !isSecretStaged(cs, s, d));
+}
+
+function stageSecret(cs: Changeset, s: SecretDiff, d: Direction, on: boolean): Changeset {
+  const e = cs[id(s.path, d)];
+  if (!on) return e ? put(cs, s, d, { ...e, keys: [] }) : cs;
+  const back = cs[id(s.path, opposite(d))];
+  const next = back ? put(cs, s, opposite(d), { ...back, keys: [] }) : cs;
+  return put(next, s, d, { ...(e ?? {}), keys: "all" });
+}
+
+/** Stage every secret in a list one way, or, if they all are already, unstage them. */
+export function toggleSecrets(cs: Changeset, secrets: SecretDiff[], d: Direction): Changeset {
+  const can = secrets.filter((s) => canCopySecret(s, d));
+  const on = !can.every((s) => isSecretStaged(cs, s, d));
+  return can.reduce((acc, s) => stageSecret(acc, s, d, on), cs);
+}
+
+export function allStaged(cs: Changeset, secrets: SecretDiff[], d: Direction): boolean {
+  const can = secrets.filter((s) => canCopySecret(s, d));
+  return can.length > 0 && can.every((s) => isSecretStaged(cs, s, d));
+}
+
+/** Take one key out of a change (copied, typed or removed), e.g. from the review. */
+export function unstageKey(cs: Changeset, s: SecretDiff, d: Direction, key: string): Changeset {
+  const e = cs[id(s.path, d)];
+  if (!e) return cs;
+  const set = Object.fromEntries(Object.entries(e.set ?? {}).filter(([k]) => k !== key));
+  return put(cs, s, d, { keys: explicit(s, d, e).filter((k) => k !== key), set, remove: (e.remove ?? []).filter((k) => k !== key) });
+}
+
+/** Drop a whole change. */
+export function unstageChange(cs: Changeset, s: SecretDiff, d: Direction): Changeset {
   const next = { ...cs };
-  const set = next[id(s.path, d)]?.set; // overrides on the target stay staged either way
-  if (isSecretStaged(cs, s.path, d)) {
-    if (set) next[id(s.path, d)] = { path: s.path, direction: d, keys: [], set };
-    else delete next[id(s.path, d)];
-    return next;
-  }
-  const back = next[id(s.path, opposite(d))];
-  if (back?.set) next[id(s.path, opposite(d))] = { ...back, keys: [] };
-  else delete next[id(s.path, opposite(d))];
-  next[id(s.path, d)] = { path: s.path, direction: d, keys: "all", ...(set ? { set } : {}) };
+  delete next[id(s.path, d)];
   return next;
 }
 
@@ -136,19 +198,26 @@ export function toApiChanges(cs: Changeset, result: CompareResult) {
     if (!s) return [];
     const [src, tgt] = e.direction === "left_to_right" ? [s.left, s.right] : [s.right, s.left];
     const set = e.set && Object.keys(e.set).length ? e.set : null;
-    // "all" with overrides: every source key except the overridden ones
-    const keys = e.keys === "all" ? (set ? sourceKeys(s, e.direction).filter((k) => !(k in set)) : null) : e.keys;
-    if (keys && !keys.length && !set) return [];
+    const remove = e.remove?.length ? e.remove : null;
+    // "all" with typed or removed keys: every source key except those
+    const keys = e.keys === "all" ? (set || remove ? explicit(s, e.direction, e) : null) : e.keys;
+    if (keys && !keys.length && !set && !remove) return [];
     return [{
       path: s.left_path || s.path,
       right_path: s.right_path || s.path,
       direction: e.direction,
       keys,
       ...(set ? { set } : {}),
+      ...(remove ? { remove } : {}),
       expected_target_version: tgt.state === "present" || tgt.state === "deleted" ? tgt.version : null,
       expected_source_version: src.version,
     }];
   });
+}
+
+/** The compared secret a change (from the API) belongs to. */
+export function secretFor(result: CompareResult, path: string, rightPath?: string): SecretDiff | undefined {
+  return result.secrets.find((s) => (s.left_path || s.path) === path && (s.right_path || s.path) === (rightPath ?? path));
 }
 
 export function changesetSize(cs: Changeset, result: CompareResult): { keys: number; secrets: number } {

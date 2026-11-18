@@ -14,6 +14,8 @@ Safety rules, applied the same way by preview and apply:
     saw when comparing. If the target changed since, the item is a conflict and isn't written.
   * Keys that exist only on the target are kept, unless a change says `exact` (an import that
     deletes what isn't in the file): then the new version holds only the copied keys.
+  * A change can `remove` named keys from the target: the new version doesn't have them (older
+    versions still do).
   * A `delete` change soft-deletes the target's latest version (KV v2; `vault kv undelete`
     brings it back). It's checked against the version the user saw, like a write.
   * Every attempted write is audit-logged (who, what, where, versions, outcome), never values.
@@ -62,16 +64,21 @@ class Change(BaseModel):
     expected_target_version: int | None = None  # from the compare; None means the target was absent
     expected_source_version: int | None = None  # informational: warns if the source moved
     exact: bool = False  # the new version holds only the copied/set keys: other target keys are removed
+    remove: list[str] | None = Field(default=None, max_length=MAX_SET_KEYS)  # target keys to drop
     delete: bool = False  # soft-delete the target's latest version (nothing is copied)
 
     @model_validator(mode="after")
     def _check(self):
         if self.delete:
-            if self.keys or self.set or self.exact:
+            if self.keys or self.set or self.exact or self.remove:
                 raise ValueError(f"{self.path}: a delete can't also copy or set values")
             return self
-        if self.keys is not None and not self.keys and not self.set:
-            raise ValueError(f"nothing to do for {self.path}: no keys to copy and no values to set")
+        if self.keys is not None and not self.keys and not self.set and not self.remove:
+            raise ValueError(f"nothing to do for {self.path}: no keys to copy, set or remove")
+        if self.remove:
+            both = set(self.remove) & (set(self.keys or []) | set(self.set or {}))
+            if both:
+                raise ValueError(f"{', '.join(sorted(both))}: both removed and written in {self.path}")
         if self.set:
             if any(not k or len(k) > 512 for k in self.set):
                 raise ValueError("override key names must be 1-512 characters")
@@ -263,7 +270,9 @@ async def evaluate(ctx: _Ctx, change: Change, reveal: bool,
 
     overrides = change.set or {}
     source_data = (src.data or {}) if change.copies else {}
-    keys = change.keys if change.keys is not None else sorted(k for k in source_data if k not in overrides)
+    removing = set(change.remove or [])
+    keys = change.keys if change.keys is not None else sorted(
+        k for k in source_data if k not in overrides and k not in removing)
     missing = [k for k in keys if k not in source_data]
     if missing:
         problems.append(f"Not in the source: {', '.join(missing)}")
@@ -294,8 +303,12 @@ async def evaluate(ctx: _Ctx, change: Change, reveal: bool,
             source_value=new if reveal else None,
             target_value=target_data.get(k) if reveal else None))
     if change.exact:  # target keys the import doesn't have
-        key_plans += [KeyPlan(key=k, action="remove", target_value=target_data[k] if reveal else None)
-                      for k in sorted(set(target_data) - set(new_values))]
+        removing |= set(target_data) - set(new_values)
+    removing &= set(target_data)  # removing a key the target doesn't have changes nothing
+    key_plans += [KeyPlan(key=k, action="remove", target_value=target_data[k] if reveal else None)
+                  for k in sorted(removing)]
+    if removing and not set(target_data) - removing and not new_values:
+        warnings.append("No keys will be left: the new version is empty. Older versions keep their values.")
 
     can_write = bool(WRITE_CAPS & set(caps))
     if actual != expected:
@@ -308,7 +321,8 @@ async def evaluate(ctx: _Ctx, change: Change, reveal: bool,
     if all(k.action == "unchanged" for k in key_plans):
         return plan("noop", key_plans, can_write), None, actual
 
-    return plan("ready", key_plans, can_write), new_values if change.exact else target_data | new_values, actual
+    kept = {k: v for k, v in target_data.items() if k not in removing}
+    return plan("ready", key_plans, can_write), new_values if change.exact else kept | new_values, actual
 
 
 def _evaluate_delete(change: Change, tgt, caps, reveal, any_target_version, problems, plan, tconn, tmount, tpath):

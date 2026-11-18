@@ -212,25 +212,32 @@ def test_override_values_on_both_sides(page, sandbox, vault_a, vault_b):
     compare(page)
     r = expand(page, "svc")
 
-    r.get_by_role("button", name="Override both").click()
-    editor = r.locator(".override-editor")
-    expect(editor.get_by_label("New value for password")).to_have_class(re.compile("masked-input"))
-    editor.get_by_label("New value for password").fill("rotated-pw")
-    editor.get_by_label("New key name").fill("rotated_at")
-    editor.get_by_role("button", name="＋ Add key").click()
-    editor.get_by_label("New value for rotated_at").fill("2026")
-    editor.locator(".override-row", has_text="rotated_at").get_by_label("JSON").check()
-    editor.get_by_role("button", name="Stage override").click()
+    # Values are edited in place, on each side
+    for which in ("left", "right"):
+        cells = key_row(r, "password").locator(".val-cell")
+        cells.nth(0 if which == "left" else 1).get_by_role("button", name="Edit").click()
+        box = r.get_by_label(re.compile(rf"New value for password on .*{'Vault A' if which == 'left' else 'Vault B'}"))
+        expect(box).to_have_class(re.compile("masked-input"))  # Show values is off
+        box.fill("rotated-pw")
+        r.get_by_role("button", name="Set value").click()
+    expect(key_row(r, "password").locator(".val-cell.staged.set")).to_have_count(2)
 
-    expect(key_row(r, "password").locator(".override-tag")).to_have_count(2)
-    expect(r.locator(".override-new")).to_have_count(2)
+    r.get_by_label("New key name").fill("rotated_at")
+    r.get_by_role("button", name="＋ Add to both").click()
+    for box in r.get_by_label(re.compile("New value for rotated_at")).all():
+        box.fill("2026")
+    editing = key_row(r, "rotated_at").locator(".val-cell.editing")
+    for _ in range(2):  # each Set closes that editor
+        editing.first.get_by_label("JSON").check()
+        editing.first.get_by_role("button", name="Set value").click()
+    expect(key_row(r, "rotated_at").locator(".val-cell.staged.set")).to_have_count(2)
     expect(page.locator(".changeset-bar")).to_contain_text("4 keys staged in 1 secret")
 
     page.get_by_role("button", name="Review & apply…").click()
     dialog = page.locator("dialog.review")
     expect(dialog.locator(".plan .badge", has_text="Will be written")).to_have_count(2)
     expect(dialog.locator(".plan .muted", has_text="Typed values")).to_have_count(2)
-    expect(dialog.get_by_role("button", name="Save as plan")).to_be_disabled()
+    expect(dialog.get_by_role("button", name="Save as plan")).to_be_disabled()  # until typed values are acknowledged
     expect(dialog).not_to_contain_text("rotated-pw")  # values stay hidden in the review without Show values
     dialog.locator("label.confirm input").check()
     dialog.get_by_role("button", name="Apply").click()

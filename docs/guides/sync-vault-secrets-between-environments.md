@@ -21,7 +21,7 @@ This guide covers what can go wrong when you sync KV v2 secrets between environm
 Lockstep applies the same rules to every copy, from the web UI or the command line:
 1. **Review first.** You stage copies key by key or secret by secret, in either direction. A review shows exactly what each target gets: which keys are added or updated, the version change, and whether you're allowed to write there.
 2. **Check-and-set on every write.** Each write tells Vault which version it expects to replace (KV v2 `cas`). If the target changed since you compared, Vault rejects the write and Lockstep reports a conflict instead of overwriting.
-3. **Merge, never delete.** Copied keys are merged into the target's current data. Keys that exist only on the target stay, and Lockstep never deletes a secret.
+3. **Merge; delete only on request.** Copied keys are merged into the target's current data. Keys that exist only on the target stay. A key goes only if you press **Delete** on it, and even then the target's older versions keep it. Lockstep never deletes a secret from the compare view.
 4. **Values read fresh from the source.** When you apply, Lockstep reads the source again and writes what's there. Copied values never pass through the browser or through a file. (To set a value yourself, such as a rotated password, use an **override**: it goes through the same review and check-and-set write.)
 5. **Audit log without values.** Every write is logged with who made it, from where to where, the versions and the outcome, but never the values.
 6. **"No access" is not "missing".** A secret you can't read on either side can't be copied.
@@ -34,7 +34,7 @@ Compare, stage copies with ← and →, review, then **Apply**. This suits someo
 
 ### 2. As a sync plan, for someone else to apply
 
-Often the person who spots the differences isn't allowed to write to production. In the review, **Save as plan** downloads a signed file that holds paths, keys, directions and versions, never values. It also serves as a report of what needs updating, and from where.
+Often the person who spots the differences isn't allowed to write to production. In the review, **Save as plan** downloads a signed file that holds paths, keys, directions and versions. Copied values are never in it; values you typed yourself are, if you agree to it. It also serves as a report of what needs updating, and from where.
 
 Anyone with write access to the targets opens the plan in Lockstep, checks it against both Vaults, and applies it. **If anything in it changed since the plan was made, nothing is written**, and the plan has to be made again. See [Sync plans](../usage.md#sync-plans).
 

@@ -1,15 +1,14 @@
-import { useEffect, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { api } from "../api";
 import {
-  canCopyKey, canCopySecret, canOverride, type Changeset, type Direction, isKeyOverridden, isKeyStaged,
-  isSecretStaged, overridesFor, setOverride, type Side, stagedKeyCount, toggleKey, toggleSecret,
+  canCopyKey, canCopySecret, canOverride, type Changeset, type Direction, isKeyOverridden, isKeyRemoved, isKeyStaged,
+  isSecretStaged, overridesFor, setKeyValue, type Side, stagedKeyCount, toggleKey, toggleRemove, toggleSecret,
 } from "../staging";
 import { keyIgnored, literalSafe, pathIgnored, toggleIgnoreKey, toggleIgnorePath } from "../profiles";
 import { absoluteTime, relativeTime } from "../time";
 import type { Badge, ExportDoc, KeyChange, KeyDiff, KeyHistory, KeyStatus, ProfileRules, SecretDiff, SideInfo, SideSummary } from "../types";
 import type { InspectTarget } from "./Inspector";
-import { OverrideEditor } from "./OverrideEditor";
-import { typeName, ValueCell } from "./ValueCell";
+import { formatValue, typeName, ValueCell } from "./ValueCell";
 
 export const STATUS_LABEL: Record<string, string> = {
   equal: "Equal",
@@ -26,6 +25,8 @@ interface Props {
   left: SideSummary;
   right: SideSummary;
   reveal: boolean;
+  open: boolean;
+  onToggle: () => void;
   changeset: Changeset;
   onChangeset: (cs: Changeset) => void;
   onInspect: (targets: InspectTarget[]) => void;
@@ -38,6 +39,25 @@ interface Props {
 }
 
 type Values = Record<string, unknown> | null;
+interface Draft { text: string; json: boolean; error?: string; touched?: boolean }
+const SIDES: Side[] = ["left", "right"];
+const other = (s: Side): Side => (s === "left" ? "right" : "left");
+const asText = (v: unknown) => (v === undefined ? "" : typeof v === "string" ? v : JSON.stringify(v, null, 2));
+
+// Opening many rows at once (Expand all) mustn't fire hundreds of reads together.
+const MAX_READS = 6;
+let reading = 0;
+const queue: (() => void)[] = [];
+function gated<T>(f: () => Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const run = () => {
+      reading++;
+      f().then(resolve, reject).finally(() => { reading--; queue.shift()?.(); });
+    };
+    if (reading < MAX_READS) run();
+    else queue.push(run);
+  });
+}
 
 /** A side's own path for this pair (differs from secret.path only under a profile mapping). */
 export function sidePath(s: SecretDiff, side: "left" | "right"): string {
@@ -105,7 +125,57 @@ function Arrow({ dir, pressed, onClick, label }: { dir: Direction; pressed: bool
   );
 }
 
-export function SecretRow({ secret, left, right, reveal, changeset, onChangeset, onInspect, sideNames, ignoreMode, draft, onDraft, fileDocs }: Props) {
+/** A value being typed in place of what a side has now. */
+function ValueEditor({ name, draft, reveal, onChange, onSave, onCancel }: {
+  name: string; draft: Draft; reveal: boolean;
+  onChange: (d: Draft) => void; onSave: () => void; onCancel: () => void;
+}) {
+  return (
+    <div className="val-cell editing">
+      <textarea className={`val mono val-input${reveal ? "" : " masked-input"}`} autoFocus spellCheck={false} autoComplete="off"
+                rows={Math.min(8, Math.max(2, draft.text.split("\n").length))} value={draft.text} aria-label={name}
+                placeholder={reveal ? "New value" : "New value (Show values is off, so it starts empty)"}
+                onChange={(e) => onChange({ ...draft, text: e.target.value, error: undefined, touched: true })}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") { e.preventDefault(); onCancel(); }
+                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); onSave(); }
+                }} />
+      {draft.error && <div className="notice error" role="alert">{draft.error}</div>}
+      <div className="cell-tools">
+        <label className="inline-check subtle" title="Store as a JSON value (number, boolean, object…) instead of text">
+          <input type="checkbox" checked={draft.json} onChange={(e) => onChange({ ...draft, json: e.target.checked, error: undefined, touched: true })} /> JSON
+        </label>
+        <span className="spacer" />
+        <button type="button" className="btn ghost small" onClick={onCancel}>Cancel</button>
+        <button type="button" className="btn primary small" onClick={onSave}>Set value</button>
+      </div>
+    </div>
+  );
+}
+
+/** What a side will hold once applied: a typed value, or nothing (the key is removed). */
+function StagedCell({ side, kind, value, reveal, onEdit, onUndo }: {
+  side: Side; kind: "set" | "remove"; value?: unknown; reveal: boolean; onEdit?: () => void; onUndo: () => void;
+}) {
+  const typed = value !== undefined && typeof value !== "string";
+  return (
+    <div className={`val-cell staged ${kind}`}>
+      {kind === "remove"
+        ? <div className="val removed-val">will be removed</div>
+        : <div className={`val typed-val ${reveal ? "" : "masked"}`}>
+            {reveal ? <>{typed && <span className="type-tag">{typeName(value)}</span>}{formatValue(value, typed)}</> : "••••••••"}
+          </div>}
+      <div className="cell-tools">
+        <span className={`badge override-tag ${kind === "remove" ? "remove" : side}`}>{kind === "remove" ? "delete staged" : "new value"}</span>
+        <span className="spacer" />
+        {onEdit && <button type="button" className="btn ghost small" onClick={onEdit}>Edit</button>}
+        <button type="button" className="btn ghost small" onClick={onUndo}>Undo</button>
+      </div>
+    </div>
+  );
+}
+
+export function SecretRow({ secret, left, right, reveal, open, onToggle, changeset, onChangeset, onInspect, sideNames, ignoreMode, draft, onDraft, fileDocs }: Props) {
   // An export file side is read-only and has no history; its values are in the opened file.
   const isFile = { left: left.kind === "file", right: right.kind === "file" };
   const fileData = (s: SideSummary, path: string) => {
@@ -113,18 +183,20 @@ export function SecretRow({ secret, left, right, reveal, changeset, onChangeset,
     return d?.secrets.find((x) => x.path === path)?.data ?? null;
   };
   const copyable = (d: Direction) => !isFile[d === "left_to_right" ? "right" : "left"];
-  const [open, setOpen] = useState(false);
   const [values, setValues] = useState<{ left: Values; right: Values } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<{ left: KeyHistory | null; right: KeyHistory | null } | null>(null);
-  const [overriding, setOverriding] = useState<Side[] | null>(null);
+  const [editing, setEditing] = useState<Record<string, Draft>>({}); // by `${side}|${key}`
+  const [pending, setPending] = useState<string[]>([]); // keys being added, not staged yet
+  const [newKey, setNewKey] = useState("");
+  const [newKeyError, setNewKeyError] = useState<string | null>(null);
 
   // When each key last changed: version numbers and times only, so no Reveal needed.
   useEffect(() => {
     if (!open || history) return;
     let live = true;
     const load = (s: SideSummary, info: SideInfo) => info.state === "present" && s.kind !== "file"
-      ? api.history(s.conn_id, s.mount, fullPath(s, sidePath(secret, s === left ? "left" : "right"))).catch(() => null)
+      ? gated(() => api.history(s.conn_id, s.mount, fullPath(s, sidePath(secret, s === left ? "left" : "right")))).catch(() => null)
       : Promise.resolve(null);
     Promise.all([load(left, secret.left), load(right, secret.right)])
       .then(([l, r]) => { if (live) setHistory({ left: l, right: r }); });
@@ -140,7 +212,7 @@ export function SecretRow({ secret, left, right, reveal, changeset, onChangeset,
       if (info.state !== "present") return Promise.resolve(null);
       const path = fullPath(s, sidePath(secret, s === left ? "left" : "right"));
       if (s.kind === "file") return Promise.resolve(fileData(s, path));
-      return api.secret(s.conn_id, s.mount, path).then((r) => r.data);
+      return gated(() => api.secret(s.conn_id, s.mount, path)).then((r) => r.data);
     };
     Promise.all([read(left, secret.left), read(right, secret.right)])
       .then(([l, r]) => { if (live) setValues({ left: l, right: r }); })
@@ -160,23 +232,129 @@ export function SecretRow({ secret, left, right, reveal, changeset, onChangeset,
       return { side, title: `${sideNames[side]} · ${k.key}`,
                loc: { conn_id: s.conn_id, mount: s.mount, path: fullPath(s, sidePath(secret, side)), key: k.key } };
     });
-  const incoming = (k: KeyDiff, side: "left" | "right") =>
-    isKeyStaged(changeset, secret.path, k.key, side === "right" ? "left_to_right" : "right_to_left")
-    || isKeyOverridden(changeset, secret.path, k.key, side);
-  const overrideSides = (["left", "right"] as Side[]).filter((x) => canOverride(secret, x) && !isFile[x]);
+  const copied = (key: string, side: Side) => isKeyStaged(changeset, secret.path, key, side === "right" ? "left_to_right" : "right_to_left");
+  const editable = (side: Side) => canOverride(secret, side) && !isFile[side];
   const copySecret = (d: Direction) => copyable(d) && canCopySecret(secret, d);
   const overridden = { left: overridesFor(changeset, secret.path, "left"), right: overridesFor(changeset, secret.path, "right") };
-  const addedKeys = (side: Side) => Object.keys(overridden[side] ?? {}).filter((k) => !secret.keys.some((x) => x.key === k));
-  const sameTargets = (a: Side[] | null, b: Side[]) => !!a && a.join() === b.join();
+  const known = new Set(secret.keys.map((k) => k.key));
+  const addedKeys = [...new Set([...pending, ...SIDES.flatMap((x) => Object.keys(overridden[x] ?? {}))])]
+    .filter((k) => !known.has(k)).sort();
   const lp = secret.left_path || secret.path, rp = secret.right_path || secret.path;
   const folder = dir ? `${dir}**` : null;
   const draftOut = !!draft && pathIgnored(draft, lp, rp);
   const pick = !!(ignoreMode && draft && onDraft);
+  const present = (k: KeyDiff, side: Side) => secret[side].state === "present" && onSide(k, side, secret[side]);
+
+  // Start from the value already typed, else the other side's value (that's usually the point),
+  // else this side's own. Values are only known while Show values is on.
+  function startValue(side: Side, key: string, vals: typeof values): Draft {
+    const typed = overridden[side];
+    const v = typed && key in typed ? typed[key]
+      : vals?.[other(side)] && key in vals[other(side)]! ? vals[other(side)]![key]
+      : vals?.[side]?.[key];
+    return { text: asText(v), json: v !== undefined && typeof v !== "string" };
+  }
+
+  function startEdit(side: Side, key: string) {
+    setEditing((e) => ({ ...e, [`${side}|${key}`]: startValue(side, key, values) }));
+  }
+
+  // Values that arrive after an editor opened fill it, unless something was typed already.
+  useEffect(() => {
+    if (!values) return;
+    setEditing((e) => {
+      let changed = false;
+      const next = Object.fromEntries(Object.entries(e).map(([id, d]) => {
+        if (d.touched || d.text) return [id, d];
+        const [side, ...rest] = id.split("|");
+        const fresh = startValue(side as Side, rest.join("|"), values);
+        if (fresh.text) changed = true;
+        return [id, fresh.text ? fresh : d];
+      }));
+      return changed ? next : e;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [values]);
+
+  function stopEdit(side: Side, key: string) {
+    setEditing((e) => {
+      const next = { ...e };
+      delete next[`${side}|${key}`];
+      return next;
+    });
+  }
+
+  function saveEdit(side: Side, key: string) {
+    const d = editing[`${side}|${key}`];
+    let value: unknown = d.text;
+    if (d.json) {
+      try { value = JSON.parse(d.text); } catch {
+        setEditing((e) => ({ ...e, [`${side}|${key}`]: { ...d, error: "That isn't valid JSON. Untick JSON to store it as text." } }));
+        return;
+      }
+    }
+    onChangeset(setKeyValue(changeset, secret, side, key, value));
+    stopEdit(side, key);
+    setPending((p) => p.filter((k) => k !== key));
+  }
+
+  function cancelEdit(side: Side, key: string) {
+    stopEdit(side, key);
+    // A key that was being added and has nothing staged anywhere goes away again
+    const elsewhere = Object.keys(editing).some((x) => x !== `${side}|${key}` && x.endsWith(`|${key}`));
+    if (!elsewhere) setPending((p) => p.filter((k) => k !== key));
+  }
+
+  function addKey(sides: Side[]) {
+    const k = newKey.trim();
+    if (!k) return;
+    if (known.has(k) || addedKeys.includes(k)) { setNewKeyError(`“${k}” is already in this secret: use Edit on its value.`); return; }
+    setPending((p) => [...p, k]);
+    setEditing((e) => ({ ...e, ...Object.fromEntries(sides.map((x) => [`${x}|${k}`, { text: "", json: false }])) }));
+    setNewKey("");
+    setNewKeyError(null);
+  }
+
+  /** One side of one key: the value, a staged change to it, or an editor. */
+  function cell(key: string, side: Side, normal: (tools: ReactNode) => ReactNode, isPresent: boolean) {
+    const d = editing[`${side}|${key}`];
+    if (d) {
+      return <ValueEditor name={`New value for ${key} on ${sideNames[side]}`} draft={d} reveal={reveal}
+                          onChange={(n) => setEditing((e) => ({ ...e, [`${side}|${key}`]: n }))}
+                          onSave={() => saveEdit(side, key)} onCancel={() => cancelEdit(side, key)} />;
+    }
+    if (isKeyRemoved(changeset, secret.path, key, side)) {
+      return <StagedCell side={side} kind="remove" reveal={reveal} onUndo={() => onChangeset(toggleRemove(changeset, secret, side, key))} />;
+    }
+    if (isKeyOverridden(changeset, secret.path, key, side)) {
+      return <StagedCell side={side} kind="set" value={overridden[side]![key]} reveal={reveal}
+                         onEdit={() => startEdit(side, key)}
+                         onUndo={() => onChangeset(setKeyValue(changeset, secret, side, key, undefined))} />;
+    }
+    const tools = editable(side) && (
+      <>
+        <button type="button" className="btn ghost small" onClick={() => startEdit(side, key)}
+                title={`Type a new value for ${key} on ${sideNames[side]}`}>Edit</button>
+        {isPresent && (
+          <button type="button" className="btn ghost small danger" onClick={() => onChangeset(toggleRemove(changeset, secret, side, key))}
+                  title={`Remove ${key} from ${sideNames[side]}`}>Delete</button>
+        )}
+      </>
+    );
+    return normal(tools || null);
+  }
+
+  /** Delete a key from every side that has it (or, if that's staged already, undo it). */
+  function toggleDeleteEverywhere(k: KeyDiff) {
+    const sides = SIDES.filter((x) => present(k, x) && editable(x));
+    const all = sides.every((x) => isKeyRemoved(changeset, secret.path, k.key, x));
+    onChangeset(sides.reduce((cs, x) => (isKeyRemoved(cs, secret.path, k.key, x) === all ? toggleRemove(cs, secret, x, k.key) : cs), changeset));
+  }
 
   return (
     <div className={`secret${draftOut ? " draft-ignored" : ""}`} data-open={open}>
       <div className="secret-head-row">
-      <button type="button" className="secret-head" aria-expanded={open} onClick={() => setOpen(!open)}>
+      <button type="button" className="secret-head" aria-expanded={open} onClick={onToggle}>
         <span className="caret">▸</span>
         <span className="secret-path">
           {secret.left_path && secret.left_path !== secret.right_path ? (
@@ -222,64 +400,31 @@ export function SecretRow({ secret, left, right, reveal, changeset, onChangeset,
             <div className="notice error">{secret.left.error || secret.right.error}</div>
           )}
           {error && <div className="notice error">Couldn’t read values: {error}</div>}
-          {(copySecret("left_to_right") || copySecret("right_to_left") || overrideSides.length > 0) && (
+          {(copySecret("left_to_right") || copySecret("right_to_left")) && (
             <div className="secret-actions">
-              {(copySecret("left_to_right") || copySecret("right_to_left")) && <span className="subtle">Copy whole secret:</span>}
+              <span className="subtle">Copy whole secret:</span>
               {copySecret("right_to_left") && (
-                <button type="button" className="btn small to-left-btn" aria-pressed={isSecretStaged(changeset, secret.path, "right_to_left")}
+                <button type="button" className="btn small to-left-btn" aria-pressed={isSecretStaged(changeset, secret, "right_to_left")}
                         onClick={() => onChangeset(toggleSecret(changeset, secret, "right_to_left"))}>
                   ← all keys to left
                 </button>
               )}
               {copySecret("left_to_right") && (
-                <button type="button" className="btn small to-right-btn" aria-pressed={isSecretStaged(changeset, secret.path, "left_to_right")}
+                <button type="button" className="btn small to-right-btn" aria-pressed={isSecretStaged(changeset, secret, "left_to_right")}
                         onClick={() => onChangeset(toggleSecret(changeset, secret, "left_to_right"))}>
                   all keys to right →
                 </button>
               )}
-              {(copySecret("left_to_right") || copySecret("right_to_left")) && (
-                <span className="subtle">Keys only on the target are kept.</span>
-              )}
-              {overrideSides.length > 0 && (
-                <span className="override-actions">
-                  <span className="subtle">Set values:</span>
-                  {overrideSides.map((x) => (
-                    <button key={x} type="button" className={`btn small override-${x}`}
-                            aria-pressed={!!overridden[x]} aria-expanded={sameTargets(overriding, [x])}
-                            onClick={() => setOverriding(sameTargets(overriding, [x]) ? null : [x])}>
-                      Override {x}{overridden[x] ? ` (${Object.keys(overridden[x]!).length})` : ""}
-                    </button>
-                  ))}
-                  {overrideSides.length === 2 && (
-                    <button type="button" className="btn small" aria-expanded={sameTargets(overriding, ["left", "right"])}
-                            onClick={() => setOverriding(sameTargets(overriding, ["left", "right"]) ? null : ["left", "right"])}>
-                      Override both
-                    </button>
-                  )}
-                </span>
-              )}
+              <span className="subtle">Keys only on the target are kept.</span>
             </div>
           )}
-          {overriding && (
-            <OverrideEditor
-              key={overriding.join()}
-              targets={overriding} sideNames={sideNames} reveal={reveal}
-              keys={secret.keys.map((k) => k.key)}
-              initial={overridden[overriding[0]] ?? {}}
-              current={reveal && values ? values[overriding[0]] : null}
-              onCancel={() => setOverriding(null)}
-              onSave={(v) => {
-                onChangeset(overriding.reduce((cs, x) => setOverride(cs, secret, x, v), changeset));
-                setOverriding(null);
-              }} />
-          )}
-          {(["left", "right"] as Side[]).filter((x) => addedKeys(x).length > 0).map((x) => (
-            <div key={x} className="subtle override-new">New keys to set on {sideNames[x]}: <span className="mono">{addedKeys(x).join(", ")}</span></div>
-          ))}
-          {secret.keys.length === 0 && <div className="subtle">No keys.</div>}
-          {secret.keys.map((k) => (
+          {secret.keys.length === 0 && addedKeys.length === 0 && <div className="subtle">No keys.</div>}
+          {secret.keys.map((k) => {
+            const deletable = SIDES.filter((x) => present(k, x) && editable(x));
+            const allDeleted = deletable.length > 0 && deletable.every((x) => isKeyRemoved(changeset, secret.path, k.key, x));
+            return (
             <div className={`key-row${k.ignored ? " ignored" : ""}${draft && !k.ignored && keyIgnored(draft, k.key, lp, rp) ? " draft-ignored" : ""}`} key={k.key}
-                 data-incoming={incoming(k, "right") ? "right" : incoming(k, "left") ? "left" : undefined}>
+                 data-incoming={copied(k.key, "right") ? "right" : copied(k.key, "left") ? "left" : undefined}>
               <div className="key-name">
                 <span className="key-label">{k.key}</span>
                 {k.ignored && <span className="badge ignored" title="The profile ignores differences in this key">ignored</span>}
@@ -298,24 +443,31 @@ export function SecretRow({ secret, left, right, reveal, changeset, onChangeset,
                     type differs{values ? `: ${typeName(values.left?.[k.key])} vs ${typeName(values.right?.[k.key])}` : ""}
                   </span>
                 )}
+                {deletable.length > 1 && (
+                  <button type="button" className="btn ghost small danger key-delete" aria-pressed={allDeleted}
+                          title={allDeleted ? "Keep this key" : `Remove ${k.key} from both sides`}
+                          onClick={() => toggleDeleteEverywhere(k)}>
+                    {allDeleted ? "Undo delete everywhere" : "Delete everywhere"}
+                  </button>
+                )}
               </div>
-              <ValueCell side="left" unavailable={unavailableFor(k, "left", secret.left)} reveal={reveal}
-                         loading={loading} value={values?.left?.[k.key]} highlight={k.status === "different"} typed={k.type_differs}
-                         meta={<><BadgeChip b={secret.badges?.[k.key]?.left} /><Changed c={history?.left?.keys[k.key]} /></>} />
+              {cell(k.key, "left", (tools) => (
+                <ValueCell side="left" unavailable={unavailableFor(k, "left", secret.left)} reveal={reveal}
+                           loading={loading} value={values?.left?.[k.key]} highlight={k.status === "different"} typed={k.type_differs}
+                           meta={<><BadgeChip b={secret.badges?.[k.key]?.left} /><Changed c={history?.left?.keys[k.key]} /></>}
+                           tools={tools} />
+              ), present(k, "left"))}
               <div className="key-mid">
                 <span className={`badge ${k.status}`}>{STATUS_LABEL[k.status]}</span>
-                {(["left", "right"] as Side[]).filter((x) => isKeyOverridden(changeset, secret.path, k.key, x)).map((x) => (
-                  <span key={x} className={`badge override-tag ${x}`} title={`A typed value will be written to ${sideNames[x]}`}>
-                    {x === "left" ? "← set" : "set →"}
-                  </span>
-                ))}
                 <div className="arrows">
-                  {copyable("right_to_left") && canCopyKey(secret, k, "right_to_left") && (
+                  {copyable("right_to_left") && canCopyKey(secret, k, "right_to_left")
+                    && !isKeyOverridden(changeset, secret.path, k.key, "left") && !isKeyRemoved(changeset, secret.path, k.key, "left") && (
                     <Arrow dir="right_to_left" pressed={isKeyStaged(changeset, secret.path, k.key, "right_to_left")}
                            label={`Copy ${k.key} from right to left`}
                            onClick={() => onChangeset(toggleKey(changeset, secret, k.key, "right_to_left"))} />
                   )}
-                  {copyable("left_to_right") && canCopyKey(secret, k, "left_to_right") && (
+                  {copyable("left_to_right") && canCopyKey(secret, k, "left_to_right")
+                    && !isKeyOverridden(changeset, secret.path, k.key, "right") && !isKeyRemoved(changeset, secret.path, k.key, "right") && (
                     <Arrow dir="left_to_right" pressed={isKeyStaged(changeset, secret.path, k.key, "left_to_right")}
                            label={`Copy ${k.key} from left to right`}
                            onClick={() => onChangeset(toggleKey(changeset, secret, k.key, "left_to_right"))} />
@@ -328,11 +480,42 @@ export function SecretRow({ secret, left, right, reveal, changeset, onChangeset,
                   </button>
                 )}
               </div>
-              <ValueCell side="right" unavailable={unavailableFor(k, "right", secret.right)} reveal={reveal}
-                         loading={loading} value={values?.right?.[k.key]} highlight={k.status === "different"} typed={k.type_differs}
-                         meta={<><BadgeChip b={secret.badges?.[k.key]?.right} /><Changed c={history?.right?.keys[k.key]} /></>} />
+              {cell(k.key, "right", (tools) => (
+                <ValueCell side="right" unavailable={unavailableFor(k, "right", secret.right)} reveal={reveal}
+                           loading={loading} value={values?.right?.[k.key]} highlight={k.status === "different"} typed={k.type_differs}
+                           meta={<><BadgeChip b={secret.badges?.[k.key]?.right} /><Changed c={history?.right?.keys[k.key]} /></>}
+                           tools={tools} />
+              ), present(k, "right"))}
+            </div>
+            );
+          })}
+          {addedKeys.map((key) => (
+            <div className="key-row added" key={`new:${key}`}>
+              <div className="key-name">
+                <span className="key-label">{key}</span>
+                <span className="badge kind equal">new key</span>
+              </div>
+              {cell(key, "left", (tools) => <ValueCell side="left" unavailable="absent" reveal={reveal} loading={false} value={undefined} highlight={false} tools={tools} />, false)}
+              <div className="key-mid" />
+              {cell(key, "right", (tools) => <ValueCell side="right" unavailable="absent" reveal={reveal} loading={false} value={undefined} highlight={false} tools={tools} />, false)}
             </div>
           ))}
+          {(editable("left") || editable("right")) && (
+            <div className="add-key">
+              <input type="text" className="mono" placeholder="new key name" value={newKey} aria-label="New key name"
+                     onChange={(e) => { setNewKey(e.target.value); setNewKeyError(null); }}
+                     onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addKey(SIDES.filter(editable)); } }} />
+              {SIDES.filter(editable).map((x) => (
+                <button key={x} type="button" className={`btn small add-${x}`} disabled={!newKey.trim()} onClick={() => addKey([x])}>
+                  ＋ Add to {x}
+                </button>
+              ))}
+              {editable("left") && editable("right") && (
+                <button type="button" className="btn small" disabled={!newKey.trim()} onClick={() => addKey(["left", "right"])}>＋ Add to both</button>
+              )}
+              {newKeyError && <span className="notice error" role="alert">{newKeyError}</span>}
+            </div>
+          )}
         </div>
       )}
     </div>

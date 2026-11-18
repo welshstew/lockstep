@@ -326,3 +326,47 @@ def test_override_audit_names_keys_never_values(env):
     entry = json.loads(records[0])
     assert entry["overridden"] == ["pw"] and entry["keys"] == ["pw"]
     assert "typed-secret-value" not in records[0]
+
+
+def test_remove_keys_from_the_target(env):
+    env.a.put(f"{env.prefix}/cfg", {"pw": "A", "old": "x"})
+    env.b.put(f"{env.prefix}/cfg", {"pw": "B", "old": "y", "keep": "k"})
+    d = env.compare()["cfg"]
+    # Remove "old" on both sides, one change per side
+    rm_right = env.change(d, keys=[]) | {"remove": ["old"]}
+    rm_left = env.change(d, direction="right_to_left", keys=[]) | {"remove": ["old", "not-there"]}
+    p = {x["direction"]: x for x in env.preview([rm_right, rm_left], reveal=True).json()}
+    assert [(k["key"], k["action"], k["target_value"]) for k in p["left_to_right"]["keys"]] == [("old", "remove", "y")]
+    assert p["left_to_right"]["source"]["state"] == "unused"  # removing doesn't read the source
+    assert env.apply([rm_right, rm_left]).json()["summary"]["applied"] == 2
+    assert env.b.get(f"{env.prefix}/cfg")[0] == {"pw": "B", "keep": "k"}
+    assert env.a.get(f"{env.prefix}/cfg")[0] == {"pw": "A"}
+
+
+def test_remove_combined_with_copy_and_override(env):
+    env.a.put(f"{env.prefix}/cfg", {"user": "u-A", "pw": "A"})
+    env.b.put(f"{env.prefix}/cfg", {"user": "u-B", "pw": "B", "gone": "g"})
+    d = env.compare()["cfg"]
+    ch = override(env, d, "right", {"pw": "typed"}, keys=["user"]) | {"remove": ["gone"]}
+    res = env.apply([ch]).json()["results"][0]
+    assert res["status"] == "applied" and res["keys"] == ["pw", "user", "gone"]
+    assert env.b.get(f"{env.prefix}/cfg")[0] == {"user": "u-A", "pw": "typed"}
+
+
+def test_removing_every_key_warns_and_a_missing_key_is_a_noop(env):
+    env.b.put(f"{env.prefix}/cfg", {"only": "x"})
+    env.a.put(f"{env.prefix}/cfg", {"other": "y"})
+    d = env.compare()["cfg"]
+    p = env.preview([env.change(d, keys=[]) | {"remove": ["only"]}]).json()[0]
+    assert p["status"] == "ready" and any("No keys will be left" in w for w in p["warnings"])
+    assert env.preview([env.change(d, keys=[]) | {"remove": ["nope"]}]).json()[0]["status"] == "noop"
+
+
+@pytest.mark.parametrize("bad", [
+    {"keys": ["pw"], "remove": ["pw"]},  # copied and removed
+    {"keys": [], "set": {"pw": "x"}, "remove": ["pw"]},  # set and removed
+])
+def test_remove_validation(env, bad):
+    env.a.put(f"{env.prefix}/cfg", {"pw": "A"})
+    d = env.compare()["cfg"]
+    assert env.preview([env.change(d) | bad]).status_code == 422

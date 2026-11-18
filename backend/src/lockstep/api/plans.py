@@ -2,9 +2,11 @@
 
 One person (who may only have read access) reviews staged copies and saves them as a plan.
 The plan is a signed JSON file: which secrets and keys go from where to where, and the
-source and target version each was at. It never holds values. Anyone with write access to
-the targets can later open the file, check it and apply it. Values are read fresh from the
-source when the plan is applied.
+source and target version each was at. Copied values are never in it: they're read fresh
+from the source when the plan is applied. The only values a plan can hold are ones the
+creator typed (overrides); a plan with any says so (`holds_values`), and anyone with the
+file can read them. Anyone with write access to the targets can later open the file, check
+it and apply it.
 
 A plan is all or nothing: if any source or target has changed since the plan was made, or
 the plan file was edited, nothing is written and the plan has to be made again.
@@ -62,7 +64,8 @@ class PlanVault(BaseModel):
 
 class PlanKey(BaseModel):
     key: str
-    action: Literal["add", "update"]
+    action: Literal["add", "update", "remove"]
+    override: bool = False  # written from a typed value (in the change's `set`), not copied
 
 
 class PlanChange(BaseModel):
@@ -74,6 +77,11 @@ class PlanChange(BaseModel):
     source_version: int
     target_version: int | None  # None: the target didn't exist
     keys: list[PlanKey] = Field(min_length=1)
+    set: dict[str, Any] | None = None  # typed values, for the keys marked override
+
+    @property
+    def copies(self) -> bool:
+        return any(not k.override and k.action != "remove" for k in self.keys)
 
 
 class Plan(BaseModel):
@@ -86,6 +94,7 @@ class Plan(BaseModel):
     left: PlanVault
     right: PlanVault
     changes: list[PlanChange] = Field(min_length=1, max_length=MAX_CHANGES)
+    holds_values: bool = False  # some changes carry typed values: the file is as sensitive as they are
     signature: str = ""
 
 
@@ -195,8 +204,12 @@ def _describe(pv: PlanVault) -> str:
 
 
 def _request(plan: Plan, left_conn_id: str, right_conn_id: str) -> SyncRequest:
-    changes = [Change(path=c.path, right_path=c.right_path, direction=c.direction, keys=[k.key for k in c.keys],
-                      expected_target_version=c.target_version, expected_source_version=c.source_version)
+    changes = [Change(path=c.path, right_path=c.right_path, direction=c.direction,
+                      keys=[k.key for k in c.keys if not k.override and k.action != "remove"],
+                      set={k.key: (c.set or {})[k.key] for k in c.keys if k.override} or None,
+                      remove=[k.key for k in c.keys if k.action == "remove"] or None,
+                      expected_target_version=c.target_version,
+                      expected_source_version=c.source_version if c.copies else None)
                for c in plan.changes]
     return SyncRequest(left=Side(conn_id=left_conn_id, mount=plan.left.mount, prefix=plan.left.prefix),
                        right=Side(conn_id=right_conn_id, mount=plan.right.mount, prefix=plan.right.prefix),
@@ -224,9 +237,10 @@ async def _check(plan: Plan, req: SyncRequest, session: SessionData, settings: S
                 ev, _, _ = await evaluate(ctx, c, reveal=False)
             src, tgt = _ends(plan, pc)
             problems: list[str] = []
-            if ev.status in ("conflict", "invalid") or ev.source.version != pc.source_version:
+            moved = pc.copies and ev.source.version != pc.source_version
+            if ev.status in ("conflict", "invalid") or moved:
                 status = "stale"
-                if ev.source.version != pc.source_version and ev.source.state != "no_access":
+                if moved and ev.source.state != "no_access":
                     problems.append(f"The source changed since the plan was made (v{pc.source_version} → "
                                     f"v{ev.source.version or '—'}).")
                 problems += [p for p in ev.problems if "Compare again" not in p]
@@ -271,9 +285,6 @@ async def _check(plan: Plan, req: SyncRequest, session: SessionData, settings: S
 async def create(body: CreateRequest, session: Sess, settings: Conf):
     if isinstance(body.left, FileSide) or isinstance(body.right, FileSide):
         raise HTTPException(400, detail={"message": "A plan needs a Vault on both sides, not an export file."})
-    if any(c.set for c in body.changes):
-        raise HTTPException(400, detail={"message": "Plans never hold values, so overrides can't go into a plan. "
-                                                    "Apply them directly, or plan only the copies."})
     lconn = get_connection(session, body.left.conn_id)
     rconn = get_connection(session, body.right.conn_id)
     async with _Ctx(body, session, settings) as ctx:
@@ -293,12 +304,14 @@ async def create(body: CreateRequest, session: Sess, settings: Conf):
         if ev.status in ("conflict", "invalid", "error") or (ev.status == "denied" and not ev.keys):
             problems.append(f"{where}: {'; '.join(ev.problems) or ev.status}")
             continue
-        keys = [PlanKey(key=k.key, action=k.action) for k in ev.keys if k.action != "unchanged"]
+        keys = [PlanKey(key=k.key, action=k.action, override=k.override) for k in ev.keys if k.action != "unchanged"]
         if not keys:
             continue  # already the same: nothing to plan
+        typed = {k.key: c.set[k.key] for k in keys if k.override and c.set}
         changes.append(PlanChange(path=ev.path, right_path=ev.right_path, direction=ev.direction,
                                   source_path=ev.source.path, target_path=ev.target.path,
-                                  source_version=ev.source.version or 0, target_version=cas or None, keys=keys))
+                                  source_version=ev.source.version or 0, target_version=cas or None, keys=keys,
+                                  set=typed or None))
     if problems:
         raise HTTPException(409, detail={"message": "Some changes can't go into a plan. Compare again, then retry: "
                                                     + " | ".join(problems)})
@@ -308,7 +321,7 @@ async def create(body: CreateRequest, session: Sess, settings: Conf):
     plan = Plan(id=str(uuid.uuid4()), created_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 note=body.note.strip(), profile=body.profile or None,
                 left=_plan_vault(lconn, body.left, settings), right=_plan_vault(rconn, body.right, settings),
-                changes=changes)
+                changes=changes, holds_values=any(c.set for c in changes))
     return sign(plan, settings)
 
 
@@ -369,8 +382,10 @@ def render_report(plan: Plan) -> str:
     if plan.note:
         lines += ["> " + plan.note.replace("\n", "\n> "), ""]
     lines += [
-        "Values are not part of this plan: they're read from the source when it's applied. "
-        "If any secret below has changed since the plan was created, the plan can't be applied "
+        "Copied values are not part of this plan: they're read from the source when it's applied. "
+        + ("Keys marked *typed* are written with values typed by the plan's creator: the plan file "
+           "holds them (this report doesn't). " if plan.holds_values else "")
+        + "If any secret below has changed since the plan was created, the plan can't be applied "
         "and has to be created again.",
         "",
         "| From | To | Key | Action |",
@@ -378,9 +393,11 @@ def render_report(plan: Plan) -> str:
     ]
     for c in plan.changes:
         src, tgt = _ends(plan, c)
-        frm = f"{_md(src.vault)} · `{src.mount}/{c.source_path}` (v{c.source_version})"
+        frm = (f"{_md(src.vault)} · `{src.mount}/{c.source_path}` (v{c.source_version})" if c.copies
+               else "typed values / removals")
         to = f"{_md(tgt.vault)} · `{tgt.mount}/{c.target_path}` " + (f"(v{c.target_version})" if c.target_version else "(new)")
         for i, k in enumerate(c.keys):
-            lines.append(f"| {frm if i == 0 else ''} | {to if i == 0 else ''} | `{_md(k.key)}` | {k.action} |")
+            action = f"{k.action} (typed)" if k.override else k.action
+            lines.append(f"| {frm if i == 0 else ''} | {to if i == 0 else ''} | `{_md(k.key)}` | {action} |")
     lines.append("")
     return "\n".join(lines)

@@ -12,6 +12,8 @@ interface Props {
   typed?: boolean;
   /** Metadata line under the value (e.g. when the key last changed). Never part of the comparison. */
   meta?: ReactNode;
+  /** Actions on this value (edit, delete…) */
+  tools?: ReactNode;
 }
 
 const LONG = 300;
@@ -33,6 +35,7 @@ export function ValueCell(props: Props) {
     <div className="val-cell">
       <ValueBody {...props} />
       {props.meta && <div className="val-meta">{props.meta}</div>}
+      {props.tools && <div className="cell-tools">{props.tools}</div>}
     </div>
   );
 }

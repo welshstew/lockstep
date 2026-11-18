@@ -34,7 +34,7 @@ Only **Apply** in the review dialog and **Import** write, and only:
 - values **read again from the source Vault** at that moment, never copied values from the browser
 - or values you typed as an [override](usage.md#override-values), or from an export file you [import](usage.md#6-export-and-import) or copy from
 - with KV v2 **check-and-set** against the version you compared, so concurrent edits become conflicts
-- **adding or updating keys.** Nothing is ever deleted.
+- **adding or updating keys.** Keys are removed only when you ask: a key you [**Delete**](usage.md#delete-keys) in the compare view (a new version without it; older versions keep it), or, on an import with *Make the target match the file*, keys and secrets the file doesn't have (secrets are soft-deleted).
 
 Every attempted write is [audit-logged](usage.md#audit-log), without values. Tokens the tool created (userpass, LDAP, OIDC, Kubernetes) are revoked on *Sign out*; pasted tokens are left alone.
 

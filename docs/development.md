@@ -114,7 +114,8 @@ make e2e
 | copy with review, conflict and audit | staging two copies; the review; a concurrent edit in Vault B; one written, one **conflict**; target values checked in Vault |
 | OIDC redirect login | the full round trip through Dex's login page and back |
 | JWT login | an ID token from Dex (password grant) pasted into the form's JWT option |
-| override values | **Override both**: masked typing, a new JSON key, the review (typed source, no plan), both Vaults checked |
+| override values | **Edit** on both sides of a key: masked typing, a new JSON key added to both, the review (typed source; no plan until the typed values are acknowledged), both Vaults checked |
+| editing and bulk staging | **all keys to right** lit after picking every key; folder grouping, a folder copied in one go, everything matching a filter, expand/collapse all, staged first; an edit starting from the other side's value and shown in place; **Delete everywhere**; keys and secrets taken out of the review; a plan holding a typed value |
 | limited user | the mount-list fallback notice; folders hidden by policy shown as **No access** |
 | inspect PKCS#12 | both sides; sibling password key; certificate diff; chain becomes trusted after picking `ca/root` |
 | export and import | an encrypted export downloaded with its key; the file as the left side (wrong key refused, values from the file, copy into Vault B, nothing into the file, no plan); an import with three transforms, saved rules, preview and write |

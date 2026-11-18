@@ -26,8 +26,7 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   if (res.status === 204) return undefined as T;
-  const text = await res.text();
-  const json = text ? JSON.parse(text) : {};
+  const json = await parseJson(res);
   if (!res.ok) {
     const d = json.detail;
     const msg = typeof d === "string" ? d
@@ -35,6 +34,54 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
     throw new ApiError(res.status, msg, typeof d === "object" && !Array.isArray(d) ? d : {});
   }
   return json as T;
+}
+
+/** A response that isn't JSON came from something in between (a proxy's error page, usually). */
+function notJson(res: Response): ApiError {
+  const why = res.status === 502 || res.status === 503 || res.status === 504
+    ? "The server didn't answer in time, or couldn't be reached"
+    : "The server sent an unexpected answer";
+  return new ApiError(res.status, `${why} (HTTP ${res.status}${res.statusText ? ` ${res.statusText}` : ""}, `
+    + "not from Lockstep itself: probably a proxy in front of it). Try again, or narrow the request, for example with a path prefix.");
+}
+
+async function parseJson(res: Response): Promise<any> {
+  const text = await res.text();
+  if (!text) return {};
+  try { return JSON.parse(text); } catch { throw notJson(res); }
+}
+
+export interface ExpiryProgress { side: "left" | "right"; stage: "listing" | "reading" | "scanning" | "done";
+                                  done: number; total: number; certificates: number }
+
+/** The certificate scan, streamed: progress lines keep proxies from timing out a long scan. */
+async function expiryStream(sides: { side: "left" | "right"; conn_id: string; mount: string; prefix: string }[],
+                            onProgress: (p: ExpiryProgress) => void): Promise<ExpiryResult> {
+  const res = await fetch("/api/expiry/stream", {
+    method: "POST", credentials: "same-origin",
+    headers: { "X-Requested-With": "lockstep", "Content-Type": "application/json" },
+    body: JSON.stringify({ sides }),
+  });
+  if (!res.ok || !res.body) {
+    const j = await parseJson(res);
+    throw new ApiError(res.status, j?.detail?.message ?? res.statusText, j?.detail ?? {});
+  }
+  const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+  let buf = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    buf += value ?? "";
+    const lines = buf.split("\n");
+    buf = done ? "" : lines.pop()!;
+    for (const line of lines.filter((l) => l.trim())) {
+      let ev;
+      try { ev = JSON.parse(line); } catch { throw notJson(res); }
+      if (ev.progress) onProgress(ev.progress);
+      if (ev.error) throw new ApiError(ev.error.status ?? 500, ev.error.message ?? "The scan failed.", ev.error);
+      if (ev.result) return ev.result as ExpiryResult;
+    }
+    if (done) throw new ApiError(502, "The scan stopped before it finished (the connection was cut). Try again, or scan a narrower path.");
+  }
 }
 
 const q = (params: Record<string, string>) => new URLSearchParams(params).toString();
@@ -62,7 +109,7 @@ async function content(loc: Locator, opts: AnalyzeOptions, nodeId: string) {
     body: JSON.stringify({ ...loc, ...opts, node_id: nodeId }),
   });
   if (!res.ok) {
-    const j = await res.json().catch(() => ({}));
+    const j = await parseJson(res);
     throw new ApiError(res.status, j?.detail?.message ?? res.statusText);
   }
   return {
@@ -79,6 +126,7 @@ export const api = {
     call<{ auth_url: string }>("POST", "/api/auth/oidc/start", body),
   expiry: (sides: { side: "left" | "right"; conn_id: string; mount: string; prefix: string }[]) =>
     call<ExpiryResult>("POST", "/api/expiry", { sides }),
+  expiryStream,
   analyze: (loc: Locator, opts: AnalyzeOptions) => call<AnalyzeResult>("POST", "/api/analyze", { ...loc, ...opts }),
   findPasswords: (loc: Locator) => call<PasswordSearch>("POST", "/api/analyze/passwords", loc),
   content,
@@ -105,7 +153,7 @@ export const api = {
       headers: { "X-Requested-With": "lockstep", "Content-Type": "application/json" },
       body: JSON.stringify({ plan }),
     });
-    if (!res.ok) throw new ApiError(res.status, (await res.json().catch(() => ({})))?.detail?.message ?? res.statusText);
+    if (!res.ok) throw new ApiError(res.status, (await parseJson(res))?.detail?.message ?? res.statusText);
     return res.text();
   },
   planCheck: (plan: SyncPlan, left_conn_id: string, right_conn_id: string) =>

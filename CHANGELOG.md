@@ -5,6 +5,22 @@ the image, the Helm chart and the app share one version.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-18
+
+### Added
+
+- **Edit values in place:** **Edit** under a value on either side turns it into a text field; with *Show values* on, it starts from the other side's value. A staged value replaces what that side shows, with **Edit** and **Undo**. **＋ Add to left / right / both** adds a new key. This replaces the separate override panel.
+- **Delete keys:** **Delete** under a value, or **Delete everywhere** on a key, stages removing it; on apply the secret gets a new version without it (check-and-set, audit-logged). The sync API takes `"remove": [...]` on a change.
+- **Bulk staging and grouping:** group results by folder or with staged secrets first; copy a whole folder, or everything matching the filter, in one go; **Expand all** / **Collapse all**.
+- **Trim the review:** **×** takes a key out of the changes and **Remove** takes out a whole secret.
+- **Plans can hold typed values:** a review with overrides can be saved as a plan once you acknowledge the file will contain those values (`"holds_values": true`). Copied values are still never in a plan.
+- `POST /api/expiry/stream`: the certificate scan as NDJSON with progress, used by the web app.
+
+### Fixed
+
+- Big certificate scans no longer fail with "Unexpected token '<' … is not valid JSON": the scan streams progress, so proxies don't time it out, and a proxy's HTML error page now shows a readable message.
+- **all keys to left / right** shows as pressed when every differing key has been staged one at a time.
+
 ## [0.4.0] - 2026-11-13
 
 ### Added
@@ -57,6 +73,7 @@ First public release.
 - **Helm chart:** hardened defaults, session key kept across upgrades, Ingress, NetworkPolicy, PodDisruptionBudget, Kubernetes auth, shared profiles; validated by a schema and tested in k3s.
 - Runs on Red Hat Hardened Images (distroless, non-root). Every change is scanned (CVEs, secrets, misconfigurations, base image signatures) and tested end to end in a browser.
 
+[0.5.0]: https://github.com/welshstew/lockstep/releases/tag/v0.5.0
 [0.4.0]: https://github.com/welshstew/lockstep/releases/tag/v0.4.0
 [0.3.0]: https://github.com/welshstew/lockstep/releases/tag/v0.3.0
 [0.2.0]: https://github.com/welshstew/lockstep/releases/tag/v0.2.0

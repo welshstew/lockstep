@@ -10,10 +10,14 @@ or else with the best candidates the password finder ranks from the rest of the 
 from __future__ import annotations
 
 import asyncio
+import json
 import re
+import time
+from collections.abc import AsyncIterator
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from cryptography import x509
 
@@ -136,22 +140,47 @@ def scan_value(value: str, siblings: dict[str, str],
     return a, None
 
 
-@router.post("/expiry", response_model=ExpiryOut)
-async def expiry(body: ExpiryRequest, session: Sess, settings: Conf):
+HEARTBEAT = 5.0  # seconds: the longest a streamed scan goes without sending a line
+PROGRESS_EVERY = 0.5
+
+
+async def _waiting(task: asyncio.Task, beat: dict) -> AsyncIterator[dict]:
+    """Yield `beat` every HEARTBEAT seconds until the task is done."""
+    while True:
+        done, _ = await asyncio.wait({task}, timeout=HEARTBEAT)
+        if done:
+            return
+        yield beat
+
+
+async def scan(body: ExpiryRequest, session: SessionData, settings: Settings) -> AsyncIterator[dict]:
+    """The scan, as a stream of events: {"progress": {...}} now and then, {"result": ExpiryOut} last.
+    Vault errors are raised (as HTTPException) wherever they happen."""
     rows: list[CertRow] = []
     locked: list[LockedRow] = []
     stats: list[SideStats] = []
+    conns = [get_connection(session, s.conn_id) for s in body.sides]  # fail fast, before any output
 
-    for s in body.sides:
-        conn = get_connection(session, s.conn_id)
+    for s, conn in zip(body.sides, conns):
         mount = s.mount.strip("/")
         prefix = s.prefix.strip("/")
         prefix = f"{prefix}/" if prefix else ""
+
+        def progress(stage: str, done: int = 0, total: int = 0) -> dict:
+            return {"progress": {"side": s.side, "stage": stage, "done": done, "total": total,
+                                 "certificates": len(rows)}}
+
         async with client_for(conn, settings) as v:
+            listing = asyncio.create_task(v.kv_tree(mount, prefix, max_secrets=settings.max_tree_secrets))
             try:
-                tree = await v.kv_tree(mount, prefix, max_secrets=settings.max_tree_secrets)
+                yield progress("listing")
+                async for beat in _waiting(listing, progress("listing")):
+                    yield beat
+                tree = listing.result()
             except VaultError as e:
                 raise vault_http_error(e) from e
+            finally:
+                listing.cancel()  # if the client went away mid-listing
             sem = asyncio.Semaphore(READS)
 
             async def read(path: str):
@@ -162,11 +191,23 @@ async def expiry(body: ExpiryRequest, session: Sess, settings: Conf):
                     except VaultError as e:
                         return path, None, e
 
-            results = await asyncio.gather(*(read(p) for p in tree.secrets))
+            total = len(tree.secrets)
+            results = []
+            last = time.monotonic()
+            for fut in asyncio.as_completed([read(p) for p in tree.secrets]):
+                results.append(await fut)
+                if time.monotonic() - last > PROGRESS_EVERY:
+                    last = time.monotonic()
+                    yield progress("reading", len(results), total)
+            order = {p: i for i, p in enumerate(tree.secrets)}
+            results.sort(key=lambda r: order[r[0]])
 
         tree_data = {p: d for p, d, err in results if err is None and d}
         n_values = unreadable = 0
-        for path, data, err in results:
+        for i, (path, data, err) in enumerate(results):
+            if time.monotonic() - last > PROGRESS_EVERY:
+                last = time.monotonic()
+                yield progress("scanning", i, total)
             if err is not None:
                 unreadable += 1
                 continue
@@ -206,5 +247,42 @@ async def expiry(body: ExpiryRequest, session: Sess, settings: Conf):
         stats.append(SideStats(side=s.side, mount=mount, prefix=prefix.rstrip("/"), secrets=len(tree.secrets),
                                values=n_values, denied=tree.denied, truncated=tree.truncated, unreadable=unreadable))
 
+        yield progress("done", total, total)
+
     rows.sort(key=lambda r: (r.not_after, r.side, r.path, r.key))
-    return ExpiryOut(certificates=rows, locked=locked, sides=stats)
+    yield {"result": ExpiryOut(certificates=rows, locked=locked, sides=stats)}
+
+
+@router.post("/expiry", response_model=ExpiryOut)
+async def expiry(body: ExpiryRequest, session: Sess, settings: Conf):
+    async for event in scan(body, session, settings):
+        if "result" in event:
+            return event["result"]
+    raise HTTPException(500, detail={"message": "The scan ended without a result."})
+
+
+@router.post("/expiry/stream")
+async def expiry_stream(body: ExpiryRequest, session: Sess, settings: Conf):
+    """The same scan, streamed as NDJSON: progress lines, then {"result": ...} or {"error": ...}.
+    A big scan can take minutes; a steady trickle of lines keeps proxies from timing it out."""
+    events = scan(body, session, settings)
+    first = await anext(events)  # connection errors become a normal HTTP error, not a stream
+
+    async def lines():
+        event = first
+        while True:
+            if "result" in event:
+                yield json.dumps({"result": event["result"].model_dump(mode="json")}) + "\n"
+                return
+            yield json.dumps(event) + "\n"
+            try:
+                event = await anext(events)
+            except HTTPException as e:
+                detail = e.detail if isinstance(e.detail, dict) else {"message": str(e.detail)}
+                yield json.dumps({"error": {"status": e.status_code, **detail}}) + "\n"
+                return
+            except StopAsyncIteration:
+                return
+
+    return StreamingResponse(lines(), media_type="application/x-ndjson",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})

@@ -123,6 +123,7 @@ export interface ApiChange {
   direction: SyncDirection;
   keys: string[] | null;
   set?: Record<string, unknown>;
+  remove?: string[];
   expected_target_version: number | null;
   expected_source_version: number | null;
 }
@@ -149,6 +150,7 @@ export type PlanStatus = "ready" | "noop" | "conflict" | "denied" | "invalid" | 
 
 export interface ChangePlan {
   path: string;
+  right_path: string;
   direction: SyncDirection;
   action?: "write" | "delete";
   source: SyncEndpoint;
@@ -371,7 +373,8 @@ export interface PlanChange {
   target_path: string;
   source_version: number;
   target_version: number | null;
-  keys: { key: string; action: "add" | "update" }[];
+  keys: { key: string; action: "add" | "update" | "remove"; override?: boolean }[];
+  set?: Record<string, unknown> | null; // typed values, for keys marked override
 }
 
 export interface SyncPlan {
@@ -384,6 +387,7 @@ export interface SyncPlan {
   left: PlanVault;
   right: PlanVault;
   changes: PlanChange[];
+  holds_values?: boolean; // some changes carry typed values
   signature: string;
 }
 

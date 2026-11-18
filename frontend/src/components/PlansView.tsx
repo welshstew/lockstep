@@ -91,8 +91,9 @@ export function PlansView({ connections, leftConnId, rightConnId }: Props) {
           <h2>Sync plans</h2>
           <p className="subtle">
             A plan is a reviewed set of copies saved as a file (<strong>Save as plan</strong> in the review dialog), so
-            someone with write access can apply it later. It holds paths, keys and versions, never values. If anything
-            in it has changed since it was made, it can't be applied and has to be made again.
+            someone with write access can apply it later. It holds paths, keys and versions. Copied values aren't in it:
+            they're read from the source when it's applied. The only values a plan can hold are ones its creator typed.
+            If anything in it has changed since it was made, it can't be applied and has to be made again.
           </p>
         </div>
         <div className="plans-open">
@@ -118,6 +119,12 @@ export function PlansView({ connections, leftConnId, rightConnId }: Props) {
             </button>
           </div>
           {plan.note && <blockquote className="plan-note">{plan.note}</blockquote>}
+          {plan.holds_values && (
+            <div className="notice warn">
+              This plan holds values its creator typed (keys marked <em>typed</em>). They're written as they are, and anyone
+              with the file can read them.
+            </div>
+          )}
 
           <div className="plan-sides">
             {(["left", "right"] as const).map((s) => {
@@ -147,10 +154,12 @@ export function PlansView({ connections, leftConnId, rightConnId }: Props) {
                 const res = resultFor(c.path, c.direction);
                 return (
                   <tr key={`${c.direction}${c.path}`}>
-                    <td><span className="subtle">{src.vault}</span><br /><span className="mono">{src.mount}/{c.source_path}</span> <span className="subtle">v{c.source_version}</span></td>
+                    <td>{c.keys.some((k) => !k.override && k.action !== "remove")
+                      ? <><span className="subtle">{src.vault}</span><br /><span className="mono">{src.mount}/{c.source_path}</span> <span className="subtle">v{c.source_version}</span></>
+                      : <span className="subtle">{c.keys.every((k) => k.action === "remove") ? "Removing keys" : "Typed values"}</span>}</td>
                     <td><span className="subtle">{tgt.vault}</span><br /><span className="mono">{tgt.mount}/{c.target_path}</span>{" "}
                       <span className="subtle">{c.target_version ? `v${c.target_version}` : "new"}</span></td>
-                    <td>{c.keys.map((k) => <div key={k.key}><span className="mono">{k.key}</span> <span className={`action ${k.action}`}>{k.action}</span></div>)}</td>
+                    <td>{c.keys.map((k) => <div key={k.key}><span className="mono">{k.key}</span> <span className={`action ${k.action}`}>{k.action}</span>{k.override && <span className="type-tag">typed</span>}</div>)}</td>
                     <td>
                       {res ? <span className={`badge ${res.status === "applied" ? "equal" : "error"}`}>
                                {res.status === "applied" ? `Written v${res.new_version}` : res.status}</span>

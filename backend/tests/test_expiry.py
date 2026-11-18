@@ -62,3 +62,22 @@ def test_no_values_returned(scan):
     import json
     blob = json.dumps(scan("left", "right"))
     assert "changeit" not in blob and "BEGIN" not in blob and "PRIVATE" not in blob
+
+
+def test_streamed_scan_sends_progress_then_the_same_result(client, scan):
+    import json
+    plain = scan("left")
+    conn = client.post("/api/connections", json={"preset_id": 0, "auth": {"method": "token", "token": "root-a"}}).json()["id"]
+    r = client.post("/api/expiry/stream", json={"sides": [{"side": "left", "conn_id": conn, "mount": "certs"}]})
+    assert r.status_code == 200 and r.headers["content-type"].startswith("application/x-ndjson")
+    events = [json.loads(line) for line in r.text.splitlines()]
+    assert all("progress" in e for e in events[:-1]) and events[0]["progress"]["stage"] == "listing"
+    assert events[-2]["progress"]["stage"] == "done"
+    strip = lambda rows: [{k: v for k, v in r.items() if k != "conn_id"} for r in rows]  # noqa: E731
+    assert strip(events[-1]["result"]["certificates"]) == strip(plain["certificates"])
+
+
+def test_streamed_scan_errors(client):
+    import json
+    r = client.post("/api/expiry/stream", json={"sides": [{"side": "left", "conn_id": "nope", "mount": "certs"}]})
+    assert r.status_code == 404  # before the stream starts: a normal HTTP error

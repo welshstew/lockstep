@@ -194,12 +194,12 @@ def scenes(page: Page, theme: str) -> None:
     compare(page)
     reveal(page)
     r = open_row(page, "payments/db")
-    r.get_by_role("button", name="Override right").click()
-    editor = r.locator(".override-editor")
-    editor.get_by_label("New value for password").fill("rotated-2026-11")
+    pw = r.locator(".key-row").filter(has=page.locator(".key-name", has_text="password"))
+    pw.locator(".val-cell").nth(1).get_by_role("button", name="Edit").click()
+    r.get_by_label(re.compile("New value for password on")).fill("rotated-2026-11")
     scroll_to(r)
     shot(page, "13-override", theme)
-    editor.get_by_role("button", name="Cancel").click()
+    r.get_by_role("button", name="Cancel").click()
 
     # 14. The keystore password finder: the password lives in another folder of the tree.
     sign_in(page, "certs", "some-secrets")

@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { api } from "../api";
+import { api, type ExpiryProgress } from "../api";
 import { absoluteTime, relativeTime } from "../time";
 import type { CertRow, ExpiryResult } from "../types";
 import type { InspectTarget } from "./Inspector";
@@ -40,6 +40,7 @@ export function ExpiryView({ targets, onInspect }: { targets: ScanTarget[]; onIn
   const [result, setResult] = useState<ExpiryResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [progress, setProgress] = useState<ExpiryProgress | null>(null);
   const [win, setWin] = useState<Window>("all");
   const [side, setSide] = useState<"both" | "left" | "right">("both");
   const [hideCa, setHideCa] = useState(false);
@@ -49,12 +50,14 @@ export function ExpiryView({ targets, onInspect }: { targets: ScanTarget[]; onIn
   async function scan() {
     setBusy(true);
     setError(null);
+    setProgress(null);
     try {
-      setResult(await api.expiry(targets.map(({ side, conn_id, mount, prefix }) => ({ side, conn_id, mount, prefix }))));
+      setResult(await api.expiryStream(targets.map(({ side, conn_id, mount, prefix }) => ({ side, conn_id, mount, prefix })), setProgress));
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setBusy(false);
+      setProgress(null);
     }
   }
 
@@ -91,6 +94,18 @@ export function ExpiryView({ targets, onInspect }: { targets: ScanTarget[]; onIn
       </div>
       {targets.length === 0 && <div className="notice info">Choose a connection and a KV v2 mount on at least one side.</div>}
       {error && <div className="notice error" role="alert">{error}</div>}
+      {busy && progress && (
+        <div className="notice info scan-progress" role="status">
+          <span className="spinner" /> {labels[progress.side]}:{" "}
+          {progress.stage === "listing" ? "listing secrets…"
+            : progress.stage === "done" ? "finishing…"
+            : `${progress.stage === "reading" ? "reading" : "checking"} ${progress.done.toLocaleString()} of ${progress.total.toLocaleString()} secrets`}
+          {progress.certificates > 0 && ` · ${progress.certificates.toLocaleString()} certificate${progress.certificates === 1 ? "" : "s"} so far`}
+          {progress.total > 0 && progress.stage !== "listing" && (
+            <progress max={progress.total} value={progress.done} aria-label="Scan progress" />
+          )}
+        </div>
+      )}
 
       {result && (
         <>

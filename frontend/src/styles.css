@@ -499,27 +499,12 @@ textarea { width: 100%; padding: 8px 10px; background: var(--surface); border: 1
 .plan-note-input { min-width: 0; flex: 0 1 260px; }
 @media (max-width: 640px) { .plan-note-input { flex-basis: 100%; } }
 
-/* Override: typed values for one or both sides */
-.override-actions { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: auto; }
-.override-left[aria-pressed="true"] { border-color: var(--left); color: var(--left); font-weight: 600; }
-.override-right[aria-pressed="true"] { border-color: var(--right); color: var(--right); font-weight: 600; }
-.override-editor { border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--surface-2);
-  padding: 10px 12px; margin: 0 0 12px; display: grid; gap: 8px; }
-.override-head { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; }
-.override-row { display: grid; grid-template-columns: minmax(140px, 220px) 1fr auto; gap: 8px; align-items: start; }
-.override-key { min-width: 0; overflow-wrap: anywhere; }
-.override-value { width: 100%; min-width: 0; resize: vertical; padding: 5px 8px; border: 1px solid var(--border);
-  border-radius: var(--radius-sm); background: var(--surface); font-size: 12.5px; }
+/* Typed values (overrides) */
 .masked-input { -webkit-text-security: disc; text-security: disc; }
-.override-foot { display: flex; gap: 8px; align-items: center; }
-.override-new { margin: -4px 0 8px; }
 .badge.override-tag { height: 18px; font-size: 11px; padding: 0 6px; border-radius: 4px; font-weight: 600; }
 .badge.override-tag.left { background: var(--left-soft); color: var(--left); }
 .badge.override-tag.right { background: var(--right-soft); color: var(--right); }
-@media (max-width: 720px) {
-  .override-row { grid-template-columns: 1fr; }
-  .override-actions { margin-left: 0; }
-}
+.badge.override-tag.remove { background: var(--error-soft); color: var(--error); }
 
 /* Keystore password finder (inspector) */
 .pw-finder { display: grid; gap: 6px; margin: 0 0 10px; }
@@ -573,3 +558,45 @@ textarea { width: 100%; padding: 8px 10px; background: var(--surface); border: 1
   .transfer { grid-template-columns: 1fr; }
   .transform-row input, .transform-row input.narrow { width: 100%; }
 }
+
+/* Certificate scan progress */
+.scan-progress { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.scan-progress progress { flex: 1 1 160px; max-width: 320px; height: 8px; accent-color: var(--text-2); }
+
+/* Results: grouping, bulk copy, expand/collapse */
+.results-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: -2px 0 10px; }
+.group-select { display: inline-flex; align-items: center; gap: 6px; }
+.group-select select { height: 28px; }
+.bulk-copy { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.group { border-bottom: 1px solid var(--border); }
+.group:last-child { border-bottom: 0; }
+.group-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 14px; background: var(--surface-2);
+  border-bottom: 1px solid var(--border); }
+.group-toggle { display: inline-flex; align-items: center; gap: 8px; flex: 1; min-width: 0; padding: 4px 0; background: none;
+  border: 0; cursor: pointer; text-align: left; font-weight: 650; font-size: 13px; color: var(--text); }
+.group-toggle .mono { overflow-wrap: anywhere; }
+.group[data-folded="false"] > .group-head .caret { transform: rotate(90deg); }
+.group[data-folded="true"] > .group-head { border-bottom: 0; }
+.group .secret:last-child { border-bottom: 0; }
+
+/* Values edited in place: typed, removed, being edited */
+.cell-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 4px; }
+.cell-tools .spacer { flex: 1; }
+.btn.danger { color: var(--error); }
+.btn.danger[aria-pressed="true"] { background: var(--error-soft); }
+.key-name .key-delete { margin-left: auto; font-family: var(--sans); font-weight: 500; }
+.val.typed-val { border: 2px solid var(--text-2); background: var(--surface); }
+.val-cell.staged.set .val.typed-val { border-style: solid; }
+.val.removed-val { border: 2px dashed var(--error); color: var(--error); background: var(--error-soft);
+  font-family: var(--sans); text-decoration: line-through; }
+.val-input { display: block; width: 100%; min-width: 0; resize: vertical; max-height: none; font-size: 12px;
+  color: var(--text); border: 2px solid var(--text-2); background: var(--surface); }
+.val-input:focus { outline: 2px solid var(--focus, var(--text)); outline-offset: 1px; }
+.val-cell.editing .notice { margin: 4px 0 0; }
+.key-row.added .key-label { font-style: italic; }
+.add-key { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 0 2px; border-top: 1px dashed var(--border); }
+.add-key input { flex: 0 1 220px; min-width: 0; height: 28px; }
+.add-key .notice { margin: 0; padding: 4px 8px; }
+.plan-head-end { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.plan-keys td.drop { width: 1%; text-align: right; }
+.plan-values-ok { flex: 0 1 auto; }

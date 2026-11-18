@@ -33,6 +33,9 @@ What counts as a difference:
 
 Filters (*All changes*, *Different*, *Left only*…, *Everything*) and the path/key search narrow the list. Folders a side couldn't list are named above the results.
 
+- **Group:** *By folder* puts secrets under a header for each folder; click a header to fold it. *Staged first* lists what you've staged under its own header, ahead of the rest. The choice is remembered in your browser.
+- **Expand all** and **Collapse all** open or close every secret shown.
+
 ### Values and metadata
 
 - **Show values** (top right) reveals values, only for secrets you expand. They're fetched on demand and forgotten when you switch it off.
@@ -82,23 +85,30 @@ Each pick is struck through straight away and listed in the bar above the result
 ## 3. Copy values between the sides
 
 - **← / →** next to a key stages a copy of that key toward that side. A key can only travel one way.
-- **all keys to left / right**, inside an expanded secret, stages every key the source has.
+- **all keys to left / right**, inside an expanded secret, stages every key the source has. It also shows as pressed once you've staged every differing key one at a time; pressing it then unstages them.
+- **Many secrets at once:** with *Group: By folder*, each folder header has **← all *n* secrets to left** and **all *n* secrets to right →**. Above the results, the same buttons act on everything shown, so you can type a path into the filter and move everything under it. Press a pressed button again to unstage.
 - A dashed outline marks each value that will be overwritten. The bar at the bottom counts what's staged.
 
 ### Override values
 
-To set a value yourself instead of copying the other side's, expand the secret and choose **Override left**, **Override right** or **Override both**. Tick the keys to set and type their new values; **＋ Add key** adds a key the secret doesn't have yet. Values are text unless you tick **JSON**, which stores numbers, booleans, objects and lists as those types. While *Show values* is off, what you type is masked; with it on, the fields start from the side's current values.
+To set a value yourself instead of copying the other side's, expand the secret and choose **Edit** under the value, on the side you want to change. The value becomes a text field: type the new value and **Set value** (or Ctrl/⌘+Enter). With *Show values* on, the field starts from the other side's value if it has the key, otherwise from this side's own. With it off, nothing is fetched: the field starts empty and what you type is masked. Values are text unless you tick **JSON**, which stores numbers, booleans, objects and lists as those types.
+
+To add a key the secret doesn't have yet, type its name at the bottom of the secret and choose **＋ Add to left**, **＋ Add to right** or **＋ Add to both**.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/13-override-dark.png">
-  <img alt="Override editor setting a new password on one side" src="images/13-override-light.png">
+  <img alt="A new password typed in place on one side, and a key staged for deletion on both" src="images/13-override-light.png">
 </picture>
 
-**Stage override** adds the values to the changeset, marked **set →** or **← set** on each key, and they go through the same review and apply as copies: check-and-set against the version you compared, other keys kept, nothing deleted. An override and copies into the same secret are written together, as one new version. A key is either copied or overridden on a side, not both: staging one replaces the other.
+A staged value takes the place of what that side shows, marked **new value**, with **Edit** to change it and **Undo** to drop it. Typed values go through the same review and apply as copies: check-and-set against the version you compared, other keys kept. Typed values and copies into the same secret are written together, as one new version. A key is either copied or typed on a side, not both: staging one replaces the other.
 
-Override values are the only values the browser sends to the server. They're kept in the page until you apply or clear them, are never stored, and aren't audit-logged: the log lists the overridden key names only. Because [sync plans](#sync-plans) never hold values, a review with overrides can't be saved as a plan.
+Typed values are the only values the browser sends to the server. They're kept in the page until you apply or clear them, and aren't audit-logged: the log lists the overridden key names only. A [sync plan](#sync-plans) can hold them, if you agree to it.
 
-**Review & apply** opens a preview for each target secret: keys **added** or **updated** (with old → new values if *Show values* is on), the version it will become, and any problems:
+### Delete keys
+
+**Delete** under a value stages removing that key from that side; **Delete everywhere** (next to the key's name) does it on both sides. The value is shown struck through as **will be removed** until you **Undo** it. On apply, the secret gets a new version without the key, written with check-and-set like any other change. Earlier versions still hold the key, so `vault kv rollback` can bring it back. Removing every key leaves the secret with an empty new version; the review warns about that. Deleting needs only write access to the secret.
+
+**Review & apply** opens a preview for each target secret: keys **added**, **updated** or **removed** (with old → new values if *Show values* is on), the version it will become, and any problems. **×** next to a key takes it out of the changes, and **Remove** takes out a whole secret; the preview updates to match.
 
 | Preview status | Meaning |
 |---|---|
@@ -112,7 +122,7 @@ Tick the confirmation (it names the target Vaults and mounts) and **Apply**. The
 
 - **Fresh source values:** copied values are **read again from Vault**, never taken from the browser. The only values the browser sends are the ones you typed as overrides.
 - **Check-and-set:** each write uses KV v2 **check-and-set** against the version you saw. If someone else changes the target in the meantime, that secret comes back as **Conflict: not written**; the rest still go through.
-- **No deletes:** keys that exist only on the target are kept. Nothing is ever deleted.
+- **Nothing deleted unless you asked:** keys that exist only on the target are kept. Only keys you chose to **Delete** are removed, and then only from the new version.
 - **Types preserved:** a number stays a number.
 
 Results are shown for each secret, then the tool compares again.
@@ -135,20 +145,24 @@ Values are never logged: `keys` lists every key written and `overridden` the one
 
 ### Sync plans
 
-A plan is a reviewed set of copies saved as a file, so one person can prepare the changes and
+A plan is a reviewed set of changes saved as a file, so one person can prepare the changes and
 another (with write access to the targets) can apply them later. It's also a report of what
 needs updating from where.
 
 **Save a plan.** Stage copies as usual and open **Review & apply…**. Add an optional note and
 choose **Save as plan**. You don't need write access to the targets to do this: a read-only
 user can prepare a plan for someone else. Lockstep downloads `lockstep-plan-<date>-<id>.json`;
-**Download report** gives the same plan as a Markdown table (from, to, key, add or update).
+**Download report** gives the same plan as a Markdown table (from, to, key, add, update or remove).
 Changes that conflict or can't be read can't go into a plan: compare again first. Keys whose
 target already has the same value are left out.
 
 A plan records, for each secret: the source and target paths, the keys and whether each is
-added or updated, and the version of the source and target at the time. It **never contains
-values**: they're read from the source when the plan is applied. It also records who created
+added, updated or removed, and the version of the source and target at the time. **Copied
+values are never in it**: they're read from the source when the plan is applied. Values you
+typed are the exception: to save a review that has some, tick *The plan file will hold the
+values I typed*. They're stored in the file as they are, so anyone with the file can read
+them; treat it like a secret. The plan says so (`holds_values`), and the report marks those
+keys *typed* without showing their values. It also records who created
 it on each side, the comparison profile (if any) and the note. The file is signed by the
 Lockstep server (with a key derived from `LOCKSTEP_SESSION_KEY`), so any edit to it is
 detected and the plan is refused. A plan made by one Lockstep server can't be applied on

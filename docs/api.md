@@ -41,12 +41,13 @@ The web UI uses this API, and you can script against it too. Interactive documen
 | Method & path | Purpose |
 |---|---|
 | `POST /api/expiry` | `{"sides": [{"side": "left"\|"right", "conn_id", "mount", "prefix"?}]}` returns every certificate found (subject, issuer, dates, status, where; never values), keystores that couldn't be fully checked, and per-side scan stats |
+| `POST /api/expiry/stream` | The same scan as NDJSON, one event per line: `{"progress": {"side", "stage", "done", "total", "certificates"}}` at least every few seconds, then `{"result": …}` (the `/api/expiry` body) or `{"error": {"status", "message"}}`. A long scan keeps sending lines, so proxies don't time it out. The web app uses this one |
 
 ## Copying
 
 | Method & path | Purpose |
 |---|---|
-| `POST /api/sync/preview` | `{"left","right","changes":[{"path","right_path"?,"direction":"left_to_right"\|"right_to_left","keys": [...]\|null,"expected_target_version","expected_source_version"}],"reveal"?}` returns a plan per secret |
+| `POST /api/sync/preview` | `{"left","right","changes":[{"path","right_path"?,"direction":"left_to_right"\|"right_to_left","keys": [...]\|null,"set"?: {key: value},"remove"?: [...],"expected_target_version","expected_source_version"}],"reveal"?}` returns a plan per secret. `set` writes typed values; `remove` drops keys from the target's new version |
 | `POST /api/sync/apply` | The same body plus `"confirm": true`; returns a result per secret and a summary |
 
 ## Sync plans
@@ -55,7 +56,7 @@ A plan is a signed JSON file (format `lockstep.sync-plan`, version 1) with no va
 
 | Method & path | Purpose |
 |---|---|
-| `POST /api/plans` | The `/api/sync/preview` body (without `reveal`) plus optional `"note"` and `"profile"`; returns the signed plan. 409 if a change conflicts or can't be read, 400 if nothing would change |
+| `POST /api/plans` | The `/api/sync/preview` body (without `reveal`) plus optional `"note"` and `"profile"`; returns the signed plan. Typed values (`set`) go into the plan as they are, and the plan says `"holds_values": true`. 409 if a change conflicts or can't be read, 400 if nothing would change |
 | `POST /api/plans/verify` | `{"plan"}`: returns `{"plan"}` if the signature is valid, else 400. No Vault access |
 | `POST /api/plans/report` | `{"plan"}`: the plan as Markdown |
 | `POST /api/plans/check` | `{"plan","left_conn_id","right_conn_id"}`: `{"status": "ready"\|"stale"\|"denied"\|"error","message","changes"}`. 409 if a connection isn't the Vault the plan names |

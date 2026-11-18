@@ -166,7 +166,30 @@ def test_conflicting_change_cannot_be_planned(client, env):
     assert r.status_code == 409 and "Compare again" in r.json()["detail"]["message"]
 
 
-def test_overrides_never_go_into_a_plan(client, env, two_secrets):
-    change = two_secrets[0] | {"keys": [], "set": {"password": "typed"}}
-    r = create(client, env, [change])
-    assert r.status_code == 400 and "overrides can't go into a plan" in r.json()["detail"]["message"]
+def test_plan_with_typed_values_and_removals(client, env, two_secrets):
+    db = two_secrets[0] | {"keys": [], "set": {"password": "typed-pw"}, "remove": ["only_b"]}
+    r = create(client, env, [db, two_secrets[1]])
+    assert r.status_code == 200, r.text
+    plan = r.json()
+    assert plan["holds_values"] is True
+    by_path = {c["path"]: c for c in plan["changes"]}
+    assert [(k["key"], k["action"], k["override"]) for k in by_path["db"]["keys"]] == [
+        ("password", "update", True), ("only_b", "remove", False)]
+    assert by_path["db"]["set"] == {"password": "typed-pw"}  # only typed values are in the file
+    assert by_path["api"]["set"] is None and "t-123" not in json.dumps(plan)
+
+    md = client.post("/api/plans/report", json={"plan": plan}).text
+    assert "update (typed)" in md and "remove" in md and "typed-pw" not in md
+
+    # Editing a typed value breaks the signature
+    edited = copy.deepcopy(plan)
+    edited["changes"][[c["path"] for c in plan["changes"]].index("db")]["set"]["password"] = "evil"
+    assert check(client, edited, env.ca, env.cb).status_code == 400
+
+    # The source moving doesn't matter to a change that copies nothing
+    env.a.put(f"{env.prefix}/db", {"user": "app", "password": "moved-on", "same": "x"})
+    assert check(client, plan, env.ca, env.cb).json()["status"] == "ready"
+    out = apply(client, plan, env.ca, env.cb)
+    assert out.status_code == 200, out.text
+    assert env.b.get(f"{env.prefix}/db")[0] == {"user": "app", "password": "typed-pw", "same": "x"}
+    assert env.b.get(f"{env.prefix}/api")[0] == {"token": "t-123"}

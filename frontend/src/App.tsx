@@ -344,7 +344,7 @@ export function App() {
       })()}
 
       {reviewing && result && hasStaged && (
-        <ReviewDialog result={result} changeset={changeset} reveal={reveal} profile={activeProfile?.name ?? null}
+        <ReviewDialog result={result} changeset={changeset} onChangeset={setChangeset} reveal={reveal} profile={activeProfile?.name ?? null}
                       sides={{ left: sideRef(sides[0]), right: sideRef(sides[1]) }}
                       onClose={(applied) => {
                         setReviewing(false);
