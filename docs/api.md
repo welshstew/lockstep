@@ -48,7 +48,8 @@ The web UI uses this API, and you can script against it too. Interactive documen
 | Method & path | Purpose |
 |---|---|
 | `POST /api/sync/preview` | `{"left","right","changes":[{"path","right_path"?,"direction":"left_to_right"\|"right_to_left","keys": [...]\|null,"set"?: {key: value},"remove"?: [...],"expected_target_version","expected_source_version"}],"reveal"?}` returns a plan per secret. `set` writes typed values; `remove` drops keys from the target's new version |
-| `POST /api/sync/apply` | The same body plus `"confirm": true`; returns a result per secret and a summary |
+| `POST /api/sync/apply` | The same body plus `"confirm": true`; returns a result per secret and a summary. A change that removes every key soft-deletes the latest version (`"action": "delete"`) |
+| `POST /api/destroy` | `{"side": {"conn_id", "mount", "prefix"?}, "secrets": [{"path", "expected_version"?}], "confirm": true}` permanently deletes every version and the metadata of each secret. One that's at a different version than `expected_version` isn't destroyed (`conflict`). Returns a result per secret (`destroyed`, `absent`, `conflict`, `denied`, `error`) and a summary. 403 when `LOCKSTEP_ALLOW_DESTROY` is false |
 
 ## Sync plans
 

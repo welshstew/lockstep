@@ -36,6 +36,9 @@ interface Props {
   draft?: ProfileRules;
   onDraft?: (r: ProfileRules) => void;
   fileDocs?: { left?: ExportDoc; right?: ExportDoc };
+  /** Destroy this secret on one side (opens a confirmation) */
+  onDestroy?: (side: Side) => void;
+  canDestroy?: { left: boolean; right: boolean };
 }
 
 type Values = Record<string, unknown> | null;
@@ -175,7 +178,7 @@ function StagedCell({ side, kind, value, reveal, onEdit, onUndo }: {
   );
 }
 
-export function SecretRow({ secret, left, right, reveal, open, onToggle, changeset, onChangeset, onInspect, sideNames, ignoreMode, draft, onDraft, fileDocs }: Props) {
+export function SecretRow({ secret, left, right, reveal, open, onToggle, changeset, onChangeset, onInspect, sideNames, ignoreMode, draft, onDraft, fileDocs, onDestroy, canDestroy }: Props) {
   // An export file side is read-only and has no history; its values are in the opened file.
   const isFile = { left: left.kind === "file", right: right.kind === "file" };
   const fileData = (s: SideSummary, path: string) => {
@@ -514,6 +517,17 @@ export function SecretRow({ secret, left, right, reveal, open, onToggle, changes
                 <button type="button" className="btn small" disabled={!newKey.trim()} onClick={() => addKey(["left", "right"])}>＋ Add to both</button>
               )}
               {newKeyError && <span className="notice error" role="alert">{newKeyError}</span>}
+            </div>
+          )}
+          {onDestroy && SIDES.some((x) => canDestroy?.[x] && ["present", "deleted"].includes(secret[x].state)) && (
+            <div className="secret-actions destroy-actions">
+              <span className="subtle">Every version, permanently:</span>
+              {SIDES.filter((x) => canDestroy?.[x] && ["present", "deleted"].includes(secret[x].state)).map((x) => (
+                <button key={x} type="button" className="btn ghost small danger" onClick={() => onDestroy(x)}
+                        title={`Permanently delete every version of this secret, and its metadata, on the ${x} (${sideNames[x]})`}>
+                  Destroy on {x}…
+                </button>
+              ))}
             </div>
           )}
         </div>

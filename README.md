@@ -10,6 +10,8 @@
 
 Compare **KV v2 secrets engines** across HashiCorp Vault clusters, or across two mounts in the same Vault. See exactly which values differ, without displaying them. Copy selected keys between the two sides safely, with a reviewed changeset.
 
+**Made for development environments.** Lockstep's main job is keeping dev, test, integration and preview environments in step: finding the missing key or stale URL behind "works in dev, fails in test", copying or editing values to fix it, standing up a new environment from an existing one with export and import, and cleaning up afterwards. Production can be compared read-only, with changes sent through sync plans. See [Lockstep for development environments](docs/guides/vault-secrets-in-development-environments.md).
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/02-compare-dark.png">
   <img alt="Two Vaults compared side by side: secrets listed with Different, Left only, Right only and No access statuses, values masked" src="docs/images/02-compare-light.png">
@@ -23,6 +25,7 @@ Compare **KV v2 secrets engines** across HashiCorp Vault clusters, or across two
 - **Comparison profiles.** Pair paths that differ between environments (`services/*/prod/**` ⇄ `services/*/staging/**`), and ignore keys or paths that are meant to differ. Copies follow the mapping. Profiles can be shared by the team (server) or personal (browser, export/import).
 - **Honest about permissions.** Secrets you can't list or read show as **No access**, never as "only on the other side", so nobody overwrites what they couldn't see.
 - **Copy with ← / →** per key or per secret. A review shows exactly what each target gets. Writes use KV v2 **check-and-set**: a target changed by someone else since you compared becomes a conflict, not an overwrite. Nothing is deleted unless you ask (**Delete** on a key). Every write is **audit-logged** (without values).
+- **Clean up for good.** **Destroy** a secret on one side, or every secret shown with **Destroy all on left / right**: every version and its metadata, after typing a confirmation phrase. Checked against the version you compared and audit-logged; can be turned off server-wide.
 - **Sync plans.** Save a reviewed set of changes as a signed file (paths, keys and versions; never copied values) that doubles as a report of what needs updating from where. Someone with write access opens it, checks it and applies it. If anything in it changed since it was made, nothing is written and the plan has to be made again. Read-only users can prepare plans.
 - **Command line too.** `lockstep compare` writes a YAML report of the differences (no values), with each secret's Vault UI link and `vault kv get` command. Set an action on the keys to change, and `lockstep apply` makes the copies, asking before each key is written. Logs in like the `vault` CLI, and works as a drift check in CI (exit code 1 on differences). See [Command line](docs/cli.md).
 - **Export and import a secret engine.** Export a mount with its values to a file, encrypted with a one-time key, leaving out what you choose. Compare a Vault against an export, copy from it, or import it into another Vault with rules and transforms (`application-dev-env` → `application-test-env`), previewed and written with check-and-set. In the UI and the CLI (`lockstep export`, `lockstep import`).
@@ -61,16 +64,16 @@ This starts two dev-mode Vaults filled with demo data, Dex as an OIDC provider, 
 ## Deploy
 
 ```sh
-helm upgrade --install lockstep oci://ghcr.io/welshstew/charts/lockstep --version 0.5.0 \
+helm upgrade --install lockstep oci://ghcr.io/welshstew/charts/lockstep --version 0.6.0 \
   -n lockstep --create-namespace -f my-values.yaml
 ```
 
-Or run the container anywhere: `ghcr.io/welshstew/lockstep:0.5.0` (amd64 and arm64, signed with cosign, with an SBOM and build provenance; see [releases](https://github.com/welshstew/lockstep/releases)).
+Or run the container anywhere: `ghcr.io/welshstew/lockstep:0.6.0` (amd64 and arm64, signed with cosign, with an SBOM and build provenance; see [releases](https://github.com/welshstew/lockstep/releases)).
 
 For the command line, install from GitHub (it isn't on PyPI yet) or use the same image with `--entrypoint lockstep`. See [Command line: install](docs/cli.md#install):
 
 ```sh
-pipx install "git+https://github.com/welshstew/lockstep@v0.5.0#subdirectory=backend"
+pipx install "git+https://github.com/welshstew/lockstep@v0.6.0#subdirectory=backend"
 ```
 
 A hardened chart: non-root, read-only filesystem, a session key kept across upgrades, optional Ingress, NetworkPolicy and Kubernetes auth. See [Deploying on Kubernetes](docs/kubernetes.md) and the [chart README](charts/lockstep/README.md).

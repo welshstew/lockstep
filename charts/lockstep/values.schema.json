@@ -108,6 +108,9 @@
       "type": "integer",
       "minimum": 1
     },
+    "allowDestroy": {
+      "type": "boolean"
+    },
     "exportMode": {
       "type": "string",
       "enum": ["any", "encrypted", "off"]

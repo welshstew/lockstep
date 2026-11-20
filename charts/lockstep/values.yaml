@@ -39,6 +39,8 @@ customUrlPatterns: []               # regexes a custom address must fully match
 maxTreeSecrets: 5000
 # Secret-engine exports hold values: any (users choose encrypted or plain) | encrypted | off
 exportMode: any
+# Offer Destroy (every version and the metadata of a secret, no undo). Vault policies still apply.
+allowDestroy: true
 
 vaultTls:
   verify: true

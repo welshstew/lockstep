@@ -34,9 +34,11 @@ Only **Apply** in the review dialog and **Import** write, and only:
 - values **read again from the source Vault** at that moment, never copied values from the browser
 - or values you typed as an [override](usage.md#override-values), or from an export file you [import](usage.md#6-export-and-import) or copy from
 - with KV v2 **check-and-set** against the version you compared, so concurrent edits become conflicts
-- **adding or updating keys.** Keys are removed only when you ask: a key you [**Delete**](usage.md#delete-keys) in the compare view (a new version without it; older versions keep it), or, on an import with *Make the target match the file*, keys and secrets the file doesn't have (secrets are soft-deleted).
+- **adding or updating keys.** Keys are removed only when you ask: a key you [**Delete**](usage.md#delete-keys) in the compare view (a new version without it; older versions keep it; removing every key soft-deletes the latest version instead), or, on an import with *Make the target match the file*, keys and secrets the file doesn't have (secrets are soft-deleted).
 
-Every attempted write is [audit-logged](usage.md#audit-log), without values. Tokens the tool created (userpass, LDAP, OIDC, Kubernetes) are revoked on *Sign out*; pasted tokens are left alone.
+**Destroying** is the one action that can't be undone: [**Destroy**](usage.md#destroy-secrets) permanently deletes every version and the metadata of the secrets you chose, on one side, after you type a confirmation phrase. Each is checked against the version you compared first. It needs the `delete` capability on `<mount>/metadata/…`, and `LOCKSTEP_ALLOW_DESTROY=false` turns it off for everyone.
+
+Every attempted write and destroy is [audit-logged](usage.md#audit-log), without values. Tokens the tool created (userpass, LDAP, OIDC, Kubernetes) are revoked on *Sign out*; pasted tokens are left alone.
 
 ## Web protections
 
@@ -73,6 +75,14 @@ path "sys/mounts"            { capabilities = ["read"] }           # optional: f
 # Also copy into this mount
 path "app-config/data/*"     { capabilities = ["read", "create", "update"] }
 ```
+
+```hcl
+# Also soft-delete (removing every key, imports that match the file) and destroy
+path "app-config/data/*"     { capabilities = ["read", "create", "update", "delete"] }
+path "app-config/metadata/*" { capabilities = ["read", "list", "delete"] }   # delete here = destroy
+```
+
+Leave `delete` on `metadata/*` out of policies for people who shouldn't destroy secrets, or turn destroying off for everyone with `LOCKSTEP_ALLOW_DESTROY=false`.
 
 The default policy already allows `sys/internal/ui/mounts` (mount list fallback), `sys/capabilities-self` (permission checks in the copy review) and token self-lookup and revocation.
 

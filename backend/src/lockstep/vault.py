@@ -263,6 +263,11 @@ class VaultClient:
         check the version just before."""
         await self.request("DELETE", f"{mount}/data/{_q(path)}")
 
+    async def kv_destroy_all(self, mount: str, path: str) -> None:
+        """Permanently delete every version and the metadata (`vault kv metadata delete`).
+        Can't be undone."""
+        await self.request("DELETE", f"{mount}/metadata/{_q(path)}")
+
     async def capabilities(self, paths: list[str]) -> dict[str, list[str]]:
         """This token's capabilities on each path (sys/capabilities-self)."""
         if not paths:

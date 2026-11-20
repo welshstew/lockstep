@@ -37,7 +37,7 @@ REPO = "https://github.com/welshstew/lockstep"
 # docs/<name>.md published at /docs/<name>/, in this order
 DOCS = ["usage", "cli", "authentication", "configuration", "kubernetes", "security"]
 # docs/guides/<name>.md published at /guides/<name>/: these first, in this order, then any others
-GUIDES = ["compare-hashicorp-vault-clusters", "sync-vault-secrets-between-environments",
+GUIDES = ["vault-secrets-in-development-environments", "compare-hashicorp-vault-clusters", "sync-vault-secrets-between-environments",
           "detect-vault-secret-drift-in-ci", "export-import-vault-secrets",
           "build-a-comparison-profile", "vault-jwt-login-from-ci"]
 

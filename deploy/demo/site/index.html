@@ -75,6 +75,10 @@
         <h2>Everything you need to keep secrets in sync</h2>
         <div class="grid">
           <article>
+            <h3>Made for development environments</h3>
+            <p>Dev, test, integration and a preview per branch drift apart a little every week. Find the missing key behind "works in dev, fails in test", fix it in place, stand up new environments from old ones, and clean up after them. <a href="/guides/vault-secrets-in-development-environments/">How teams use it</a>.</p>
+          </article>
+          <article>
             <h3>Compare anything to anything</h3>
             <p>Two Vaults, two mounts or two path prefixes. See which secrets and keys are equal, different, or only on one side, down to a <code>5432</code> vs <code>"5432"</code> type change.</p>
           </article>
@@ -84,7 +88,7 @@
           </article>
           <article>
             <h3>Copies you can trust</h3>
-            <p>Copy a key or a whole secret with ← / → after a review. Check-and-set writes never overwrite a change made since you compared. Nothing is deleted, and every write is audit-logged.</p>
+            <p>Copy a key or a whole secret with ← / → after a review. Check-and-set writes never overwrite a change made since you compared. Nothing is deleted unless you ask, and every write is audit-logged.</p>
           </article>
           <article>
             <h3>Sync plans</h3>
@@ -105,6 +109,10 @@
           <article>
             <h3>Set values yourself</h3>
             <p><strong>Edit any value in place</strong>, starting from the other side's, add keys or delete them on one side or both, all through the same review and check-and-set write as a copy. Typed values are never logged.</p>
+          </article>
+          <article>
+            <h3>Clean up for good</h3>
+            <p><strong>Destroy</strong> a secret, or every secret under a filter, with all its versions and metadata. You type a confirmation first, anything changed since you compared is skipped, and every destroy is audit-logged.</p>
           </article>
           <article>
             <h3>Finds keystore passwords</h3>
@@ -235,12 +243,12 @@ open http://localhost:8080</code></pre>
           </div>
           <div class="span">
             <h3>Command line</h3>
-<pre><code>pipx install "git+https://github.com/welshstew/lockstep@v0.5.0#subdirectory=backend"
+<pre><code>pipx install "git+https://github.com/welshstew/lockstep@v0.6.0#subdirectory=backend"
 lockstep compare --help
 lockstep export --help    # and lockstep import
 
 # or run it from the image
-docker run --rm -it --entrypoint lockstep ghcr.io/welshstew/lockstep:0.5.0 --help</code></pre>
+docker run --rm -it --entrypoint lockstep ghcr.io/welshstew/lockstep:0.6.0 --help</code></pre>
           </div>
         </div>
         <p class="more">Configuration, authentication, deployment and <a href="/docs/cli/">command-line</a> guides are in the <a href="/docs/">documentation</a>.</p>
@@ -251,6 +259,10 @@ docker run --rm -it --entrypoint lockstep ghcr.io/welshstew/lockstep:0.5.0 --hel
       <div class="wrap">
         <h2>Guides</h2>
         <div class="grid">
+          <article>
+            <h3><a href="/guides/vault-secrets-in-development-environments/">Lockstep for development environments</a></h3>
+            <p>Its main job: find why test differs from dev, bring environments back in step, stand up new ones and clean up after them.</p>
+          </article>
           <article>
             <h3><a href="/guides/compare-hashicorp-vault-clusters/">How to compare secrets between two Vault clusters</a></h3>
             <p>Diffing with the vault CLI and where it falls short, then comparing whole mounts in the browser or from the terminal.</p>

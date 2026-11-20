@@ -1,5 +1,5 @@
 import type {
-  AnalyzeOptions, AnalyzeResult, ApiChange, PasswordSearch, ExportDoc, ExportResult, ImportPreview, ImportRules, AppConfig, ApplyResult, ChangePlan, CompareResult, Connection, ExpiryResult, KeyHistory, Locator, Mount, MountsResponse, PlanApplyResult, PlanCheck, Profile, ProfileRules, SecretValues, SyncPlan,
+  AnalyzeOptions, AnalyzeResult, ApiChange, PasswordSearch, ExportDoc, ExportResult, ImportPreview, ImportRules, AppConfig, ApplyResult, ChangePlan, CompareResult, Connection, DestroyOut, ExpiryResult, KeyHistory, Locator, Mount, MountsResponse, PlanApplyResult, PlanCheck, Profile, ProfileRules, SecretValues, SyncPlan,
 } from "./types";
 
 /** A comparison side: a Vault location, or an opened export file (read-only). */
@@ -144,6 +144,8 @@ export const api = {
     call<ChangePlan[]>("POST", "/api/sync/preview", { left, right, changes, reveal }),
   syncApply: (left: SideRef, right: SideRef, changes: ApiChange[]) =>
     call<ApplyResult>("POST", "/api/sync/apply", { left, right, changes, confirm: true }),
+  destroy: (side: VaultSide, secrets: { path: string; expected_version: number | null }[]) =>
+    call<DestroyOut>("POST", "/api/destroy", { side, secrets, confirm: true }),
   planCreate: (left: VaultSide, right: VaultSide, changes: ApiChange[], note: string, profile: string | null) =>
     call<SyncPlan>("POST", "/api/plans", { left, right, changes, note, profile }),
   planVerify: (plan: unknown) => call<{ plan: SyncPlan }>("POST", "/api/plans/verify", { plan }),

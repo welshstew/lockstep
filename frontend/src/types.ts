@@ -10,6 +10,7 @@ export interface AppConfig {
   allow_custom_connections: boolean;
   demo_banner?: string;
   export_mode?: "any" | "encrypted" | "off";
+  allow_destroy?: boolean;
   k8s_auth: {
     available: boolean;
     mount: string;
@@ -175,6 +176,22 @@ export interface ChangeResult {
   new_version: number | null;
   keys: string[];
   message: string;
+}
+
+export type DestroyStatus = "destroyed" | "absent" | "conflict" | "denied" | "error";
+
+export interface DestroyResult {
+  path: string;
+  target: string;
+  status: DestroyStatus;
+  version: number | null;
+  versions: number | null;
+  message: string;
+}
+
+export interface DestroyOut {
+  results: DestroyResult[];
+  summary: Record<DestroyStatus, number>;
 }
 
 export interface ApplyResult {

@@ -136,7 +136,8 @@ export function ReviewDialog({ result, changeset, onChangeset, reveal, profile, 
                 </div>
                 <div className="subtle">
                   {r.status === "applied"
-                    ? `v${r.old_version ?? "—"} → v${r.new_version} · ${r.keys.join(", ")}${r.overridden.length ? ` (typed: ${r.overridden.join(", ")})` : ""}`
+                    ? r.action === "delete" ? `v${r.old_version ?? "—"} deleted (every key removed: ${r.keys.join(", ")})`
+                    : `v${r.old_version ?? "—"} → v${r.new_version} · ${r.keys.join(", ")}${r.overridden.length ? ` (typed: ${r.overridden.join(", ")})` : ""}`
                     : r.message}
                 </div>
               </li>
@@ -159,7 +160,8 @@ export function ReviewDialog({ result, changeset, onChangeset, reveal, profile, 
                   </span>
                 </div>
                 <div className="subtle">
-                  {p.target.state === "absent" ? "New secret on the target"
+                  {p.action === "delete" ? `Target v${p.target.version ?? "—"} is deleted (soft: \`vault kv undelete\` brings it back)`
+                    : p.target.state === "absent" ? "New secret on the target"
                     : `Target v${p.target.version ?? "—"} → v${(p.target.version ?? 0) + 1}`}
                 </div>
                 {p.problems.map((m) => <div key={m} className="notice error">{m}</div>)}

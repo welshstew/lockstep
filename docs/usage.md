@@ -106,7 +106,22 @@ Typed values are the only values the browser sends to the server. They're kept i
 
 ### Delete keys
 
-**Delete** under a value stages removing that key from that side; **Delete everywhere** (next to the key's name) does it on both sides. The value is shown struck through as **will be removed** until you **Undo** it. On apply, the secret gets a new version without the key, written with check-and-set like any other change. Earlier versions still hold the key, so `vault kv rollback` can bring it back. Removing every key leaves the secret with an empty new version; the review warns about that. Deleting needs only write access to the secret.
+**Delete** under a value stages removing that key from that side; **Delete everywhere** (next to the key's name) does it on both sides. The value is shown struck through as **will be removed** until you **Undo** it. On apply, the secret gets a new version without the key, written with check-and-set like any other change. Earlier versions still hold the key, so `vault kv rollback` can bring it back. Deleting a key needs only write access to the secret.
+
+Removing **every** key of a secret doesn't write an empty version: the secret's latest version is soft-deleted instead (the review says so), and `vault kv undelete` brings it back. That needs the `delete` capability on `<mount>/data/…`.
+
+### Destroy secrets
+
+**Destroy on left… / right…** at the bottom of an expanded secret permanently deletes that secret on that side: **every version and its metadata** (`vault kv metadata delete`). **Destroy all on left… / right…** above the results does it for every secret shown on that side, so narrow it with the status chips and the filter first (`preview-123/`).
+
+Destroying doesn't go through the review. A dialog lists the secrets, warns that it can't be undone, and waits until you type a confirmation phrase: the secret's path for one secret, `destroy N secrets` for several. Then:
+
+- each secret is checked against the version you compared: one written since is skipped as **Changed: not destroyed**
+- only that side is touched
+- every attempt is [audit-logged](#audit-log) with `"event": "destroy"`, the version and how many versions went. No values are read.
+- the comparison runs again when you close the dialog (staged changes are cleared)
+
+Nothing can bring a destroyed secret back, so [export](#6-export-and-import) it first if you might need it. Destroying needs the `delete` capability on `<mount>/metadata/<path>`. A server admin can turn the feature off with [`LOCKSTEP_ALLOW_DESTROY=false`](configuration.md).
 
 **Review & apply** opens a preview for each target secret: keys **added**, **updated** or **removed** (with old → new values if *Show values* is on), the version it will become, and any problems. **×** next to a key takes it out of the changes, and **Remove** takes out a whole secret; the preview updates to match.
 
@@ -122,7 +137,7 @@ Tick the confirmation (it names the target Vaults and mounts) and **Apply**. The
 
 - **Fresh source values:** copied values are **read again from Vault**, never taken from the browser. The only values the browser sends are the ones you typed as overrides.
 - **Check-and-set:** each write uses KV v2 **check-and-set** against the version you saw. If someone else changes the target in the meantime, that secret comes back as **Conflict: not written**; the rest still go through.
-- **Nothing deleted unless you asked:** keys that exist only on the target are kept. Only keys you chose to **Delete** are removed, and then only from the new version.
+- **Nothing deleted unless you asked:** keys that exist only on the target are kept. Only keys you chose to **Delete** are removed, and then only from the new version (or, when every key goes, by soft-deleting the latest version).
 - **Types preserved:** a number stays a number.
 
 Results are shown for each secret, then the tool compares again.

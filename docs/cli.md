@@ -28,7 +28,7 @@ With [pipx](https://pipx.pypa.io/), which installs the CLI into its own virtual 
 
 ```sh
 # a release (recommended); the CLI is in v0.2.0 and later
-pipx install "git+https://github.com/welshstew/lockstep@v0.5.0#subdirectory=backend"
+pipx install "git+https://github.com/welshstew/lockstep@v0.6.0#subdirectory=backend"
 
 # or the latest code on main
 pipx install "git+https://github.com/welshstew/lockstep#subdirectory=backend"
@@ -39,7 +39,7 @@ lockstep --version
 [uv](https://docs.astral.sh/uv/) works the same way:
 
 ```sh
-uv tool install "git+https://github.com/welshstew/lockstep@v0.5.0#subdirectory=backend"
+uv tool install "git+https://github.com/welshstew/lockstep@v0.6.0#subdirectory=backend"
 ```
 
 To move to another release, run the same command with the new tag and `--force` (`pipx install --force ...`, `uv tool install --force ...`). To remove the CLI, run `pipx uninstall lockstep` or `uv tool uninstall lockstep`.
@@ -48,7 +48,7 @@ If you'd rather use a plain virtual environment:
 
 ```sh
 python3 -m venv ~/.venvs/lockstep
-~/.venvs/lockstep/bin/pip install "git+https://github.com/welshstew/lockstep@v0.5.0#subdirectory=backend"
+~/.venvs/lockstep/bin/pip install "git+https://github.com/welshstew/lockstep@v0.6.0#subdirectory=backend"
 ~/.venvs/lockstep/bin/lockstep --help
 ```
 
@@ -62,7 +62,7 @@ Every release image (`ghcr.io/welshstew/lockstep`, v0.2.0 and later, for amd64 a
 docker run --rm -it --entrypoint lockstep \
   -e VAULT_ADDR -e VAULT_TOKEN \
   -v "$PWD:/work" -w /work \
-  ghcr.io/welshstew/lockstep:0.5.0 \
+  ghcr.io/welshstew/lockstep:0.6.0 \
   compare --mount app-config -o report.yaml
 ```
 
@@ -80,7 +80,7 @@ A shell alias makes the image feel like an installed command:
 
 ```sh
 alias lockstep='docker run --rm -it --entrypoint lockstep -e VAULT_ADDR -e VAULT_TOKEN -e VAULT_NAMESPACE \
-  -e LOCKSTEP_LEFT_TOKEN -e LOCKSTEP_RIGHT_TOKEN -v "$PWD:/work" -w /work ghcr.io/welshstew/lockstep:0.5.0'
+  -e LOCKSTEP_LEFT_TOKEN -e LOCKSTEP_RIGHT_TOKEN -v "$PWD:/work" -w /work ghcr.io/welshstew/lockstep:0.6.0'
 ```
 
 ## Logging in

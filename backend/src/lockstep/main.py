@@ -8,7 +8,7 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .api import analyze, auth, compare, connections, expiry, exports, plans, sync
+from .api import analyze, auth, compare, connections, destroy, expiry, exports, plans, sync
 from .config import Settings, get_settings
 from .session import SessionTooLarge
 
@@ -69,6 +69,7 @@ def create_app() -> FastAPI:
             "allow_custom_connections": settings.allow_custom_connections,
             "demo_banner": settings.demo_banner,
             "export_mode": settings.export_mode,
+            "allow_destroy": settings.allow_destroy,
             "k8s_auth": {
                 "available": connections.k8s_available(settings),
                 "mount": settings.k8s_auth_mount,
@@ -91,6 +92,7 @@ def create_app() -> FastAPI:
     app.include_router(expiry.router)
     app.include_router(plans.router)
     app.include_router(exports.router)
+    app.include_router(destroy.router)
 
     if settings.static_dir and Path(settings.static_dir).is_dir():
         app.mount("/", StaticFiles(directory=settings.static_dir, html=True), name="spa")

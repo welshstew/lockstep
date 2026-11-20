@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     # Secret-engine exports (they hold values): "any" lets users choose plain or encrypted,
     # "encrypted" allows encrypted exports only, "off" disables exporting. Import is unaffected.
     export_mode: Literal["any", "encrypted", "off"] = "any"
+    # Destroying secrets (every version and the metadata, can't be undone) from the compare view.
+    # Vault's policies still decide who may; this turns the feature off for everyone.
+    allow_destroy: bool = True
     # Optional notice shown at the top of the UI (e.g. for a public demo)
     demo_banner: str = ""
     # Shared comparison profiles (JSON list), offered read-only to every user

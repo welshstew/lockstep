@@ -600,3 +600,18 @@ textarea { width: 100%; padding: 8px 10px; background: var(--surface); border: 1
 .plan-head-end { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
 .plan-keys td.drop { width: 1%; text-align: right; }
 .plan-values-ok { flex: 0 1 auto; }
+
+/* Destroying secrets */
+.destroy-all { display: inline-flex; gap: 6px; margin-left: 8px; }
+.destroy-actions { border-top: 1px dashed var(--border); margin-top: 8px; padding-top: 10px; }
+dialog.destroy-dialog { width: min(640px, calc(100vw - 32px)); }
+.destroy-warning { line-height: 1.5; }
+.destroy-list { list-style: none; margin: 8px 0 12px; padding: 8px 10px; max-height: 220px; overflow: auto;
+  border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 12px; }
+.destroy-list li { padding: 2px 0; overflow-wrap: anywhere; }
+.destroy-confirm { display: flex; flex-direction: column; gap: 6px; }
+.destroy-confirm input { width: 100%; }
+.destroy-confirm .phrase { background: var(--error-soft); color: var(--error); padding: 1px 5px; border-radius: 4px; user-select: all; }
+.btn.danger-solid { background: var(--error); color: #fff; border-color: var(--error); }
+.btn.danger-solid:hover:not(:disabled) { opacity: .9; background: var(--error); }
+.btn.danger-solid:disabled { opacity: .45; }

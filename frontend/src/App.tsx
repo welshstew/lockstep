@@ -76,6 +76,7 @@ export function App() {
     const f = fileOf(s);
     return f ? { export: f.doc, name: f.name, prefix: s.prefix } : { conn_id: s.connId!, mount: s.mount!, prefix: s.prefix };
   };
+  const vaultRef = (s: SideSelection) => (fileOf(s) || !s.connId || !s.mount ? undefined : { conn_id: s.connId, mount: s.mount, prefix: s.prefix });
   useEffect(() => { try { localStorage.setItem("lockstep.view", view); } catch { /* ignore */ } }, [view]);
   const [sharedProfiles, setSharedProfiles] = useState<Profile[]>([]);
   const [personal, setPersonal] = useState<Profile[]>(loadPersonal);
@@ -328,7 +329,10 @@ export function App() {
       {result && <Results result={result} reveal={reveal} leftLabel={label(sides[0])} rightLabel={label(sides[1])}
                           fileDocs={{ left: fileOf(sides[0])?.doc, right: fileOf(sides[1])?.doc }}
                           changeset={changeset} onChangeset={setChangeset} onInspect={setInspecting}
-                          ignoreMode={ignoreMode} draft={draft} onDraft={setDraft} />}
+                          ignoreMode={ignoreMode} draft={draft} onDraft={setDraft}
+                          destroy={config.allow_destroy === false ? undefined : {
+                            left: vaultRef(sides[0]), right: vaultRef(sides[1]), onDone: () => runCompare(),
+                          }} />}
 
 
       {result && Object.keys(changeset).length > 0 && (() => {

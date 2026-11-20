@@ -3,6 +3,10 @@ import { allStaged, canCopySecret, type Changeset, type Direction, stagedKeyCoun
 import type { InspectTarget } from "./Inspector";
 import type { CompareResult, ExportDoc, ProfileRules, SecretDiff, SecretStatus } from "../types";
 import { SecretRow, STATUS_LABEL } from "./SecretRow";
+import { DestroyDialog, type DestroyTarget } from "./DestroyDialog";
+
+type VaultSide = { conn_id: string; mount: string; prefix: string };
+type Side = "left" | "right";
 
 type Filter = "changes" | "all" | SecretStatus;
 type Grouping = "none" | "folder" | "staged";
@@ -24,7 +28,14 @@ interface Props {
   onDraft?: (r: ProfileRules) => void;
   /** Opened export files used as a side: their values are read here, not from Vault */
   fileDocs?: { left?: ExportDoc; right?: ExportDoc };
+  /** Destroying secrets: each Vault side (not an export file), and what to do afterwards */
+  destroy?: { left?: VaultSide; right?: VaultSide; onDone: () => void };
 }
+
+const pathOn = (x: SecretDiff, side: Side) => (side === "left" ? x.left_path : x.right_path) || x.path;
+/** Secrets with something on this side to destroy (current or soft-deleted versions). */
+const destroyable = (x: SecretDiff, side: Side) => x[side].state === "present" || x[side].state === "deleted";
+const targetOf = (x: SecretDiff, side: Side): DestroyTarget => ({ path: pathOn(x, side), version: x[side].version });
 
 const folderOf = (path: string) => (path.includes("/") ? path.slice(0, path.lastIndexOf("/") + 1) : "");
 
@@ -56,7 +67,8 @@ function BulkCopy({ secrets, changeset, onChangeset, sides, what }: {
   return <span className="bulk-copy">{button("right_to_left")}{button("left_to_right")}</span>;
 }
 
-export function Results({ result, reveal, leftLabel, rightLabel, changeset, onChangeset, onInspect, ignoreMode, draft, onDraft, fileDocs }: Props) {
+export function Results({ result, reveal, leftLabel, rightLabel, changeset, onChangeset, onInspect, ignoreMode, draft, onDraft, fileDocs, destroy }: Props) {
+  const [destroying, setDestroying] = useState<{ side: Side; secrets: DestroyTarget[] } | null>(null);
   const [filter, setFilter] = useState<Filter>("changes");
   const [query, setQuery] = useState("");
   const [limit, setLimit] = useState(PAGE);
@@ -130,8 +142,21 @@ export function Results({ result, reveal, leftLabel, rightLabel, changeset, onCh
                open={open.has(x.path)} onToggle={() => toggleOpen(x.path)}
                changeset={changeset} onChangeset={onChangeset} onInspect={onInspect}
                sideNames={{ left: leftLabel, right: rightLabel }}
-               ignoreMode={ignoreMode} draft={draft} onDraft={onDraft} fileDocs={fileDocs} />
+               ignoreMode={ignoreMode} draft={draft} onDraft={onDraft} fileDocs={fileDocs}
+               onDestroy={destroy && ((side) => setDestroying({ side, secrets: [targetOf(x, side)] }))}
+               canDestroy={{ left: !!destroy?.left, right: !!destroy?.right }} />
   );
+  const destroyAll = (side: Side) => {
+    if (!destroy?.[side]) return null;
+    const these = shown.filter((x) => destroyable(x, side));
+    if (!these.length) return null;
+    return (
+      <button type="button" className="btn ghost small danger" onClick={() => setDestroying({ side, secrets: these.map((x) => targetOf(x, side)) })}
+              title={`Permanently delete every secret ${query.trim() ? "matching the filter" : "shown"} that exists on the ${side} (${these.length}), with all their versions`}>
+        Destroy all on {side} ({these.length})…
+      </button>
+    );
+  };
 
   return (
     <section>
@@ -169,9 +194,16 @@ export function Results({ result, reveal, leftLabel, rightLabel, changeset, onCh
             <span className="subtle">{query.trim() ? "Everything matching the filter:" : "Everything shown:"}</span>
             <BulkCopy secrets={shown} changeset={changeset} onChangeset={onChangeset} sides={writable}
                       what={query.trim() ? "the secrets matching the filter" : "the secrets shown"} />
+            {(destroy?.left || destroy?.right) && <span className="destroy-all">{destroyAll("left")}{destroyAll("right")}</span>}
           </>
         )}
       </div>
+
+      {destroying && destroy?.[destroying.side] && (
+        <DestroyDialog side={destroying.side} sideLabel={destroying.side === "left" ? leftLabel : rightLabel}
+                       vault={destroy[destroying.side]!} secrets={destroying.secrets}
+                       onClose={(destroyed) => { setDestroying(null); if (destroyed) destroy.onDone(); }} />
+      )}
 
       <div className="card">
         <div className="cols-head">

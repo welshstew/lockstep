@@ -353,13 +353,22 @@ def test_remove_combined_with_copy_and_override(env):
     assert env.b.get(f"{env.prefix}/cfg")[0] == {"user": "u-A", "pw": "typed"}
 
 
-def test_removing_every_key_warns_and_a_missing_key_is_a_noop(env):
-    env.b.put(f"{env.prefix}/cfg", {"only": "x"})
+def test_removing_every_key_soft_deletes_and_a_missing_key_is_a_noop(env):
+    env.b.put(f"{env.prefix}/cfg", {"only": "x", "too": "y"})
     env.a.put(f"{env.prefix}/cfg", {"other": "y"})
     d = env.compare()["cfg"]
-    p = env.preview([env.change(d, keys=[]) | {"remove": ["only"]}]).json()[0]
-    assert p["status"] == "ready" and any("No keys will be left" in w for w in p["warnings"])
+    ch = env.change(d, keys=[]) | {"remove": ["only", "too"]}
+    p = env.preview([ch]).json()[0]
+    assert p["status"] == "ready" and p["action"] == "delete"
+    assert [(k["key"], k["action"]) for k in p["keys"]] == [("only", "remove"), ("too", "remove")]
+    assert any("latest version is deleted" in w for w in p["warnings"])
     assert env.preview([env.change(d, keys=[]) | {"remove": ["nope"]}]).json()[0]["status"] == "noop"
+    res = env.apply([ch]).json()["results"][0]
+    assert res["status"] == "applied" and res["action"] == "delete" and res["new_version"] is None
+    # No empty version was written: the latest (v1) is soft-deleted and can be undeleted
+    assert env.b.get(f"{env.prefix}/cfg") == (None, None)
+    meta = env.b.c.get(f"{MOUNT}/metadata/{env.prefix}/cfg").json()["data"]
+    assert meta["current_version"] == 1 and meta["versions"]["1"]["deletion_time"]
 
 
 @pytest.mark.parametrize("bad", [

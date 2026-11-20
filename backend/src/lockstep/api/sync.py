@@ -15,7 +15,8 @@ Safety rules, applied the same way by preview and apply:
   * Keys that exist only on the target are kept, unless a change says `exact` (an import that
     deletes what isn't in the file): then the new version holds only the copied keys.
   * A change can `remove` named keys from the target: the new version doesn't have them (older
-    versions still do).
+    versions still do). Removing every key soft-deletes the latest version instead of writing
+    an empty one.
   * A `delete` change soft-deletes the target's latest version (KV v2; `vault kv undelete`
     brings it back). It's checked against the version the user saw, like a write.
   * Every attempted write is audit-logged (who, what, where, versions, outcome), never values.
@@ -249,9 +250,11 @@ async def evaluate(ctx: _Ctx, change: Change, reveal: bool,
                       src.state if src else ("no_access" if change.copies else "unused"))
     tgt_ep = endpoint(tconn, tmount, tpath, tgt.version if tgt else None, tgt.state if tgt else "no_access")
 
+    deleting = change.delete
+
     def plan(status, keys=(), can_write=False) -> ChangePlan:
         return ChangePlan(path=lrel, right_path=rrel, direction=change.direction,
-                          action="delete" if change.delete else "write", source=src_ep, target=tgt_ep,
+                          action="delete" if deleting else "write", source=src_ep, target=tgt_ep,
                           keys=list(keys), can_write=can_write, problems=problems, warnings=warnings,
                           status=status)
 
@@ -308,7 +311,11 @@ async def evaluate(ctx: _Ctx, change: Change, reveal: bool,
     key_plans += [KeyPlan(key=k, action="remove", target_value=target_data[k] if reveal else None)
                   for k in sorted(removing)]
     if removing and not set(target_data) - removing and not new_values:
-        warnings.append("No keys will be left: the new version is empty. Older versions keep their values.")
+        # Nothing would be left: soft-delete the latest version rather than write an empty one.
+        deleting = True
+        warnings.append("Every key is removed, so the secret's latest version is deleted (`vault kv undelete` "
+                        "brings it back) instead of writing an empty version.")
+        return _evaluate_delete(change, tgt, caps, reveal, any_target_version, problems, plan, tconn, tmount, tpath)
 
     can_write = bool(WRITE_CAPS & set(caps))
     if actual != expected:
@@ -404,7 +411,7 @@ async def apply_changes(ctx: _Ctx, changes: list[Change], plan_id: str | None = 
                            message="; ".join(plan.problems))
         if plan.status == "ready":
             try:
-                if c.delete:
+                if plan.action == "delete":
                     await tv.kv_delete(tmount, plan.target.path)
                 else:
                     res.new_version = await tv.kv_write(tmount, plan.target.path, new_data or {}, cas=cas)

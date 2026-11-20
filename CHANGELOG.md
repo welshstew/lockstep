@@ -5,6 +5,17 @@ the image, the Helm chart and the app share one version.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-20
+
+### Added
+
+- **Destroy secrets:** **Destroy on left… / right…** in an expanded secret, and **Destroy all on left… / right…** for every secret shown, permanently delete every version and the metadata (`vault kv metadata delete`) on that side. A dialog lists what goes and needs a typed confirmation phrase (the path, or `destroy N secrets`). Each secret is checked against the version you compared, and every attempt is audit-logged (`"event": "destroy"`). `POST /api/destroy`; turn it off with `LOCKSTEP_ALLOW_DESTROY=false` (chart value `allowDestroy`).
+- **Guide:** [Lockstep for development environments](https://getlockstep.cloud/guides/vault-secrets-in-development-environments/), its main use case.
+
+### Fixed
+
+- Removing every key of a secret no longer writes an empty new version: the latest version is soft-deleted instead (`vault kv undelete` restores it).
+
 ## [0.5.0] - 2026-11-18
 
 ### Added
@@ -73,6 +84,7 @@ First public release.
 - **Helm chart:** hardened defaults, session key kept across upgrades, Ingress, NetworkPolicy, PodDisruptionBudget, Kubernetes auth, shared profiles; validated by a schema and tested in k3s.
 - Runs on Red Hat Hardened Images (distroless, non-root). Every change is scanned (CVEs, secrets, misconfigurations, base image signatures) and tested end to end in a browser.
 
+[0.6.0]: https://github.com/welshstew/lockstep/releases/tag/v0.6.0
 [0.5.0]: https://github.com/welshstew/lockstep/releases/tag/v0.5.0
 [0.4.0]: https://github.com/welshstew/lockstep/releases/tag/v0.4.0
 [0.3.0]: https://github.com/welshstew/lockstep/releases/tag/v0.3.0
