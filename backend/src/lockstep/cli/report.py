@@ -108,6 +108,16 @@ class ReportKey(BaseModel):
                               json_schema_extra=_enum_help(_KEY_ACTIONS))
 
 
+class ReportMeta(BaseModel):
+    """A custom metadata key that differs. Custom metadata isn't secret, so its values are shown."""
+
+    model_config = ConfigDict(extra="forbid")
+    key: str
+    status: str = Field(description="different, left_only or right_only.")
+    left: str | None = None
+    right: str | None = None
+
+
 class ReportSecret(BaseModel):
     """A secret that differs (or every secret, with --include-equal)."""
 
@@ -121,6 +131,8 @@ class ReportSecret(BaseModel):
     right: SecretSide
     equal_keys: int = Field(default=0, description="How many keys are equal (not listed).")
     keys: list[ReportKey] = Field(default=[], description="Keys that differ, each with an action.")
+    custom_metadata: list[ReportMeta] = Field(default=[], description="Custom metadata keys that differ "
+                                              "(with --custom-metadata). Informational: `lockstep apply` doesn't copy metadata.")
 
 
 class Report(BaseModel):
@@ -199,7 +211,8 @@ def build(result: Comparison, left: ReportSide, right: ReportSide, profile: str 
                 for k in d.keys if k.status != "equal"]
         return ReportSecret(path=d.path, status=d.status, note=d.note or (d.left.error or d.right.error),
                             left=side(left, d.left_path, d.left), right=side(right, d.right_path, d.right),
-                            equal_keys=sum(k.status == "equal" for k in d.keys), keys=keys)
+                            equal_keys=sum(k.status == "equal" for k in d.keys), keys=keys,
+                            custom_metadata=[ReportMeta(**m.model_dump()) for m in d.metadata])
 
     warnings = []
     for which, s, tree in (("left", left, result.left_tree), ("right", right, result.right_tree)):
@@ -229,6 +242,8 @@ def dump(report: Report, filename: str) -> str:
                     del k[f]
         if not s["keys"]:
             del s["keys"]
+        if not s.get("custom_metadata"):
+            s.pop("custom_metadata", None)
     body = yaml.safe_dump(data, sort_keys=False, allow_unicode=True, width=1000, default_flow_style=False)
 
     def hint(m: re.Match) -> str:

@@ -47,8 +47,10 @@ vaults:
 | `customUrlPatterns` | `[]` | Regexes a custom address must fully match |
 | `maxTreeSecrets` | `5000` | Per side, most secrets listed in one comparison |
 | `policyPatterns` | `[]` | Shared suggestion patterns for **Build & suggest**: `name`, `layout` (`{app}/{env}/**`), `values`, `policies` (`name`, `rules` of `where`/`can`), `compare` |
+| `configProfiles` | `[]` | Shared configuration profiles for the Configuration tab: `name`, `mappings` (mount paths, `left`/`right` with `*`), `rewrites` (`find`/`replace` on the left side's values), `ignore` (paths) |
 | `policyProfiles` | `[]` | Shared policy profiles for comparing policies across Vaults: `name`, `mappings` (`left`/`right` with `*`), `rewrites` (`find`/`replace`), `ignore` |
 | `policyApply` | `on` | Write ACL policies and auth roles from the Policies tab; `off` where Terraform owns them |
+| `userWrite` | `off` | Create userpass users and reset their passwords from Policies › Roles (for development Vaults) |
 | `readOnly` | `false` | Look-only Lockstep: every write is hidden and refused |
 | `allowClipboard` | `true` | Offer **Copy** next to shown values in Browse |
 | `allowDestroy` | `true` | Offer **Destroy** (every version and the metadata of a secret, can't be undone). Vault policies still decide who may |

@@ -367,3 +367,70 @@ def test_save_an_access_plan_and_apply_it_as_someone_else(page, sandbox, vault_a
         assert "app-config/data/payments/*" in vault_a.c.get(f"sys/policies/acl/{name}").json()["data"]["policy"]
     finally:
         vault_a.c.delete(f"sys/policies/acl/{name}")
+
+
+def test_try_a_draft_policy_for_real(page, sandbox, vault_a):
+    open_build(page, prefix="payments")
+    page.get_by_role("button", name="＋ New policy").click()
+    page.get_by_label("Policy name").fill("try-me")
+    page.get_by_label("Rule 1 where").fill("payments/**")
+    expect(page.get_by_label("Generated HCL")).to_contain_text("payments")
+    page.get_by_role("button", name="Try for real on Vault A · app-config/payments").click()
+    note = page.get_by_role("status").filter(has_text="Tried for real")
+    expect(note).to_contain_text("agrees with Vault everywhere")
+    expect(cell(page, "payments/db", 1)).to_have_text("✓")
+    keys = vault_a.c.request("LIST", "sys/policies/acl").json()["data"]["keys"]
+    assert not [k for k in keys if k.startswith("lockstep-try-")]
+
+
+def test_edit_a_groups_policies(page, sandbox, vault_a):
+    tag = sandbox.replace("/", "")[-6:]
+    name = f"e2e-ge-{tag}"
+    vault_a.c.post("identity/group", json={"name": name, "policies": ["lockstep-limited"]}).raise_for_status()
+    try:
+        open_roles(page)
+        page.get_by_label("Auth mount for roles").select_option("__groups__")
+        page.get_by_role("navigation", name="Groups").get_by_role("button", name=name).click()
+        group = page.get_by_label(f"Group {name}")
+        group.get_by_role("button", name="Edit policies").click()
+        group.get_by_label("Group policies").fill("lockstep-limited, lockstep-readonly")
+        group.get_by_role("button", name="Review…").click()
+        dialog = page.get_by_role("dialog", name="Write policies and roles")
+        expect(dialog.locator(".plan")).to_contain_text("+lockstep-readonly")
+        dialog.locator("label.confirm input").check()
+        dialog.get_by_role("button", name="Write", exact=True).click()
+        expect(dialog.locator(".badge", has_text="Done")).to_have_count(1)
+        dialog.get_by_role("button", name="Close").last.click()
+        expect(group).to_contain_text("lockstep-limited, lockstep-readonly")
+        assert sorted(vault_a.c.get(f"identity/group/name/{name}").json()["data"]["policies"]) == ["lockstep-limited", "lockstep-readonly"]
+    finally:
+        vault_a.c.delete(f"identity/group/name/{name}")
+
+
+def test_userpass_users_compare_and_reset(page, sandbox, vault_a):
+    import httpx
+    from conftest import VAULT_A
+    name = f"e2e-u-{sandbox.replace('/', '')[-6:]}"
+    vault_a.c.post(f"auth/userpass/users/{name}", json={"password": "old-password", "token_policies": "default"}).raise_for_status()
+    try:
+        open_roles(page, both=True)
+        page.get_by_label("Auth mount for roles").select_option("__users__:userpass")
+        users = page.get_by_role("region", name="Userpass users")
+        expect(users).to_contain_text("svc-ci")
+        page.get_by_role("button", name="Compare with Vault B").click()
+        compared = page.get_by_role("region", name="Compared users")
+        expect(compared.locator("tr", has_text="svc-ci").locator(".badge")).to_have_text("Different")
+        expect(compared.locator("tr", has_text=name).locator(".badge")).to_have_text("Left only")
+        users.locator("tr", has_text=name).get_by_role("button", name="Reset password…").click()
+        form = page.get_by_role("region", name=f"Reset {name}'s password")
+        form.get_by_role("button", name="Reset password").click()
+        shown = form.locator("code.reveal-once")
+        expect(shown).to_have_count(1)
+        pw = shown.inner_text()
+        assert httpx.post(f"{VAULT_A}/v1/auth/userpass/login/{name}", json={"password": pw}).status_code == 200
+
+        page.get_by_label("Auth mount for roles").select_option("__users__:ldap")
+        groups = page.get_by_role("region", name="LDAP group mappings")
+        expect(groups.locator("tr", has_text="payments-devs")).to_contain_text("payments-dev")
+    finally:
+        vault_a.c.delete(f"auth/userpass/users/{name}")

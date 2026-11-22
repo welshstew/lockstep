@@ -564,9 +564,24 @@ The **Configuration** tab compares the two Vaults' setup, read-only:
   - PKI roles;
   - database connections (URL without any inline password), roles and static roles;
   - Transit key settings (not the key versions);
-  - SSH, Kubernetes and AWS roles.
+  - SSH, Kubernetes, AWS and Azure roles;
+  - GCP rolesets, static accounts and impersonated accounts;
+  - the LDAP secrets engine's dynamic roles, static roles and library sets.
 
   For example, `transit/keys/app-key` is *Different* when only one side allows deletion. Values that change on their own (key versions, last rotation) are ignored.
+
+**Copy to the other side:** open a row that differs and use **Copy tuning to …** (a mount's or auth method's TTLs, description, listing visibility and audit and header settings) or, for an engine role, **Copy to …**. It goes through the same review as policies (a diff against what's there, a conflict check, audit) and can be saved as an access plan for someone else to apply. What's copied:
+- roles of PKI, database (dynamic roles), SSH, Kubernetes, AWS, Azure and the LDAP secrets engine (dynamic roles), whole;
+- Transit keys' `deletion_allowed` and `auto_rotate_period`, for a key that exists on both sides.
+
+Not copied: database connections and static roles, GCP rolesets and accounts, LDAP static roles and library sets (they hold or rotate credentials, or create cloud accounts), plugin versions and KV options. It needs `LOCKSTEP_POLICY_APPLY` on.
+
+**Configuration profiles** line up Vaults that name things differently. A profile:
+- pairs mounts by pattern (`kv-dev => kv-prod`, `kubernetes-* => k8s-*`), and a mount's roles and keys follow it;
+- rewrites the left side's values first (`dev.example.com => prod.example.com`);
+- leaves paths out (`sandbox-*`).
+
+Write one with **New profile…**, which keeps it in this browser, or share them from the server with `LOCKSTEP_CONFIG_PROFILES` (chart value `configProfiles`). Paired rows show both paths (`kv-dev/ ⇄ kv-prod/`).
 
 It needs `read` on `sys/mounts` and `sys/auth` (and on `auth/<path>/config` for the configuration, and `list`/`read` on the engines' roles and keys). Without them, Lockstep uses the mount list your token can see and says what's missing. In CI: [`lockstep config compare`](cli.md#configuration).
 

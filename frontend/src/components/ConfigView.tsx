@@ -1,7 +1,18 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
-import type { ConfigCompare, ConfigPair, VaultOverview } from "../types";
+import type { ConfigCompare, ConfigPair, PolicyProfile, VaultOverview } from "../types";
 import type { CompareSides } from "./PolicyCompare";
+import { AccessApply } from "./AccessApply";
+import type { AccessChanges } from "../types";
+
+type Source = "mount" | "auth" | "engine";
+const NOT_COPIED = new Set(["config", "static-roles", "static-role", "library", "roleset", "static-account", "impersonated-account"]);
+function copyable(source: Source, p: ConfigPair, to: "left" | "right"): boolean {
+  const from = to === "right" ? p.left : p.right;
+  if (!from || p.status === "equal" || p.system) return false;
+  if (source !== "engine") return p.status === "different";  // tuning: the mount must exist on both sides
+  return !NOT_COPIED.has(p.path.split("/")[1] ?? "");
+}
 
 const LABEL: Record<ConfigPair["status"], string> = { equal: "Equal", different: "Different", left_only: "Left only", right_only: "Right only" };
 const show = (v: unknown) => (v === undefined || v === null ? "—" : typeof v === "object" ? JSON.stringify(v) : String(v));
@@ -25,7 +36,8 @@ function Overview({ o, label, side, other }: { o: VaultOverview; label: string; 
   );
 }
 
-function Section({ title, rows, sides }: { title: string; rows: ConfigPair[]; sides: CompareSides }) {
+function Section({ title, rows, sides, source, onCopy }: { title: string; rows: ConfigPair[]; sides: CompareSides; source: Source;
+                                                           onCopy?: (source: Source, p: ConfigPair, to: "left" | "right") => void }) {
   const [open, setOpen] = useState<Set<string>>(new Set());
   return (
     <section className="card config-section" aria-label={title}>
@@ -35,7 +47,10 @@ function Section({ title, rows, sides }: { title: string; rows: ConfigPair[]; si
         <div key={p.path} className="secret policy-pair">
           <button type="button" className="pair-head" aria-expanded={open.has(p.path)}
                   onClick={() => setOpen((o) => { const n = new Set(o); if (n.has(p.path)) n.delete(p.path); else n.add(p.path); return n; })}>
-            <span className="caret">▸</span> <span className="mono pair-name">{p.path}</span> <span className="subtle">{p.type}</span>
+            <span className="caret">▸</span> <span className="mono pair-name">{p.path}</span>
+            {p.right_path && <span className="mono subtle" title="Paired by the configuration profile">⇄ {p.right_path}</span>}
+            <span className="subtle">{p.type}</span>
+            {p.mapped_to && <span className="subtle" title="The profile maps it here, but the other Vault has nothing at that path">(→ {p.mapped_to} missing)</span>}
             {p.status === "different" && <span className="subtle">{p.fields.length} field{p.fields.length === 1 ? "" : "s"}</span>}
             <span className="spacer" />
             <span className={`badge ${p.status === "equal" ? "equal" : p.status === "different" ? "different" : p.status}`}>{LABEL[p.status]}</span>
@@ -50,6 +65,14 @@ function Section({ title, rows, sides }: { title: string; rows: ConfigPair[]; si
               ) : (
                 <pre className="mono hcl-preview">{JSON.stringify(p.left ?? p.right, null, 2)}</pre>
               )}
+              {onCopy && (copyable(source, p, "right") || copyable(source, p, "left")) && (
+                <div className="field-row">
+                  {copyable(source, p, "right") && <button type="button" className="btn small" onClick={() => onCopy(source, p, "right")}>
+                    Copy {source === "engine" ? "" : "tuning "}to {sides.right?.label}…</button>}
+                  {copyable(source, p, "left") && <button type="button" className="btn small" onClick={() => onCopy(source, p, "left")}>
+                    Copy {source === "engine" ? "" : "tuning "}to {sides.left?.label}…</button>}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -59,7 +82,95 @@ function Section({ title, rows, sides }: { title: string; rows: ConfigPair[]; si
 }
 
 /** Two Vaults' configuration side by side: overview, secrets engines, auth methods. Read-only. */
-export function ConfigView({ sides }: { sides: CompareSides }) {
+const PROFILES_KEY = "lockstep.configProfiles";
+const loadPersonal = (): PolicyProfile[] => { try { return JSON.parse(localStorage.getItem(PROFILES_KEY) ?? "[]"); } catch { return []; } };
+const lines = (t: string) => t.split("\n").map((l) => l.trim()).filter(Boolean);
+const pairs = (t: string) => lines(t).map((l) => l.split(/\s*(?:=>|→)\s*/)).filter((x) => x.length === 2 && x[0]);
+
+/** Choose, write and keep configuration profiles: mount paths to pair, values to rewrite, paths to leave out. */
+function ProfilePicker({ value, onChange }: { value: PolicyProfile | null; onChange: (p: PolicyProfile | null) => void }) {
+  const [shared, setShared] = useState<PolicyProfile[]>([]);
+  const [personal, setPersonal] = useState<PolicyProfile[]>(loadPersonal);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState({ name: "", mappings: "", rewrites: "", ignore: "" });
+  useEffect(() => { api.configProfiles().then(setShared).catch(() => setShared([])); }, []);
+  const all = [...shared.map((p) => ["shared", p] as const), ...personal.map((p) => ["personal", p] as const)];
+  const key = value ? `${shared.includes(value) ? "shared" : "personal"}:${value.name}` : "";
+  const fromDraft = (): PolicyProfile => ({
+    name: draft.name.trim() || "unsaved", mappings: pairs(draft.mappings).map(([left, right]) => ({ left, right })),
+    rewrites: pairs(draft.rewrites).map(([find, replace]) => ({ find, replace })), ignore: lines(draft.ignore) });
+  const edit = (p: PolicyProfile | null) => {
+    setDraft({ name: p?.name ?? "", mappings: (p?.mappings ?? []).map((m) => `${m.left} => ${m.right}`).join("\n"),
+               rewrites: (p?.rewrites ?? []).map((r) => `${r.find} => ${r.replace}`).join("\n"), ignore: (p?.ignore ?? []).join("\n") });
+    setEditing(true);
+  };
+  const save = () => {
+    const p = fromDraft();
+    if (p.name === "unsaved") return;
+    const next = [...personal.filter((x) => x.name !== p.name), p];
+    setPersonal(next);
+    try { localStorage.setItem(PROFILES_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+    onChange(p);
+    setEditing(false);
+  };
+  return (
+    <div className="config-profile">
+      <div className="field-row">
+        <label className="field inline"><span>Configuration profile</span>
+          <select aria-label="Configuration profile" value={key} onChange={(e) => {
+            const hit = all.find(([src, p]) => `${src}:${p.name}` === e.target.value);
+            onChange(hit ? hit[1] : null);
+          }}>
+            <option value="">None: pair by path</option>
+            {all.map(([src, p]) => <option key={`${src}:${p.name}`} value={`${src}:${p.name}`}>{p.name}{src === "shared" ? " (shared)" : ""}</option>)}
+          </select></label>
+        <button type="button" className="btn ghost small" aria-expanded={editing} onClick={() => (editing ? setEditing(false) : edit(value))}>
+          {editing ? "Hide rules" : value ? "Edit rules" : "New profile…"}</button>
+      </div>
+      {editing && (
+        <div className="profile-rules config-rules">
+          <label className="field"><span>Name</span><input type="text" value={draft.name} placeholder="dev vs prod" onChange={(e) => setDraft({ ...draft, name: e.target.value })} /></label>
+          <label className="field"><span>Pair mounts <span className="subtle">(left =&gt; right, one per line, * allowed)</span></span>
+            <textarea className="mono" rows={3} aria-label="Mount mappings" placeholder={"kv-dev => kv-prod\nkubernetes-* => k8s-*"} value={draft.mappings}
+                      onChange={(e) => setDraft({ ...draft, mappings: e.target.value })} /></label>
+          <label className="field"><span>Rewrite left values first <span className="subtle">(find =&gt; replace)</span></span>
+            <textarea className="mono" rows={2} aria-label="Value rewrites" placeholder="dev.example.com => prod.example.com" value={draft.rewrites}
+                      onChange={(e) => setDraft({ ...draft, rewrites: e.target.value })} /></label>
+          <label className="field"><span>Leave out <span className="subtle">(paths, one per line, * allowed)</span></span>
+            <textarea className="mono" rows={2} aria-label="Paths to leave out" placeholder="sandbox-*" value={draft.ignore}
+                      onChange={(e) => setDraft({ ...draft, ignore: e.target.value })} /></label>
+          <div className="field-row">
+            <button type="button" className="btn small" onClick={() => { onChange(fromDraft()); }}>Use without saving</button>
+            <button type="button" className="btn primary small" disabled={!draft.name.trim()} onClick={save}>Save profile</button>
+            {value && personal.some((p) => p.name === value.name) && (
+              <button type="button" className="btn ghost small danger" onClick={() => {
+                const next = personal.filter((p) => p.name !== value.name);
+                setPersonal(next);
+                try { localStorage.setItem(PROFILES_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+                onChange(null); setEditing(false);
+              }}>Delete profile</button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function ConfigView({ sides, canApply = false }: { sides: CompareSides; canApply?: boolean }) {
+  const [profile, setProfile] = useState<PolicyProfile | null>(null);
+  const [copying, setCopying] = useState<{ changes: AccessChanges; label: string; notes: string[] } | null>(null);
+  async function copy(source: Source, p: ConfigPair, to: "left" | "right") {
+    const from = to === "right" ? "left" : "right";
+    const fromPath = from === "left" ? p.path : p.right_path ?? p.path;
+    const toPath = to === "right" ? p.right_path ?? p.path : p.path;
+    setError(null);
+    try {
+      const r = await api.configCopy({ conn_id: sides[from]!.conn_id, source, path: fromPath, to_path: toPath });
+      setCopying({ changes: { conn_id: sides[to]!.conn_id, ...(r.tunes ? { tunes: r.tunes } : {}), ...(r.engine_objects ? { engine_objects: r.engine_objects } : {}) },
+                   label: sides[to]!.label, notes: r.notes });
+    } catch (e) { setError((e as Error).message); }
+  }
   const [result, setResult] = useState<ConfigCompare | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -73,15 +184,15 @@ export function ConfigView({ sides }: { sides: CompareSides }) {
   async function run() {
     setBusy(true);
     setError(null);
-    try { setResult(await api.configCompare(sides.left!.conn_id, sides.right!.conn_id)); }
+    try { setResult(await api.configCompare(sides.left!.conn_id, sides.right!.conn_id, profile)); }
     catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   }
   return (
     <section className="config">
       <div className="card policies-head">
         <div className="subtle">Compares the two Vaults’ secrets engines and auth methods: type, plugin version, tuning (TTLs, listing visibility, audit settings),
-          options, each auth method’s configuration, and the roles and keys of engines both have (PKI, database, Transit, SSH, Kubernetes, AWS), with secrets left out. Read-only. On the command line: <span className="mono">lockstep config compare</span>.</div>
-        <div className="field-row"><span className="spacer" />
+          options, each auth method’s configuration, and the roles and keys of engines both have (PKI, database, Transit, SSH, Kubernetes, AWS, Azure, GCP, LDAP), with secrets left out. A configuration profile pairs mounts whose paths differ. Read-only. On the command line: <span className="mono">lockstep config compare</span>.</div>
+        <div className="field-row"><ProfilePicker value={profile} onChange={setProfile} /><span className="spacer" />
           <button type="button" className="btn primary" onClick={run} disabled={busy}>{busy && <span className="spinner" />} {result ? "Compare again" : "Compare configuration"}</button>
         </div>
       </div>
@@ -104,9 +215,12 @@ export function ConfigView({ sides }: { sides: CompareSides }) {
             </div>
             <input type="search" className="search" placeholder="Filter by path or type…" value={query} onChange={(e) => setQuery(e.target.value)} />
           </div>
-          <Section title="Secrets engines" rows={filter(result.mounts)} sides={sides} />
-          <Section title="Auth methods" rows={filter(result.auth)} sides={sides} />
-          <Section title="Engine roles and keys" rows={filter(result.engines ?? [])} sides={sides} />
+          {copying && copying.notes.length > 0 && <div className="notice warn" role="status">{copying.notes.join(" ")}</div>}
+          <Section title="Secrets engines" rows={filter(result.mounts)} sides={sides} source="mount" onCopy={canApply ? copy : undefined} />
+          <Section title="Auth methods" rows={filter(result.auth)} sides={sides} source="auth" onCopy={canApply ? copy : undefined} />
+          <Section title="Engine roles and keys" rows={filter(result.engines ?? [])} sides={sides} source="engine" onCopy={canApply ? copy : undefined} />
+          {copying && <AccessApply changes={copying.changes} label={copying.label}
+                                   onClose={(done) => { setCopying(null); if (done) run(); }} />}
         </>
       )}
     </section>

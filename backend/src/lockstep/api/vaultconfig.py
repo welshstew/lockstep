@@ -4,6 +4,11 @@ Read-only. Sensitive configuration fields are left out even when Vault returns t
 
   GET  /api/config/overview?conn_id=   version, seal, HA and replication status
   POST /api/config/compare             mounts and auth methods of two Vaults, field by field
+  GET  /api/config/profiles            shared configuration profiles (LOCKSTEP_CONFIG_PROFILES)
+
+A configuration profile pairs mounts whose paths differ between the Vaults (kv-dev ↔ kv-prod,
+kubernetes-* ↔ k8s-*), rewrites the left side's values before comparing (dev → prod in a
+description or a role's allowed domains), and leaves out paths that don't matter.
 """
 
 from __future__ import annotations
@@ -13,9 +18,11 @@ import re
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..config import Settings, get_settings
+from ..policy.compare import ConfigProfile, _regex
+from ..policy.roles import map_name, rewrite
 from ..session import SessionData, load_session
 from ..vault import VaultClient, VaultError
 from .connections import client_for, get_connection, vault_http_error
@@ -72,15 +79,57 @@ def diff(a: dict | None, b: dict | None, prefix: str = "") -> list[dict]:
     return out
 
 
-def pair(left: dict[str, dict], right: dict[str, dict]) -> list[dict]:
-    out = []
-    for path in sorted(set(left) | set(right)):
-        a, b = left.get(path), right.get(path)
-        fields = diff(a, b) if a is not None and b is not None else []
-        out.append({"path": path, "type": (a or b or {}).get("type"),
+def map_path(path: str, profile: ConfigProfile | None) -> str | None:
+    """The right side's path for a left path under the profile's mappings, or None. Mappings name
+    mounts ("kv-dev" → "kv-prod", "kubernetes-*" → "k8s-*"); a mapped mount carries its roles and
+    keys with it (kv-dev/roles/web → kv-prod/roles/web)."""
+    if not profile or not profile.mappings:
+        return None
+    trail = "/" if path.endswith("/") else ""
+
+    def one(name: str) -> str | None:
+        for candidate in (name, name + "/"):
+            hit = map_name(candidate, profile)
+            if hit is not None:
+                return hit.strip("/")
+        return None
+
+    bare = path.rstrip("/")
+    if (hit := one(bare)) is not None:
+        return hit + trail
+    mount, sep, rest = bare.partition("/")
+    if sep and (hit := one(mount)) is not None:
+        return f"{hit}/{rest}{trail}"
+    return None
+
+
+def ignored(path: str, profile: ConfigProfile | None) -> bool:
+    return bool(profile) and any(_regex(p.rstrip("/")).match(path.rstrip("/")) or _regex(p.rstrip("/")).match(path.split("/")[0])
+                                 for p in profile.ignore)
+
+
+def pair(left: dict[str, dict], right: dict[str, dict], profile: ConfigProfile | None = None) -> list[dict]:
+    """Pair by path (or the profile's mappings) and diff. `right_path` is set where they differ."""
+    left = {p: x for p, x in left.items() if not ignored(p, profile)}
+    right = {p: x for p, x in right.items() if not ignored(p, profile)}
+    out, taken = [], set()
+    for path in sorted(left):
+        target = map_path(path, profile)
+        rpath = target if target in right else (path if target is None and path in right else None)
+        if rpath:
+            taken.add(rpath)
+        a, b = left[path], right.get(rpath) if rpath else None
+        fields = diff(rewrite(a, profile), b) if b is not None else []
+        out.append({"path": path, "right_path": rpath if rpath and rpath != path else None, "type": (a or b or {}).get("type"),
                     "system": path.strip("/").split("/")[0] in SYSTEM_MOUNTS,
-                    "status": "left_only" if b is None else "right_only" if a is None else "different" if fields else "equal",
-                    "fields": fields, "left": a, "right": b})
+                    "status": "left_only" if b is None else "different" if fields else "equal",
+                    "fields": fields, "left": a, "right": b,
+                    **({"mapped_to": target} if target and target not in right else {})})
+    for path in sorted(set(right) - taken):
+        b = right[path]
+        out.append({"path": path, "right_path": None, "type": b.get("type"),
+                    "system": path.strip("/").split("/")[0] in SYSTEM_MOUNTS,
+                    "status": "right_only", "fields": [], "left": None, "right": b})
     return out
 
 
@@ -147,9 +196,13 @@ ENGINE_OBJECTS: dict[str, list[str]] = {
     "ssh": ["roles"],
     "kubernetes": ["roles"],
     "aws": ["roles"],
+    "azure": ["roles"],
+    "gcp": ["roleset", "static-account", "impersonated-account"],
+    "ldap": ["role", "static-role", "library"],  # the LDAP secrets engine (not the auth method)
+    "openldap": ["role", "static-role", "library"],
 }
 ENGINE_VOLATILE = {"keys", "latest_version", "min_available_version", "last_vault_rotation", "ttl",
-                   "last_rotated", "issuer_id", "imported_key", "kms_key"}
+                   "last_rotated", "issuer_id", "imported_key", "kms_key", "password", "last_password"}
 MAX_OBJECTS = 200
 _URL_PASSWORD = re.compile(r"(://[^:/@]+:)(?!\{\{password\}\})[^@]+(@)")
 
@@ -200,17 +253,19 @@ class Side(BaseModel):
 class CompareRequest(BaseModel):
     left: str
     right: str
+    profile: ConfigProfile | None = None
 
 
-async def run_compare(lv: VaultClient, rv: VaultClient) -> dict:
+async def run_compare(lv: VaultClient, rv: VaultClient, profile: ConfigProfile | None = None) -> dict:
     (lo, lc), (ro, rc) = await asyncio.gather(asyncio.gather(overview(lv), read_config(lv)),
                                              asyncio.gather(overview(rv), read_config(rv)))
-    mounts, auth = pair(lc["mounts"], rc["mounts"]), pair(lc["auth"], rc["auth"])
-    # Engine roles and keys, for mounts of the same type on both sides
-    both = {p: m for p, m in lc["mounts"].items() if (rc["mounts"].get(p) or {}).get("type") == m.get("type")}
-    (le, lmiss), (re_, rmiss) = await asyncio.gather(read_engine_objects(lv, both),
-                                                    read_engine_objects(rv, {p: rc["mounts"][p] for p in both}))
-    engines = pair(le, re_)
+    mounts, auth = pair(lc["mounts"], rc["mounts"], profile), pair(lc["auth"], rc["auth"], profile)
+    # Engine roles and keys, for mounts paired with one of the same type on the other side
+    both = {p["path"]: p["right_path"] or p["path"] for p in mounts
+            if p["left"] and p["right"] and p["left"].get("type") == p["right"].get("type")}
+    (le, lmiss), (re_, rmiss) = await asyncio.gather(read_engine_objects(lv, {p: lc["mounts"][p] for p in both}),
+                                                    read_engine_objects(rv, {r: rc["mounts"][r] for r in both.values()}))
+    engines = pair(le, re_, profile)
     for p in engines:  # the engine's type, not the object's own "type" (a Transit key's type, say)
         p["type"] = (p["left"] or p["right"])["engine"]
     lc["missing"] += lmiss
@@ -218,6 +273,7 @@ async def run_compare(lv: VaultClient, rv: VaultClient) -> dict:
     summary = {s: sum(p["status"] == s for p in mounts + auth + engines if not p["system"])
                for s in ("equal", "different", "left_only", "right_only")}
     return {"overview": {"left": lo, "right": ro}, "mounts": mounts, "auth": auth, "engines": engines, "summary": summary,
+            "profile": profile.name if profile else None,
             "missing": {"left": lc["missing"], "right": rc["missing"]}}
 
 
@@ -232,6 +288,11 @@ async def compare(body: CompareRequest, session: Sess, settings: Conf):
     lconn, rconn = get_connection(session, body.left), get_connection(session, body.right)
     async with client_for(lconn, settings) as lv, client_for(rconn, settings) as rv:
         try:
-            return await run_compare(lv, rv)
+            return await run_compare(lv, rv, body.profile)
         except VaultError as e:
             raise vault_http_error(e) from e
+
+
+@router.get("/profiles", response_model=list[ConfigProfile])
+def shared_profiles(settings: Conf):
+    return settings.config_profiles

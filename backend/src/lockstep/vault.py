@@ -322,11 +322,11 @@ class VaultClient:
         res = await self.request("GET", f"sys/policies/acl/{_q(name)}")
         return (res.get("data") or {}).get("policy") or ""
 
-    async def capabilities(self, paths: list[str]) -> dict[str, list[str]]:
-        """This token's capabilities on each path (sys/capabilities-self)."""
+    async def capabilities(self, paths: list[str], token: str | None = None) -> dict[str, list[str]]:
+        """This token's (or `token`'s) capabilities on each path (sys/capabilities-self)."""
         if not paths:
             return {}
-        res = await self.request("POST", "sys/capabilities-self", json={"paths": paths})
+        res = await self.request("POST", "sys/capabilities-self", json={"paths": paths}, token=token)
         data = res.get("data") or res
         return {p: data.get(p) or [] for p in paths}
 

@@ -50,7 +50,7 @@ export function ToolsView({ sides, readOnly = false, allowClipboard = true }: { 
     if (sel && !ok(current)) setOp(OPS.find(ok)?.id ?? op);
   }, [key, keys]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (!conns.length) return <section className="tools"><div className="notice info">Connect a Vault on a side to use the tools.</div></section>;
+  if (!conns.length) return <section className="tools-view"><div className="notice info">Connect a Vault on a side to use the tools.</div></section>;
   const k = keys.find((x) => x.name === key);
   const can = (o: (typeof OPS)[number]) => !k || o.needs === "any" || (o.needs === "encryption" ? k.supports_encryption : k.supports_signing);
   const spec = OPS.find((o) => o.id === op)!;
@@ -63,7 +63,7 @@ export function ToolsView({ sides, readOnly = false, allowClipboard = true }: { 
   );
   if (tool !== "transit") {
     return (
-      <section className="tools">
+      <section className="tools-view">
         <div className="field-row">{toolTabs}
           {conns.length > 1 && (
             <div className="segmented small" role="group" aria-label="Which side">
@@ -88,7 +88,7 @@ export function ToolsView({ sides, readOnly = false, allowClipboard = true }: { 
   }
 
   return (
-    <section className="tools">
+    <section className="tools-view">
       {toolTabs}
       <div className="card policies-head">
         <div className="subtle">

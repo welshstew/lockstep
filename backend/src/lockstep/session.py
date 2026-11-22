@@ -34,6 +34,7 @@ class Connection(BaseModel):
     display_name: str = ""
     policies: list[str] = []
     expires_at: float | None = None  # epoch seconds; None means no expiry
+    renewable: bool = False
 
 
 class PendingOidc(BaseModel):

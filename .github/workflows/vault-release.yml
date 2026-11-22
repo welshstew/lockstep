@@ -1,0 +1,101 @@
+# Weekly: does Lockstep's policy matcher still agree with the newest Vault release?
+#
+# Finds the latest Vault release (api.releases.hashicorp.com), starts it as the compose stack's
+# vault-latest, and runs the matcher's differential tests against it (tests/test_policy_acl.py)
+# with a new random seed and four times the usual trials. On a disagreement it opens (or comments
+# on) an issue; when a newer release than the pinned one passes, the summary says to bump the pin
+# in compose.yaml (vault-latest) and, if its evaluation rules changed, lockstep/policy/acl.py.
+name: vault-release
+
+on:
+  schedule:
+    - cron: "17 5 * * 1"   # Mondays, 05:17 UTC
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Vault version to check (default: the latest release)"
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  matcher:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    env:
+      COMPOSE_PROJECT_NAME: lockstep-vault-release-${{ github.run_id }}
+      COMPOSE: docker compose -f compose.yaml -f compose.ci.yaml
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Which Vault
+        id: v
+        env:
+          WANTED: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ -n ${WANTED:-} ]]; then v=$WANTED
+          else v=$(curl -fsS https://api.releases.hashicorp.com/v1/releases/vault/latest | jq -r .version); fi
+          [[ $v =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::unexpected version '$v'"; exit 1; }
+          pinned=$(sed -n 's|.*VAULT_LATEST_IMAGE:-docker.io/hashicorp/vault:\([0-9.]*\)}.*|\1|p' compose.yaml)
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "pinned=$pinned" >> "$GITHUB_OUTPUT"
+          if ! docker pull -q "docker.io/hashicorp/vault:$v" >/dev/null; then
+            echo "::notice::Vault $v isn't on Docker Hub yet; nothing checked."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run the matcher against it
+        id: run
+        if: steps.v.outputs.available == 'true'
+        env:
+          VAULT_LATEST_IMAGE: docker.io/hashicorp/vault:${{ steps.v.outputs.version }}
+          FUZZ_SEED: ${{ github.run_number }}
+        run: |
+          $COMPOSE --profile test build tests
+          $COMPOSE --profile test run --name "$COMPOSE_PROJECT_NAME-tests" -e FUZZ_SEED -e FUZZ_SCALE=4 tests \
+            python -m pytest -q -p no:cacheprovider -rs tests/test_policy_acl.py 2>&1 | tee /tmp/pytest.log
+          test "${PIPESTATUS[0]}" -eq 0
+
+      - name: Summary
+        if: always() && steps.v.outputs.available == 'true'
+        env:
+          V: ${{ steps.v.outputs.version }}
+          PINNED: ${{ steps.v.outputs.pinned }}
+          OUTCOME: ${{ steps.run.outcome }}
+        run: |
+          {
+            echo "## Policy matcher against Vault $V"
+            echo
+            if [[ $OUTCOME == success ]]; then
+              echo "Agrees with Vault $V (seed offset ${{ github.run_number }}, 4x trials)."
+              [[ $V != "$PINNED" ]] && echo "Newer than the pinned $PINNED: bump \`vault-latest\` in compose.yaml."
+            else
+              echo "**Disagrees with Vault $V.** See the log below and the issue opened for it."
+            fi
+            echo; echo '```'; tail -n 60 /tmp/pytest.log 2>/dev/null || true; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open an issue on a disagreement
+        if: failure() && steps.run.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          V: ${{ steps.v.outputs.version }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="Policy matcher disagrees with Vault $V"
+          body=$(printf 'The weekly check found cases where Lockstep'"'"'s policy matcher and Vault %s disagree.\n\nRun: %s\n\n```\n%s\n```\n' \
+                 "$V" "$RUN" "$(grep -E 'vault vs lockstep|FAILED|AssertionError' /tmp/pytest.log | head -n 20)")
+          n=$(gh issue list --state open --search "\"$title\" in:title" --json number -q '.[0].number')
+          if [[ -n $n ]]; then gh issue comment "$n" --body "$body"; else gh issue create --title "$title" --body "$body"; fi
+
+      - name: Tear down
+        if: always()
+        run: |
+          docker rm -f "$COMPOSE_PROJECT_NAME-tests" >/dev/null 2>&1 || true
+          $COMPOSE --profile test down -v --remove-orphans

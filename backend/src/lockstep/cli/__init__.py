@@ -70,6 +70,8 @@ def parser() -> argparse.ArgumentParser:
     c.add_argument("--profile-name", metavar="NAME", help="which profile, when the --profile file holds several")
     c.add_argument("-o", "--output", metavar="FILE", help="write the report here ('-' for stdout)")
     c.add_argument("--include-equal", action="store_true", help="list equal secrets in the report too")
+    c.add_argument("--custom-metadata", action="store_true",
+                   help="also compare each secret's custom metadata (a difference makes the secret differ)")
     c.add_argument("-q", "--quiet", action="store_true", help="don't print the summary")
     for which in SIDES:
         add_side_args(c, which, locations=True)
@@ -204,7 +206,8 @@ async def _compare(args) -> int:
             try:
                 result = await compare(lv, sides["left"].mount, report_mod._prefix(sides["left"].prefix),
                                        rv, sides["right"].mount, report_mod._prefix(sides["right"].prefix),
-                                       rules, max_secrets=settings.max_tree_secrets)
+                                       rules, max_secrets=settings.max_tree_secrets,
+                                       custom_metadata=args.custom_metadata)
             except VaultError as e:
                 raise CliError(f"Comparison failed: {e}") from e
     finally:

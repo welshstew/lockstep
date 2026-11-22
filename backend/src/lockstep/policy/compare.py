@@ -48,6 +48,13 @@ class PolicyProfile(BaseModel):
     ignore: list[str] = Field(default=["root"], max_length=200)  # policy names (or * patterns) to leave out
 
 
+class ConfigProfile(PolicyProfile):
+    """How to line up two Vaults' configuration: mount paths that differ (mappings, * allowed),
+    find/replace on the left side's values before comparing, and paths to leave out."""
+
+    ignore: list[str] = Field(default=[], max_length=200)
+
+
 def _regex(pattern: str) -> re.Pattern:
     return re.compile("^" + "(.*)".join(re.escape(p) for p in pattern.split("*")) + "$")
 

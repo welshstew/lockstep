@@ -7,6 +7,7 @@ import { saveAccessPlan } from "../accessPlan";
 import { ExplainResultView } from "./PoliciesView";
 
 const DRAFTS_KEY = "lockstep.policyDrafts";
+const OPEN_KEY = "lockstep.policyDraftOpen";
 const PATTERN_KEY = "lockstep.suggestPattern";
 const PROFILES_KEY = "lockstep.policyProfiles"; // shared with Compare across Vaults
 const CANS: { id: PolicyCan; label: string; help: string }[] = [
@@ -38,12 +39,21 @@ export function PolicyBuild({ targets, canApply = false }: { targets: ScanTarget
   const [sideId, setSideId] = useState<"left" | "right">(targets[0]?.side ?? "left");
   const target = targets.find((t) => t.side === sideId) ?? targets[0];
   const [drafts, setDraftsState] = useState<PolicyDraft[]>(() => load(DRAFTS_KEY, []));
-  const [current, setCurrent] = useState<number>(0);
+  const [current, setCurrent] = useState<number>(() => {
+    // A draft started elsewhere (Browse › Policy for this folder) opens first, once
+    try {
+      const open = localStorage.getItem(OPEN_KEY);
+      localStorage.removeItem(OPEN_KEY);
+      return open ? Number(open) || 0 : 0;
+    } catch { return 0; }
+  });
   const [hcl, setHcl] = useState<string>("");
   const [findings, setFindings] = useState<PolicyFinding[]>([]);
   const [buildError, setBuildError] = useState<string | null>(null);
   const [preview, setPreview] = useState<ExplainResult | null>(null);
   const [previewing, setPreviewing] = useState(false);
+  const [trying, setTrying] = useState(false);
+  const [withDefault, setWithDefault] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [suggesting, setSuggesting] = useState(false);
   const [suggest, setSuggest] = useState<SuggestResult | null>(null);
@@ -91,6 +101,20 @@ export function PolicyBuild({ targets, canApply = false }: { targets: ScanTarget
       setError((e as Error).message);
     } finally {
       setPreviewing(false);
+    }
+  }
+
+  async function runTry() {
+    if (!target || !hcl) return;
+    setTrying(true);
+    setError(null);
+    try {
+      setPreview(await api.tryPolicy({ conn_id: target.conn_id, mount: draft!.mount, prefix: target.mount === draft!.mount ? target.prefix : "",
+                                       name: draft!.name || "draft", text: hcl, with_default: withDefault }));
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setTrying(false);
     }
   }
 
@@ -290,6 +314,15 @@ export function PolicyBuild({ targets, canApply = false }: { targets: ScanTarget
               <button type="button" className="btn" onClick={runPreview} disabled={!hcl || previewing}>
                 {previewing && <span className="spinner" />} Preview on {target.label}
               </button>
+              {canApply && (
+                <>
+                  <button type="button" className="btn" onClick={runTry} disabled={!hcl || trying}
+                          title="Write the draft as a temporary policy, mint a two-minute token with it and ask Vault what it may do. Both are removed straight after.">
+                    {trying && <span className="spinner" />} Try for real on {target.label}
+                  </button>
+                  <label className="inline-check"><input type="checkbox" checked={withDefault} onChange={(e) => setWithDefault(e.target.checked)} /> with the default policy</label>
+                </>
+              )}
               <button type="button" className="btn ghost small" disabled={!hcl} onClick={() => navigator.clipboard?.writeText(hcl)}>Copy HCL</button>
               <button type="button" className="btn ghost small" disabled={!hcl || !NAME.test(draft.name)}
                       onClick={() => download(new Blob([hcl], { type: "text/plain" }), `${draft.name}.hcl`)}>Download .hcl</button>

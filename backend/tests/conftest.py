@@ -8,6 +8,7 @@ VAULT_B = os.environ.get("VAULT_B_ADDR", "http://localhost:8201")
 
 os.environ.setdefault("LOCKSTEP_SESSION_KEY", "test-session-key-0123456789abcdef0123456789")
 os.environ.setdefault("LOCKSTEP_COOKIE_SECURE", "false")
+os.environ.setdefault("LOCKSTEP_USER_WRITE", "on")
 os.environ.setdefault("LOCKSTEP_PRESET_CONNECTIONS", json.dumps([
     {"name": "Vault A", "url": VAULT_A, "browser_url": "http://localhost:8200"},
     {"name": "Vault B", "url": VAULT_B, "browser_url": "http://localhost:8201"},

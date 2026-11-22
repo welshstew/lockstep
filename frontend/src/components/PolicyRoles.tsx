@@ -6,6 +6,8 @@ import type { CompareSides } from "./PolicyCompare";
 import { AccessApply } from "./AccessApply";
 import { saveAccessPlan } from "../accessPlan";
 import { ExplainResultView } from "./PoliciesView";
+import { AuthUsers } from "./AuthUsers";
+import type { AuthUserMount } from "../types";
 
 type View = "mount" | "compare" | "new";
 const DRAFTS_KEY = "lockstep.roleDrafts";
@@ -77,12 +79,13 @@ function Findings({ items }: { items: RoleFinding[] }) {
 }
 
 /** Kubernetes and JWT/OIDC roles: read and explain them, compare them across Vaults, build new ones. */
-export function PolicyRoles({ targets, sides, canApply = false }: { targets: ScanTarget[]; sides: CompareSides; canApply?: boolean }) {
+export function PolicyRoles({ targets, sides, canApply = false, userWrite = false }: { targets: ScanTarget[]; sides: CompareSides; canApply?: boolean; userWrite?: boolean }) {
   const [view, setView] = useState<View>("mount");
   const conns = (["left", "right"] as const).filter((s) => sides[s]).map((s) => ({ side: s, ...sides[s]! }));
   const [sideId, setSideId] = useState<"left" | "right">(conns[0]?.side ?? "left");
   const conn = conns.find((c) => c.side === sideId) ?? conns[0];
   const [mounts, setMounts] = useState<AuthMount[] | null>(null);
+  const [userMounts, setUserMounts] = useState<AuthUserMount[]>([]);
   const [mount, setMount] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
   const [granting, setGranting] = useState("");
@@ -92,7 +95,8 @@ export function PolicyRoles({ targets, sides, canApply = false }: { targets: Sca
   useEffect(() => {
     if (!conn) return;
     setMounts(null);
-    api.roleMounts(conn.conn_id).then((m) => { setMounts(m); setMount((cur) => (m.some((x) => x.path === cur) ? cur : m[0]?.path ?? "")); })
+    api.authUserMounts(conn.conn_id).then(setUserMounts).catch(() => setUserMounts([]));
+    api.roleMounts(conn.conn_id).then((m) => { setMounts(m); setMount((cur) => (cur.startsWith("__") || m.some((x) => x.path === cur) ? cur : m[0]?.path ?? "")); })
       .catch((e) => setError(e.message));
   }, [conn?.conn_id]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -122,6 +126,7 @@ export function PolicyRoles({ targets, sides, canApply = false }: { targets: Sca
               <select value={mount} onChange={(e) => setMount(e.target.value)} aria-label="Auth mount for roles">
                 {mounts.map((m) => <option key={m.path} value={m.path}>{m.path}/ ({m.type})</option>)}
                 <option value="__groups__">Identity groups</option>
+                {userMounts.map((m) => <option key={m.path} value={`__users__:${m.path}`}>{m.path}/ ({m.type === "ldap" ? "LDAP group mappings" : "userpass users"})</option>)}
               </select></label>
           )}
           <span className="spacer" />
@@ -148,8 +153,14 @@ export function PolicyRoles({ targets, sides, canApply = false }: { targets: Sca
       </div>
       {error && <div className="notice error" role="alert">{error}</div>}
       {mounts && mounts.length === 0 && view === "mount" && <div className="notice info">This Vault has no Kubernetes, JWT or OIDC auth mount you can see.</div>}
-      {view === "mount" && conn && mount === "__groups__" && <Groups key={conn.conn_id} connId={conn.conn_id} target={targets.find((t) => t.side === conn.side)} />}
-      {view === "mount" && conn && mount && mount !== "__groups__" && <MountRoles key={`${conn.conn_id}|${mount}`} connId={conn.conn_id} mount={mount}
+      {view === "mount" && conn && mount === "__groups__" && <Groups key={conn.conn_id} connId={conn.conn_id} target={targets.find((t) => t.side === conn.side)} canApply={canApply} label={conn.label} />}
+      {view === "mount" && conn && mount.startsWith("__users__:") && (() => {
+        const um = userMounts.find((m) => `__users__:${m.path}` === mount);
+        const other = conns.find((c) => c.side !== conn.side);
+        return um ? <AuthUsers key={`${conn.conn_id}|${mount}`} connId={conn.conn_id} mount={um} label={conn.label} canWrite={userWrite}
+                               other={other ? { conn_id: other.conn_id, label: other.label } : undefined} /> : null;
+      })()}
+      {view === "mount" && conn && mount && mount !== "__groups__" && !mount.startsWith("__users__:") && <MountRoles key={`${conn.conn_id}|${mount}`} connId={conn.conn_id} mount={mount}
                                                        target={targets.find((t) => t.side === conn.side)} canApply={canApply} label={conn.label} />}
       {view === "compare" && <CompareRoles sides={sides} />}
       {view === "new" && conn && <NewRole connId={conn.conn_id} mounts={mounts ?? []} canApply={canApply} label={conn.label} />}
@@ -157,14 +168,17 @@ export function PolicyRoles({ targets, sides, canApply = false }: { targets: Sca
   );
 }
 
-function Groups({ connId, target }: { connId: string; target?: ScanTarget }) {
+function Groups({ connId, target, canApply, label }: { connId: string; target?: ScanTarget; canApply: boolean; label: string }) {
+  const [gen, setGen] = useState(0);
+  const [editing, setEditing] = useState<string | null>(null);  // the policies being typed, comma separated
+  const [writing, setWriting] = useState(false);
   const [data, setData] = useState<{ name: string; type?: string; policies?: string[]; members?: string[]; member_groups?: number; alias?: string }[] | null>(null);
   const [missing, setMissing] = useState<string[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [explained, setExplained] = useState<ExplainResult | null>(null);
   const [error, setError] = useState<string | null>(null);
-  useEffect(() => { api.identityGroups(connId).then((d) => { setData(d.groups); setMissing(d.missing); setSelected(d.groups[0]?.name ?? null); }).catch((e) => setError(e.message)); }, [connId]);
-  useEffect(() => setExplained(null), [selected]);
+  useEffect(() => { api.identityGroups(connId).then((d) => { setData(d.groups); setMissing(d.missing); setSelected(d.groups[0]?.name ?? null); }).catch((e) => setError(e.message)); }, [connId, gen]);
+  useEffect(() => { setExplained(null); setEditing(null); }, [selected]);
   const g = data?.find((x) => x.name === selected);
   if (error) return <div className="notice error">{error}</div>;
   if (!data) return <div className="empty"><span className="spinner" /></div>;
@@ -182,7 +196,10 @@ function Groups({ connId, target }: { connId: string; target?: ScanTarget }) {
             <h3 className="mono role-title">group {g.name}</h3>
             <table className="plan-keys role-fields"><tbody>
               <tr><td>Type</td><td>{g.type ?? "internal"}{g.alias ? ` (from the identity provider’s group ${g.alias})` : ""}</td></tr>
-              <tr><td>Policies</td><td className="mono">{g.policies?.join(", ") || "—"}</td></tr>
+              <tr><td>Policies</td><td className="mono">{editing !== null
+                ? <input type="text" className="mono" aria-label="Group policies" value={editing} placeholder="comma separated"
+                         onChange={(e) => setEditing(e.target.value)} />
+                : g.policies?.join(", ") || "—"}</td></tr>
               <tr><td>Members</td><td className="mono">{g.members?.join(", ") || "—"}{g.member_groups ? ` · ${g.member_groups} member group(s)` : ""}</td></tr>
             </tbody></table>
             {target && (
@@ -191,10 +208,25 @@ function Groups({ connId, target }: { connId: string; target?: ScanTarget }) {
                   .then(setExplained).catch((e) => setError(e.message))}>What can its members do on {target.mount}?</button>
               </div>
             )}
+            {canApply && (
+              <div className="field-row">
+                {editing === null
+                  ? <button type="button" className="btn ghost small" onClick={() => setEditing((g.policies ?? []).join(", "))}>Edit policies</button>
+                  : <>
+                      <button type="button" className="btn primary small" onClick={() => setWriting(true)}>Review…</button>
+                      <button type="button" className="btn ghost small" onClick={() => setEditing(null)}>Cancel</button>
+                    </>}
+              </div>
+            )}
           </div>
         ) : <div className="card empty">Choose a group.</div>}
       </div>
       {explained && <ExplainResultView key={selected ?? ""} result={explained} />}
+      {writing && g && editing !== null && (
+        <AccessApply label={label}
+          changes={{ conn_id: connId, group_policies: [{ name: g.name, policies: editing.split(",").map((x) => x.trim()).filter(Boolean) }] }}
+          onClose={(done) => { setWriting(false); if (done) { setEditing(null); setGen(gen + 1); } }} />
+      )}
     </>
   );
 }

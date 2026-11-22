@@ -16,7 +16,7 @@ export interface BrowseTarget {
   url?: string | null; // the Vault's address, for snippets
 }
 
-type Go = (view: "compare" | "expiry" | "policies" | "transfer", side: "left" | "right", folder: string) => void;
+type Go = (view: "compare" | "expiry" | "policies" | "policy-build" | "transfer", side: "left" | "right", folder: string) => void;
 
 interface Props {
   config: AppConfig;
@@ -702,6 +702,8 @@ function SecretPanel({ target, path, config, reveal, stage, onStage, onInspect, 
             <button type="button" className="btn ghost small" onClick={() => onGo("compare", target.side, folder)}>Compare this folder…</button>
             <button type="button" className="btn ghost small" onClick={() => onGo("expiry", target.side, folder)}>Scan for certificates</button>
             <button type="button" className="btn ghost small" onClick={() => onGo("policies", target.side, folder)}>Why can I…?</button>
+            <button type="button" className="btn ghost small" onClick={() => onGo("policy-build", target.side, folder)}
+                    title="Start a policy draft that lets someone read this folder; adjust it in Policies › Build">Policy for this folder…</button>
             {config.export_mode !== "off" && <button type="button" className="btn ghost small" onClick={() => onGo("transfer", target.side, folder)}>Export this folder…</button>}
             {info.state === "present" && info.caps.read !== false && (
               <button type="button" className="btn ghost small" aria-expanded={sharing} onClick={() => setSharing(!sharing)}>Share once…</button>

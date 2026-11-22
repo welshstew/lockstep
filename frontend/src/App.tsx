@@ -57,6 +57,21 @@ function trustCandidates(result: CompareResult, leftName: string, rightName: str
   return out;
 }
 
+
+/** A new Policies › Build draft that reads one folder (from Browse), opened next time Build shows. */
+function startPolicyDraft(mount: string, folder: string) {
+  const clean = folder.replace(/^\/+|\/+$/g, "");
+  const name = `${mount}-${clean || "all"}`.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/-+/g, "-").slice(0, 60) + "-read";
+  try {
+    const drafts = JSON.parse(localStorage.getItem("lockstep.policyDrafts") ?? "[]");
+    const list = Array.isArray(drafts) ? drafts : [];
+    list.push({ name, mount, rules: [{ where: clean ? `${clean}/**` : "**", can: ["names", "read", "history"] }] });
+    localStorage.setItem("lockstep.policyDrafts", JSON.stringify(list));
+    localStorage.setItem("lockstep.policyDraftOpen", String(list.length - 1));
+    localStorage.setItem("lockstep.policyMode", "build");
+  } catch { /* storage unavailable: Build opens without the draft */ }
+}
+
 export function App() {
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [connections, setConnections] = useState<Connection[]>([]);
@@ -174,6 +189,19 @@ export function App() {
     setChangeset({});
   };
 
+  // Clearing a side's prefix from the compare bar compares the whole mount again straight away
+  const [rerun, setRerun] = useState(false);
+  useEffect(() => {
+    if (!rerun) return;
+    setRerun(false);
+    runCompare();
+  }, [rerun]); // eslint-disable-line react-hooks/exhaustive-deps
+  const clearPrefix = (i: 0 | 1) => {
+    const hadResult = result !== null;
+    setSide(i)({ ...sides[i], prefix: "" });
+    if (hadResult) setRerun(true);
+  };
+
   const label = (s: SideSelection) => {
     const f = fileOf(s);
     if (f) return `${f.name}${s.prefix ? `/${s.prefix.replace(/^\/+|\/+$/g, "")}` : ""}`;
@@ -183,6 +211,12 @@ export function App() {
 
   const ready = sides.every((s) => fileOf(s) || (s.connId && s.mount));
 
+  const [withMetadata, setWithMetadataState] = useState(() => { try { return localStorage.getItem("lockstep.compareMetadata") === "1"; } catch { return false; } });
+  const setWithMetadata = (on: boolean) => {
+    setWithMetadataState(on);
+    try { localStorage.setItem("lockstep.compareMetadata", on ? "1" : "0"); } catch { /* ignore */ }
+  };
+
   async function runCompare() {
     const [l, r] = sides;
     setComparing(true);
@@ -190,7 +224,7 @@ export function App() {
     setChangeset({});
     try {
       setResult(await api.compare(sideRef(l), sideRef(r),
-        draftRules ? mergeRules(activeProfile?.rules, draft) : activeProfile?.rules ?? null));
+        draftRules ? mergeRules(activeProfile?.rules, draft) : activeProfile?.rules ?? null, withMetadata));
     } catch (e) {
       setError((e as Error).message);
       setResult(null);
@@ -214,10 +248,20 @@ export function App() {
     <div className="app">
       <header className="topbar">
         <div className="brand"><span className="brand-mark"><i /><i /></span> Lockstep <span className="brand-sub">compatible with HashiCorp Vault</span></div>
+        <nav className="tabs" role="tablist" aria-label="View">
+          <button type="button" role="tab" aria-selected={view === "browse"} onClick={() => setView("browse")}>Browse</button>
+          <button type="button" role="tab" aria-selected={view === "compare"} onClick={() => setView("compare")}>Compare</button>
+          <button type="button" role="tab" aria-selected={view === "expiry"} onClick={() => setView("expiry")}>Certificate expiry</button>
+          <button type="button" role="tab" aria-selected={view === "plans"} onClick={() => setView("plans")}>Sync plans</button>
+          <button type="button" role="tab" aria-selected={view === "transfer"} onClick={() => setView("transfer")}>Export &amp; import</button>
+          <button type="button" role="tab" aria-selected={view === "policies"} onClick={() => setView("policies")}>Policies</button>
+          <button type="button" role="tab" aria-selected={view === "config"} onClick={() => setView("config")}>Configuration</button>
+          <button type="button" role="tab" aria-selected={view === "tools"} onClick={() => setView("tools")}>Tools</button>
+        </nav>
         <div className="spacer" />
         <label className="theme-switch subtle" title="Colour theme">
           <select aria-label="Theme" value={theme} onChange={(e) => { const t = e.target.value as Theme; setTheme(t); applyTheme(t); }}>
-            <option value="system">System theme</option><option value="light">Light</option><option value="dark">Dark</option>
+            <option value="system">Auto</option><option value="light">Light</option><option value="dark">Dark</option>
           </select>
         </label>
         <label className="toggle" title="Values are always compared on the server. This only controls whether they are shown.">
@@ -234,23 +278,17 @@ export function App() {
                   files={files} onFile={addFile} />
         <div className="swap-col">
           <button type="button" className="btn icon" title="Swap left and right" aria-label="Swap sides"
-                  onClick={() => { setSides(([a, b]) => [b, a]); setResult(null); setChangeset({}); }}>⇄</button>
+                  onClick={() => { setSides(([a, b]) => [b, a]); setResult(null); setChangeset({}); }}>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M2.5 5.5h10M10 3l2.5 2.5L10 8M13.5 10.5h-10M6 8l-2.5 2.5L6 13" />
+            </svg>
+          </button>
         </div>
         <SideCard side="right" config={config} connections={connections} selection={sides[1]}
                   onChange={setSide(1)} onConnected={() => refresh()} onDisconnect={disconnect}
                   files={files} onFile={addFile} />
       </div>
 
-      <nav className="tabs" role="tablist" aria-label="View">
-        <button type="button" role="tab" aria-selected={view === "browse"} onClick={() => setView("browse")}>Browse</button>
-        <button type="button" role="tab" aria-selected={view === "compare"} onClick={() => setView("compare")}>Compare</button>
-        <button type="button" role="tab" aria-selected={view === "expiry"} onClick={() => setView("expiry")}>Certificate expiry</button>
-        <button type="button" role="tab" aria-selected={view === "plans"} onClick={() => setView("plans")}>Sync plans</button>
-        <button type="button" role="tab" aria-selected={view === "transfer"} onClick={() => setView("transfer")}>Export &amp; import</button>
-        <button type="button" role="tab" aria-selected={view === "policies"} onClick={() => setView("policies")}>Policies</button>
-        <button type="button" role="tab" aria-selected={view === "config"} onClick={() => setView("config")}>Configuration</button>
-        <button type="button" role="tab" aria-selected={view === "tools"} onClick={() => setView("tools")}>Tools</button>
-      </nav>
 
       {view === "tools" ? (
         <ToolsView sides={Object.fromEntries(sides.flatMap((s, i) => {
@@ -258,7 +296,7 @@ export function App() {
           return c ? [[i === 0 ? "left" : "right", { conn_id: c.id, label: c.name }]] : [];
         }))} readOnly={!!config.read_only} allowClipboard={config.allow_clipboard !== false} />
       ) : view === "config" ? (
-        <ConfigView sides={Object.fromEntries(sides.flatMap((s, i) => {
+        <ConfigView canApply={!!config.policy_apply} sides={Object.fromEntries(sides.flatMap((s, i) => {
           const c = !s.fileId && connections.find((x) => x.id === s.connId);
           return c ? [[i === 0 ? "left" : "right", { conn_id: c.id, label: c.name }]] : [];
         }))} />
@@ -276,10 +314,15 @@ export function App() {
             if (to === "policies") {
               try { localStorage.setItem("lockstep.policyMode", "explain"); localStorage.setItem("lockstep.policySource", "token"); } catch { /* ignore */ }
             }
+            if (to === "policy-build") {
+              startPolicyDraft(sides[i].mount ?? "secret", folder);
+              setView("policies");
+              return;
+            }
             setView(to);
           }} />
       ) : view === "policies" ? (
-        <PoliciesView canApply={!!config.policy_apply}
+        <PoliciesView canApply={!!config.policy_apply} userWrite={!!config.user_write}
           targets={sides.flatMap((s, i): ScanTarget[] => (s.connId && s.mount && !s.fileId
             ? [{ side: i === 0 ? "left" : "right", conn_id: s.connId, mount: s.mount, prefix: s.prefix, label: label(s) }] : []))}
           sides={Object.fromEntries(sides.flatMap((s, i) => {
@@ -343,6 +386,23 @@ export function App() {
         <button type="button" className="btn primary big" disabled={!ready || comparing} onClick={runCompare}>
           {comparing && <span className="spinner" />} {result ? "Compare again" : "Compare"}
         </button>
+        {sides.map((s, i) => {
+          const prefix = s.prefix.replace(/^\/+|\/+$/g, "");
+          if (!prefix || !(s.connId || s.fileId)) return null;
+          const which = i === 0 ? "left" : "right";
+          return (
+            <span key={which} className={`scope-chip ${which}`} role="status">
+              <span className={`side-dot ${which}`} /> {which === "left" ? "Left" : "Right"}: only under <span className="mono">{s.mount ? `${s.mount}/` : ""}{prefix}/</span>
+              <button type="button" className="btn ghost small" onClick={() => clearPrefix(i as 0 | 1)}
+                      aria-label={`Compare the whole mount on the ${which} side`} title="Remove the path prefix and compare the whole mount">
+                ✕ Whole mount
+              </button>
+            </span>
+          );
+        })}
+        <label className="inline-check" title="Also compare each secret's custom metadata (owner, ticket…). A difference makes the secret Different.">
+          <input type="checkbox" checked={withMetadata} onChange={(e) => setWithMetadata(e.target.checked)} /> Include custom metadata
+        </label>
         {result && (
           <button type="button" className="btn big" aria-pressed={ignoreMode} onClick={() => setIgnoreMode(!ignoreMode)}
                   title="Pick secrets and keys to ignore, and save them as a comparison profile">

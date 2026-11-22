@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { api, ApiError } from "../api";
 import type { AppConfig, Connection, LoadedFile, SideSelection } from "../types";
 import { ConnectForm } from "./ConnectForm";
 import { FileLoader, FileSummary } from "./FileLoader";
@@ -83,7 +84,7 @@ export function SideCard(props: Props) {
         <button type="button" className="collapse-btn" aria-expanded={!collapsed} onClick={() => setCollapsed(!collapsed)}
                 aria-label={`${collapsed ? "Expand" : "Collapse"} the ${side} side`} title={collapsed ? "Show the connection details" : "Collapse to a summary"}>
           <span className="caret">▸</span>
-          <h2 className="side-title">{side === "left" ? "◧ Left / source" : "Right / target ◨"}</h2>
+          <h2 className="side-title">{side === "left" ? "Left: source" : "Right: target"}</h2>
         </button>
         {!collapsed && <div className="segmented small" role="group" aria-label={`${side} side source`}>
           <button type="button" aria-pressed={mode === "vault"} onClick={() => {
@@ -97,9 +98,17 @@ export function SideCard(props: Props) {
         </div>}
       </div>
       {collapsed ? (
-        <button type="button" className="summary-btn" onClick={() => setCollapsed(false)} aria-label={`${side} side summary: expand`}>
-          <Summary conn={connections.find((c) => c.id === selection.connId) ?? null} file={file} selection={selection} />
-        </button>
+        <div className="summary-row">
+          <button type="button" className="summary-btn" onClick={() => setCollapsed(false)} aria-label={`${side} side summary: expand`}>
+            <Summary conn={connections.find((c) => c.id === selection.connId) ?? null} file={file} selection={selection} />
+          </button>
+          {selection.prefix && (
+            <button type="button" className="btn ghost small" onClick={() => onChange({ ...selection, prefix: "" })}
+                    aria-label={`Clear the path prefix on the ${side} side`} title="Remove the path prefix: use the whole mount">
+              ✕ Prefix
+            </button>
+          )}
+        </div>
       ) : mode === "vault" ? <VaultSide {...props} /> : file ? (
         <>
           <div className="conn-chip file-chip">
@@ -112,8 +121,14 @@ export function SideCard(props: Props) {
           <div className="subtle">Read-only: values can be copied from the file, never into it.</div>
           <label className="field">
             <span>Path prefix <span className="subtle">(optional)</span></span>
-            <input type="text" value={selection.prefix} placeholder="e.g. payments/"
-                   onChange={(e) => onChange({ ...selection, prefix: e.target.value })} />
+            <span className="input-with-clear">
+              <input type="text" value={selection.prefix} placeholder="e.g. payments/"
+                     onChange={(e) => onChange({ ...selection, prefix: e.target.value })} />
+              {selection.prefix && (
+                <button type="button" className="btn ghost icon small" aria-label="Clear the path prefix" title="Clear: use the whole file"
+                        onClick={() => onChange({ ...selection, prefix: "" })}>✕</button>
+              )}
+            </span>
           </label>
         </>
       ) : (
@@ -138,6 +153,21 @@ export function SideCard(props: Props) {
 function VaultSide({ side, config, connections, selection, onChange, onConnected, onDisconnect }: Props) {
   const conn = connections.find((c) => c.id === selection.connId) ?? null;
   const [adding, setAdding] = useState(false);
+  const [renewing, setRenewing] = useState(false);
+  const [renewNote, setRenewNote] = useState<{ id: string; text: string; error?: boolean } | null>(null);
+  const renew = async (c: Connection) => {
+    setRenewing(true);
+    try {
+      const r = await api.renew(c.id);
+      setRenewNote({ id: c.id, text: r.capped ? `Renewed up to the token's max TTL: ${expiry(r)}. Sign in again for more time.`
+                                              : `Renewed: ${expiry(r)}.` });
+      onConnected(r);
+    } catch (e) {
+      setRenewNote({ id: c.id, text: e instanceof ApiError ? e.message : String(e), error: true });
+    } finally {
+      setRenewing(false);
+    }
+  };
   // With no connection chosen, show the sign-in form straight away; the dropdown above it
   // lets the user reuse an existing connection instead (e.g. same Vault, another mount).
   const showForm = adding || !conn;
@@ -187,11 +217,21 @@ function VaultSide({ side, config, connections, selection, onChange, onConnected
                 {conn.policies.filter((p) => p !== "default").join(", ") || "default"} · {expiry(conn)}
               </div>
             </div>
+            {conn.renewable && conn.status === "ok" && (
+              <button type="button" className="btn ghost small" disabled={renewing} onClick={() => renew(conn)}
+                      title="Extend this token's lifetime (up to its max TTL)">
+                {renewing ? "Renewing…" : "Renew"}
+              </button>
+            )}
             <button type="button" className="btn ghost small" onClick={() => onDisconnect(conn.id)}
                     title={conn.auth_method === "token" ? "Forget this connection" : "Sign out and revoke the token"}>
               Sign out
             </button>
           </div>
+
+          {renewNote?.id === conn.id && (
+            <div className={`notice ${renewNote.error ? "error" : "info"}`} role="status">{renewNote.text}</div>
+          )}
 
           {conn.status === "expired" ? (
             <div className="notice error">
@@ -204,9 +244,15 @@ function VaultSide({ side, config, connections, selection, onChange, onConnected
                            onChange={(mount) => onChange({ ...selection, mount, prefix: "" })} />
               <label className="field">
                 <span>Path prefix <span className="subtle">(optional)</span></span>
-                <input type="text" value={selection.prefix} placeholder="e.g. payments/"
-                       disabled={!selection.mount}
-                       onChange={(e) => onChange({ ...selection, prefix: e.target.value })} />
+                <span className="input-with-clear">
+                  <input type="text" value={selection.prefix} placeholder="e.g. payments/"
+                         disabled={!selection.mount}
+                         onChange={(e) => onChange({ ...selection, prefix: e.target.value })} />
+                  {selection.prefix && (
+                    <button type="button" className="btn ghost icon small" aria-label="Clear the path prefix" title="Clear: use the whole mount"
+                            onClick={() => onChange({ ...selection, prefix: "" })}>✕</button>
+                  )}
+                </span>
               </label>
             </>
           )}

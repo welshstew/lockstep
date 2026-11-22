@@ -245,3 +245,24 @@ def test_override_values_on_both_sides(page, sandbox, vault_a, vault_b):
 
     for v in (vault_a, vault_b):
         assert v.get("app-config", f"{sandbox}/svc") == {"password": "rotated-pw", "user": "app", "rotated_at": 2026}
+
+
+def test_renew_connection_token(page):
+    sign_in_userpass(page, "left", "alice", vault="Vault A")
+    card = side(page, "left")
+    card.get_by_role("button", name="Renew", exact=True).click()
+    expect(card.get_by_role("status")).to_contain_text("Renewed")
+
+
+def test_compare_custom_metadata_when_asked(page, sandbox, vault_a, vault_b):
+    for v, owner in ((vault_a, "team-a"), (vault_b, "team-b")):
+        v.put("app-config", f"{sandbox}/svc", {"k": "v"})
+        v.c.post(f"app-config/metadata/{sandbox}/svc", json={"custom_metadata": {"owner": owner}}).raise_for_status()
+    connect_both(page, prefix=sandbox)
+    compare(page)
+    expect(row(page, "svc")).to_have_count(0)  # equal, so hidden
+    page.get_by_label("Include custom metadata").check()
+    compare(page)
+    expect(row(page, "svc").locator(".badge").last).to_have_text("Different")
+    r = expand(page, "svc")
+    expect(r.get_by_label("Custom metadata differences")).to_contain_text("owner team-a → team-b")

@@ -73,6 +73,8 @@ spec:
               value: {{ .Values.readOnly | quote }}
             - name: LOCKSTEP_POLICY_APPLY
               value: {{ .Values.policyApply | quote }}
+            - name: LOCKSTEP_USER_WRITE
+              value: {{ .Values.userWrite | quote }}
             - name: LOCKSTEP_ALLOW_CLIPBOARD
               value: {{ .Values.allowClipboard | quote }}
             - name: LOCKSTEP_VAULT_TLS_VERIFY
@@ -90,6 +92,10 @@ spec:
             {{- if .Values.policyPatterns }}
             - name: LOCKSTEP_POLICY_PATTERNS
               value: {{ toJson .Values.policyPatterns | quote }}
+            {{- end }}
+            {{- if .Values.configProfiles }}
+            - name: LOCKSTEP_CONFIG_PROFILES
+              value: {{ toJson .Values.configProfiles | quote }}
             {{- end }}
             {{- if .Values.policyProfiles }}
             - name: LOCKSTEP_POLICY_PROFILES

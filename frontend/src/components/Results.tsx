@@ -209,8 +209,8 @@ export function Results({ result, reveal, leftLabel, rightLabel, changeset, onCh
 
       <div className="card">
         <div className="cols-head">
-          <span className="l">◧ {leftLabel}</span>
-          <span className="r">{rightLabel} ◨</span>
+          <span className="l">{leftLabel}</span>
+          <span className="r">{rightLabel}</span>
         </div>
         {shown.length === 0 ? (
           <div className="empty">

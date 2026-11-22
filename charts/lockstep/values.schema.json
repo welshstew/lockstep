@@ -118,6 +118,10 @@
       "type": "string",
       "enum": ["on", "off"]
     },
+    "userWrite": {
+      "type": "string",
+      "enum": ["on", "off"]
+    },
     "allowClipboard": {
       "type": "boolean"
     },
@@ -208,6 +212,24 @@
       }
     },
     "policyProfiles": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1, "maxLength": 128},
+          "description": {"type": "string", "maxLength": 1000},
+          "mappings": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["left", "right"],
+            "properties": {"left": {"type": "string", "minLength": 1}, "right": {"type": "string", "minLength": 1}}}},
+          "rewrites": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["find"],
+            "properties": {"find": {"type": "string", "minLength": 1}, "replace": {"type": "string"}}}},
+          "ignore": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    },
+    "configProfiles": {
       "type": "array",
       "maxItems": 100,
       "items": {

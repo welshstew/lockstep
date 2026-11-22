@@ -92,7 +92,7 @@
 
 	# Landing page, docs and guides: static, no scripts (JSON-LD is data, never executed)
 	handle {
-		header Content-Security-Policy "default-src 'none'; img-src 'self' data:; style-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+		header Content-Security-Policy "default-src 'none'; img-src 'self' data:; style-src 'self'; font-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 		root * /srv/site
 		file_server
 	}

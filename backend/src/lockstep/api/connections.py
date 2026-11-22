@@ -76,6 +76,7 @@ class ConnectionOut(BaseModel):
     display_name: str
     policies: list[str]
     expires_at: float | None
+    renewable: bool = False
     status: Literal["ok", "expired", "unreachable", "unknown"] = "unknown"
 
 
@@ -126,7 +127,8 @@ def to_out(c: Connection, status: str = "unknown") -> ConnectionOut:
     return ConnectionOut(
         id=c.id, name=c.name, url=None if c.preset_id is not None else c.url,
         namespace=c.namespace, preset_id=c.preset_id, auth_method=c.auth_method,
-        display_name=c.display_name, policies=c.policies, expires_at=c.expires_at, status=status)
+        display_name=c.display_name, policies=c.policies, expires_at=c.expires_at, renewable=c.renewable,
+        status=status)
 
 
 def resolve_target(body: ConnectionCreate, settings: Settings) -> tuple[str, str | None, str, int | None]:
@@ -157,6 +159,7 @@ def connection_from_token(*, token: str, info: dict, url: str, namespace: str | 
         display_name=info.get("display_name") or "",
         policies=sorted(set(info.get("policies") or []) | set(info.get("identity_policies") or [])),
         expires_at=time.time() + ttl if ttl else None,
+        renewable=bool(ttl and info.get("renewable")),
     )
 
 
@@ -331,6 +334,33 @@ async def delete_connection(conn_id: str, response: Response, session: Sess, set
             pass
     session.connections = [c for c in session.connections if c.id != conn_id]
     save_session(response, session, settings)
+
+
+class RenewOut(ConnectionOut):
+    capped: bool  # Vault gave less time than asked for: the token is near its max TTL
+
+
+@router.post("/{conn_id}/renew", response_model=RenewOut)
+async def renew_connection(conn_id: str, response: Response, session: Sess, settings: Conf):
+    """Extend the connection's token (auth/token/renew-self) by its original TTL, up to its max TTL."""
+    conn = get_connection(session, conn_id)
+    async with client_for(conn, settings) as v:
+        try:
+            before = await v.lookup_self()
+            if not before.get("renewable") or not before.get("ttl"):
+                raise HTTPException(400, detail={"message": "This token can't be renewed"
+                                                 + ("" if before.get("ttl") else ": it doesn't expire")})
+            asked = int(before.get("creation_ttl") or before.get("ttl") or 0)
+            res = await v.request("POST", "auth/token/renew-self", json={"increment": f"{asked}s"} if asked else {})
+            info = await v.lookup_self()
+        except VaultError as e:
+            raise vault_http_error(e) from e
+    ttl = int(info.get("ttl") or 0)
+    conn.expires_at = time.time() + ttl if ttl else None
+    conn.renewable = bool(ttl and info.get("renewable"))
+    save_session(response, session, settings)
+    capped = any("max_ttl" in w for w in res.get("warnings") or [])
+    return RenewOut(**to_out(conn, "ok").model_dump(), capped=capped)
 
 
 @router.get("/{conn_id}/mounts", response_model=MountsOut)

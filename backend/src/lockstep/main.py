@@ -8,7 +8,7 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .api import access, analyze, auth, browse, compare, connections, destroy, expiry, database, exports, identity, leases, pki, plans, policies, roles, sync, transit, vaultconfig
+from .api import access, analyze, auth, authusers, configcopy, browse, compare, connections, destroy, expiry, database, exports, identity, leases, pki, plans, policies, roles, sync, transit, trypolicy, vaultconfig
 from .config import Settings, get_settings
 from .session import SessionTooLarge
 
@@ -73,6 +73,7 @@ def create_app() -> FastAPI:
             "read_only": settings.read_only,
             "policy_apply": settings.policy_apply == "on" and not settings.read_only,
             "allow_clipboard": settings.allow_clipboard,
+            "user_write": settings.user_write == "on" and not settings.read_only,
             "k8s_auth": {
                 "available": connections.k8s_available(settings),
                 "mount": settings.k8s_auth_mount,
@@ -106,6 +107,9 @@ def create_app() -> FastAPI:
     app.include_router(leases.router)
     app.include_router(database.router)
     app.include_router(transit.router)
+    app.include_router(trypolicy.router)
+    app.include_router(authusers.router)
+    app.include_router(configcopy.router)
 
     if settings.static_dir and Path(settings.static_dir).is_dir():
         app.mount("/", StaticFiles(directory=settings.static_dir, html=True), name="spa")

@@ -45,6 +45,8 @@ allowDestroy: true
 readOnly: false
 # Write ACL policies and auth roles from the Policies tab: on | off (off where Terraform owns them)
 policyApply: "on"
+# Create userpass users and reset their passwords (Policies › Roles): on | off. Meant for dev Vaults
+userWrite: "off"
 # Offer Copy next to shown values in Browse
 allowClipboard: true
 
@@ -84,6 +86,13 @@ policyPatterns: []
 # Shared policy profiles for the Policies tab's Compare: pair policy names between two Vaults
 # (* patterns), rewrite the left policy's paths before comparing, and leave policies out.
 policyProfiles: []
+# Shared configuration profiles for the Configuration tab: pair mount paths that differ between two
+# Vaults (* patterns; a mount's roles and keys follow it), rewrite the left side's values, ignore paths.
+configProfiles: []
+#  - name: dev vs prod
+#    mappings: [{left: "kv-dev", right: "kv-prod"}, {left: "kubernetes-*", right: "k8s-*"}]
+#    rewrites: [{find: "dev.example.com", replace: "prod.example.com"}]
+#    ignore: ["sandbox-*"]
 #  - name: dev vs prod
 #    mappings: [{left: "*-dev", right: "*-prod"}]
 #    rewrites: [{find: "/dev/", replace: "/prod/"}]

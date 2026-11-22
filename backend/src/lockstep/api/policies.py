@@ -485,12 +485,12 @@ def _parse(text: str, name: str, src: PolicySource, parsed: list[Policy]) -> Non
     parsed.append(pol)
 
 
-async def _from_vault(v: VaultClient, mount: str, result: dict) -> None:
+async def _from_vault(v: VaultClient, mount: str, result: dict, token: str | None = None) -> None:
     """Fill the matrix from sys/capabilities-self: always right, but without the deciding rule."""
     paths = sorted({request_path(mount, r["path"], where) for r in result["rows"] for _, _, where, _ in COLUMNS})
     caps: dict[str, list[str]] = {}
     for i in range(0, len(paths), CAPS_BATCH):
-        caps |= await v.capabilities(paths[i:i + CAPS_BATCH])
+        caps |= await v.capabilities(paths[i:i + CAPS_BATCH], token=token)
     for r in result["rows"]:
         for col, _, where, need in COLUMNS:
             got = caps.get(request_path(mount, r["path"], where)) or ["deny"]

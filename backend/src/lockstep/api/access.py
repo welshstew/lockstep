@@ -1,4 +1,5 @@
-"""Writing ACL policies and auth roles from Lockstep (policy builder phase 5).
+"""Writing ACL policies, auth roles, identity groups' policies, mount tuning and engine roles from
+Lockstep (policy builder phase 5; tuning and engine roles come from Configuration's copy).
 
   POST /api/access/preview   what each change would do: new, change (with a diff), same, delete;
                              whether the token may do it; a hash of what's there now
@@ -35,8 +36,9 @@ from ..policy.explain import lint as lint_policy
 from ..policy.hcl import PolicyParseError, parse_policy
 from ..policy.roles import FIELDS, RoleSpec, lint as lint_role, normalise
 from ..session import Connection, SessionData, load_session
-from ..vault import VaultClient, VaultError
+from ..vault import VaultClient, VaultError, _q
 from .connections import client_for, get_connection, vault_http_error
+from .configcopy import COPYABLE, EngineObjectChange, TuneChange, engine_path, mount_types, normalise as as_text, read_tune, tune_path
 from .guard import require_writable
 
 router = APIRouter(prefix="/api/access", tags=["access"])
@@ -52,16 +54,28 @@ class RoleRef(BaseModel):
     name: str = Field(min_length=1, max_length=128, pattern=NAME.pattern)
 
 
+class GroupPolicies(BaseModel):
+    """An identity group's policies, set to exactly this list (the group itself must exist)."""
+    name: str = Field(min_length=1, max_length=256)
+    policies: list[str] = Field(default=[], max_length=100)
+
+
 class Changes(BaseModel):
     policies: list[BundlePolicy] = Field(default=[], max_length=200)
     roles: list[RoleSpec] = Field(default=[], max_length=200)
     delete_policies: list[str] = Field(default=[], max_length=200)
     delete_roles: list[RoleRef] = Field(default=[], max_length=200)
+    group_policies: list[GroupPolicies] = Field(default=[], max_length=200)
+    tunes: list[TuneChange] = Field(default=[], max_length=50)  # a mount's or auth method's tuning
+    engine_objects: list[EngineObjectChange] = Field(default=[], max_length=200)  # engine roles (configcopy)
 
     @model_validator(mode="after")
     def _check(self):
-        if not (self.policies or self.roles or self.delete_policies or self.delete_roles):
+        if not (self.policies or self.roles or self.delete_policies or self.delete_roles or self.group_policies
+                or self.tunes or self.engine_objects):
             raise ValueError("nothing to do")
+        if len({g.name for g in self.group_policies}) != len(self.group_policies):
+            raise ValueError("a group appears twice")
         touched = [p.name for p in self.policies] + self.delete_policies
         if PROTECTED & set(touched):
             raise ValueError("the root and default policies can't be changed from Lockstep")
@@ -83,8 +97,8 @@ class ApplyRequest(AccessChanges):
 
 
 class Item(BaseModel):
-    id: str  # "policy:<name>" or "role:<mount>/<name>"
-    kind: Literal["policy", "role"]
+    id: str  # "policy:<name>", "role:<mount>/<name>", "group:<name>", "tune:<secret|auth>:<path>", "engine:<path>"
+    kind: Literal["policy", "role", "group", "tune", "engine"]
     name: str
     action: Literal["new", "change", "same", "delete", "absent"]
     hash: str | None  # what's in Vault now (None: nothing)
@@ -136,6 +150,21 @@ async def _read_role(v: VaultClient, mount: str, name: str) -> dict | None:
         raise
 
 
+async def _read_group(v: VaultClient, name: str) -> dict | None:
+    try:
+        return (await v.request("GET", f"identity/group/name/{_q(name)}"))["data"]
+    except VaultError as e:
+        if e.status == 404:
+            return None
+        if e.denied:
+            raise Unreadable(f"Can't read the group (needs read on identity/group/name/{name})") from e
+        raise
+
+
+def _group_text(policies: list[str]) -> str:
+    return "\n".join(sorted(set(policies))) + "\n"
+
+
 async def _kinds(v: VaultClient) -> dict[str, str]:
     from .roles import auth_mounts
     return {m["path"]: m["kind"] for m in await auth_mounts(v)}
@@ -147,6 +176,8 @@ async def plan(v: VaultClient, body: Changes) -> list[Item]:
     mine = set(me.get("policies") or []) | set(me.get("identity_policies") or [])
     paths = [f"sys/policies/acl/{p.name}" for p in body.policies] + [f"sys/policies/acl/{n}" for n in body.delete_policies]
     paths += [f"auth/{r.mount.strip('/')}/role/{r.name}" for r in body.roles + body.delete_roles]  # type: ignore[operator]
+    paths += [f"identity/group/name/{g.name}" for g in body.group_policies]
+    paths += [tune_path(t.kind, t.path) for t in body.tunes] + [engine_path(o) for o in body.engine_objects]
     try:
         caps = await v.capabilities(paths)
     except VaultError:
@@ -220,6 +251,98 @@ async def plan(v: VaultClient, body: Changes) -> list[Item]:
         it.allowed = may(f"auth/{mount}/role/{r.name}", "create", "update")
         items.append(it)
 
+    known: set[str] | None = None
+    for g in body.group_policies:
+        it = Item(id=f"group:{g.name}", kind="group", name=g.name, action="change", hash=None,
+                  allowed=may(f"identity/group/name/{g.name}", "update"))
+        try:
+            current = await _read_group(v, g.name)
+        except Unreadable as e:
+            it.status, it.problems = "denied", [str(e)]
+            items.append(it)
+            continue
+        if current is None:
+            it.action, it.status, it.problems = "absent", "invalid", ["No such identity group here (Lockstep sets the policies of existing groups)"]
+            items.append(it)
+            continue
+        cur, new = _group_text(current.get("policies") or []), _group_text(g.policies)
+        it.hash = _hash(cur)
+        it.diff = "".join(difflib.unified_diff(cur.splitlines(True), new.splitlines(True),
+                                               f"vault: group {g.name} policies", "new"))
+        if cur == new:
+            it.action, it.status = "same", "noop"
+        if known is None:
+            try:
+                known = set(await v.policy_names())
+            except VaultError:
+                known = set()
+        if known and (unknown := sorted(set(g.policies) - known - {"default"})):
+            it.warnings.append(f"No such policy on this Vault yet: {', '.join(unknown)}")
+        if PROTECTED & set(g.policies) - {"default"}:
+            it.status, it.problems = "invalid", ["A group can't be given the root policy from Lockstep"]
+        if me.get("entity_id") and me["entity_id"] in (current.get("member_entity_ids") or []):
+            it.warnings.append("You're a member of this group: changing its policies changes what you can do.")
+        items.append(it)
+
+    for t in body.tunes:
+        it = Item(id=f"tune:{t.kind}:{t.path}", kind="tune", name=f"{'auth method' if t.kind == 'auth' else 'secrets engine'} {t.path}/",
+                  action="change", hash=None, allowed=may(tune_path(t.kind, t.path), "update"))
+        try:
+            current = await read_tune(v, t.kind, t.path)
+        except VaultError as e:
+            it.status = "denied" if e.denied else "invalid"
+            it.problems = [f"Can't read the tuning (needs read on {tune_path(t.kind, t.path)})" if e.denied
+                           else f"No {'auth method' if t.kind == 'auth' else 'secrets engine'} at {t.path}/ here"]
+            items.append(it)
+            continue
+        keys = sorted(t.config)
+        cur, new = as_text(current, keys), as_text(t.config, keys)
+        it.hash = _hash(cur)
+        it.diff = "".join(difflib.unified_diff((cur or "").splitlines(True), (new or "").splitlines(True), "vault: tuning", "new"))
+        if cur == new:
+            it.action, it.status = "same", "noop"
+        items.append(it)
+
+    types: dict[str, str] | None = None
+    for o in body.engine_objects:
+        path = engine_path(o)
+        it = Item(id=f"engine:{o.mount}/{o.kind}/{o.name}", kind="engine", name=f"{o.mount}/{o.kind}/{o.name}",
+                  action="new", hash=None, allowed=may(path, "create", "update"))
+        if types is None:
+            types = await mount_types(v)
+        etype = types.get(o.mount)
+        if etype is None or o.kind not in COPYABLE.get(etype, set()):
+            it.status, it.problems = "invalid", [f"{o.mount}/ isn't a secrets engine here that Lockstep copies {o.kind} to"
+                                                 if etype is None or o.kind in {k for ks in COPYABLE.values() for k in ks}
+                                                 else f"{o.kind} of a {etype} engine can't be copied"]
+            items.append(it)
+            continue
+        try:
+            current = (await v.request("GET", f"{o.mount}/{o.kind}/{_q(o.name)}")).get("data")
+        except VaultError as e:
+            if e.status != 404:
+                it.status = "denied" if e.denied else "error"
+                it.problems = [f"Can't read {o.mount}/{o.kind}/{o.name}: {e.message}"]
+                items.append(it)
+                continue
+            current = None
+        if o.kind == "keys" and current is None:
+            it.action, it.status, it.problems = "absent", "invalid", ["The Transit key doesn't exist here: create it first (Lockstep doesn't make key material)"]
+            items.append(it)
+            continue
+        keys = sorted(o.body)
+        cur, new = as_text(current, keys), as_text(o.body, keys)
+        it.hash = _hash(as_text(current))
+        if current is not None:
+            it.action = "same" if cur == new else "change"
+            it.diff = "".join(difflib.unified_diff((cur or "").splitlines(True), (new or "").splitlines(True),
+                                                   f"vault: {it.name}", "new"))
+            if it.action == "same":
+                it.status = "noop"
+        else:
+            it.diff = new or ""
+        items.append(it)
+
     for n in body.delete_policies:
         try:
             current = await _read_policy(v, n)
@@ -289,7 +412,11 @@ async def run_apply(v: VaultClient, conn: Connection, body: Changes, expected: d
         raise vault_http_error(e) from e
     policies = {f"policy:{p.name}": p for p in body.policies}
     roles = {f"role:{r.mount.strip('/')}/{r.name}": r for r in body.roles}
-    order = sorted(items, key=lambda i: (i.action == "delete", i.kind == "role"))  # policies, roles, then deletes
+    groups = {f"group:{g.name}": g for g in body.group_policies}
+    tunes = {f"tune:{t.kind}:{t.path}": t for t in body.tunes}
+    objects = {f"engine:{o.mount}/{o.kind}/{o.name}": o for o in body.engine_objects}
+    order = sorted(items, key=lambda i: (i.action == "delete", ("policy", "role", "group", "tune", "engine").index(i.kind)))
+    # policies, roles, groups, then deletes
     for it in order:
         if it.status != "ready":
             continue
@@ -306,6 +433,15 @@ async def run_apply(v: VaultClient, conn: Connection, body: Changes, expected: d
                 else:
                     mount, name = it.name.rsplit("/", 1)
                     await v.request("DELETE", f"auth/{mount}/role/{name}")
+            elif it.kind == "tune":
+                t = tunes[it.id]
+                await v.request("POST", tune_path(t.kind, t.path), json=t.config)
+            elif it.kind == "engine":
+                o = objects[it.id]
+                await v.request("POST", engine_path(o), json=o.body)
+            elif it.kind == "group":
+                await v.request("POST", f"identity/group/name/{_q(it.name)}",
+                                json={"policies": sorted(set(groups[it.id].policies))})
             elif it.kind == "policy":
                 await v.request("PUT", f"sys/policies/acl/{it.name}", json={"policy": policies[it.id].text})
             else:
@@ -363,7 +499,12 @@ def _plan_key(settings: Settings) -> bytes:
 
 
 def _canonical(data: dict) -> bytes:
-    return json.dumps({k: x for k, x in data.items() if k != "signature"}, sort_keys=True, separators=(",", ":"),
+    data = {k: x for k, x in data.items() if k != "signature"}
+    if isinstance(data.get("changes"), dict):
+        # Added after the first plans were signed: left out when empty so those still verify
+        data["changes"] = {k: x for k, x in data["changes"].items()
+                           if not (k in ("group_policies", "tunes", "engine_objects") and not x)}
+    return json.dumps(data, sort_keys=True, separators=(",", ":"),
                       ensure_ascii=False).encode()
 
 

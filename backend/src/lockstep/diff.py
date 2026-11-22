@@ -25,6 +25,27 @@ class KeyDiff(BaseModel):
     ignored: bool = False  # matched an ignore rule: shown, but doesn't make the secret differ
 
 
+class MetaDiff(BaseModel):
+    """A custom metadata key that differs. Custom metadata isn't secret (Vault returns it to
+    anyone who may read the metadata), so the values are shown."""
+    key: str
+    status: Literal["different", "left_only", "right_only"]
+    left: str | None = None
+    right: str | None = None
+
+
+def diff_metadata(left: dict, right: dict) -> list[MetaDiff]:
+    out = []
+    for k in sorted(left.keys() | right.keys()):
+        if k not in right:
+            out.append(MetaDiff(key=k, status="left_only", left=str(left[k])))
+        elif k not in left:
+            out.append(MetaDiff(key=k, status="right_only", right=str(right[k])))
+        elif str(left[k]) != str(right[k]):
+            out.append(MetaDiff(key=k, status="different", left=str(left[k]), right=str(right[k])))
+    return out
+
+
 class SideInfo(BaseModel):
     state: SideState
     version: int | None = None
@@ -44,6 +65,9 @@ class SecretDiff(BaseModel):
     note: str = ""
     # What each side's value is (e.g. PKCS#12, certificate expiring in 12 days). No values.
     badges: dict[str, dict[str, dict | None]] = {}
+    # Custom metadata keys that differ, when the comparison was asked to include them
+    metadata: list[MetaDiff] = []
+    metadata_note: str = ""
 
 
 def _canon(v: Any) -> str:

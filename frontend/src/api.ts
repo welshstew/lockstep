@@ -1,4 +1,5 @@
 import type {
+  AuthUserMount, AuthUsersCompare, AuthUsersList,
   AnalyzeOptions, AnalyzeResult, ApiChange, PasswordSearch, ExportDoc, ExportResult, ImportPreview, ImportRules, AppConfig, ApplyResult, ChangePlan, CompareResult, Connection, AccessChanges, AccessCompareResult, ConfigCompare, MfaChallenge, MfaConstraint, AccessItem, AccessPlanInfo, AuthMount, BrowseDiff, BrowseEdit, BrowseEditResult, BrowseList, BrowseSecret, DestroyOut, ExpiryResult, ExplainResult, PolicyBuildRule, PolicyCompareResult, PolicyProfile, RoleDraft, RoleFinding, RoleKind, RolePair, RolesList, RoleTemplate, SuggestResult, TerraformOptions, KeyHistory, Locator, Mount, MountsResponse, PlanApplyResult, PlanCheck, Profile, ProfileRules, SecretValues, SyncPlan,
 } from "./types";
 
@@ -136,11 +137,12 @@ export const api = {
   pendingMfa: () => call<{ constraints: MfaConstraint[]; name: string; side: string | null }>("GET", "/api/connections/mfa"),
   answerMfa: (payload: Record<string, string>) => call<Connection>("POST", "/api/connections/mfa", { payload }),
   disconnect: (id: string) => call<void>("DELETE", `/api/connections/${id}`),
+  renew: (id: string) => call<Connection & { capped: boolean }>("POST", `/api/connections/${id}/renew`),
   mounts: (id: string) => call<MountsResponse>("GET", `/api/connections/${id}/mounts`),
   describeMount: (id: string, path: string) =>
     call<Mount>("GET", `/api/connections/${id}/mounts/${encodeURIComponent(path).replace(/%2F/g, "/")}`),
-  compare: (left: SideRef, right: SideRef, rules?: ProfileRules | null) =>
-    call<CompareResult>("POST", "/api/compare", { left, right, ...(rules ? { rules } : {}) }),
+  compare: (left: SideRef, right: SideRef, rules?: ProfileRules | null, customMetadata = false) =>
+    call<CompareResult>("POST", "/api/compare", { left, right, ...(rules ? { rules } : {}), ...(customMetadata ? { custom_metadata: true } : {}) }),
   profiles: () => call<Profile[]>("GET", "/api/profiles"),
   syncPreview: (left: SideRef, right: SideRef, changes: ApiChange[], reveal: boolean) =>
     call<ChangePlan[]>("POST", "/api/sync/preview", { left, right, changes, reveal }),
@@ -153,6 +155,8 @@ export const api = {
                             pasted?: { name: string; text: string }[]; token?: "self";
                             identity?: { kind: "entity" | "group" | "token"; name: string } }) =>
     call<ExplainResult>("POST", "/api/policies/explain", body),
+  tryPolicy: (body: { conn_id: string; mount: string; prefix: string; name: string; text: string; with_default: boolean }) =>
+    call<ExplainResult>("POST", "/api/policies/try", body),
   browseList: (connId: string, mount: string, folder: string, offset = 0) =>
     call<BrowseList>("GET", `/api/browse/list?${q({ conn_id: connId, mount, folder, offset: String(offset) })}`),
   browseSecret: (connId: string, mount: string, path: string, version?: number | null) =>
@@ -206,7 +210,18 @@ export const api = {
     call<{ plan: AccessPlanInfo; conn_id: string; items: AccessItem[] }>("POST", "/api/access/plans/check", { conn_ids: connIds, plan }),
   accessPlanApply: (connIds: string[], plan: Record<string, unknown>) =>
     call<AccessItem[]>("POST", "/api/access/plans/apply", { conn_ids: connIds, plan, confirm: true }),
-  configCompare: (left: string, right: string) => call<ConfigCompare>("POST", "/api/config/compare", { left, right }),
+  configCompare: (left: string, right: string, profile: PolicyProfile | null = null) =>
+    call<ConfigCompare>("POST", "/api/config/compare", { left, right, ...(profile ? { profile } : {}) }),
+  configCopy: (body: { conn_id: string; source: "mount" | "auth" | "engine"; path: string; to_path?: string }) =>
+    call<{ tunes?: AccessChanges["tunes"]; engine_objects?: AccessChanges["engine_objects"]; notes: string[] }>("POST", "/api/config/copy", body),
+  configProfiles: () => call<PolicyProfile[]>("GET", "/api/config/profiles"),
+  authUserMounts: (connId: string) => call<AuthUserMount[]>("GET", `/api/authusers/mounts?${q({ conn_id: connId })}`),
+  authUsers: (connId: string, mount: string) => call<AuthUsersList>("GET", `/api/authusers?${q({ conn_id: connId, mount })}`),
+  compareAuthUsers: (left: { conn_id: string; mount: string }, right: { conn_id: string; mount: string }) =>
+    call<AuthUsersCompare>("POST", "/api/authusers/compare", { left, right }),
+  writeAuthUser: (body: { conn_id: string; mount: string; username: string; action: "create" | "reset"; password?: string;
+                          policies?: string[]; token_ttl?: string }) =>
+    call<{ username: string; mount: string; action: string; password?: string }>("POST", "/api/authusers/userpass", body),
   identityGroups: (connId: string) => call<{ groups: { name: string; type?: string; policies?: string[]; members?: string[]; member_groups?: number; alias?: string }[]; missing: string[] }>(
     "GET", `/api/identity/groups?${q({ conn_id: connId })}`),
   compareGroups: (left: string, right: string, profile: PolicyProfile | null) =>

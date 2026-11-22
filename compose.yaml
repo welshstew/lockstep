@@ -39,9 +39,10 @@ services:
 
   # The latest Vault release, for checking that Lockstep's policy matching agrees with it as
   # well as with vault-a/vault-b's version (tests/test_policy_acl.py). Tests only.
+  # VAULT_LATEST_IMAGE: another release, as the scheduled vault-release workflow does.
   vault-latest:
     <<: *vault
-    image: docker.io/hashicorp/vault:2.2.2
+    image: ${VAULT_LATEST_IMAGE:-docker.io/hashicorp/vault:2.2.2}
     profiles: [test]
     environment:
       <<: *vault-env
@@ -116,6 +117,8 @@ services:
                     "ignore_paths": ["legacy/**", "retired/**"]}}]
       # Kubernetes auth: only usable when the token file exists, i.e. with --profile k8s.
       LOCKSTEP_K8S_AUTH_ENABLED: "true"
+      # Dev Vaults: create userpass users and reset passwords from Policies › Roles
+      LOCKSTEP_USER_WRITE: "on"
     volumes:
       # Same path a pod's service account token is mounted at. Empty without the k8s profile.
       - k8s-sa:/var/run/secrets/kubernetes.io/serviceaccount:ro

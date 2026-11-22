@@ -1,5 +1,7 @@
 """Integration tests against the seeded compose Vaults."""
 
+import time
+
 import pytest
 
 pytestmark = pytest.mark.usefixtures("vaults")
@@ -105,3 +107,29 @@ def test_tree_partial_access(client):
 def test_unknown_connection(client):
     r = client.get("/api/connections/deadbeef/mounts")
     assert r.status_code == 404 and r.json()["detail"]["reconnect"]
+
+
+def test_renew_token(client, vaults):
+    import httpx
+    r = httpx.post(f"{vaults[0]}/v1/auth/token/create", headers={"X-Vault-Token": "root-a"},
+                   json={"ttl": "1h", "explicit_max_ttl": "90m", "policies": ["default"], "no_parent": True})
+    token = r.json()["auth"]["client_token"]
+    body = connect(client, 0, token=token).json()
+    assert body["renewable"] is True
+    first = body["expires_at"]
+    r = client.post(f"/api/connections/{body['id']}/renew")
+    assert r.status_code == 200, r.text
+    assert r.json()["expires_at"] >= first and r.json()["capped"] is False
+    # a token whose max TTL is its TTL can't gain time, so Vault caps the renewal
+    r = httpx.post(f"{vaults[0]}/v1/auth/token/create", headers={"X-Vault-Token": "root-a"},
+                   json={"ttl": "1h", "explicit_max_ttl": "1h", "policies": ["default"], "no_parent": True})
+    body = connect(client, 0, token=r.json()["auth"]["client_token"]).json()
+    time.sleep(1.5)
+    r = client.post(f"/api/connections/{body['id']}/renew")
+    assert r.status_code == 200 and r.json()["capped"] is True
+
+
+def test_renew_root_token_refused(client):
+    cid = connect(client, 0, token="root-a").json()["id"]
+    r = client.post(f"/api/connections/{cid}/renew")
+    assert r.status_code == 400 and "doesn't expire" in r.json()["detail"]["message"]

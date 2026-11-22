@@ -1,6 +1,6 @@
 # Gap analysis: Lockstep and the Vault web UI
 
-**Status:** largely delivered in Lockstep 0.7.0. Waves 1, 4 and 5 (except Vault UI links) are built, wave 2 mostly, and wave 3 apart from a few items; [section 6](#6-where-things-stand) lists what's built and what's left · **Written:** 2026-11-21 · **Updated:** 2026-11-22 · **Owner:** unassigned
+**Status:** largely delivered in Lockstep 0.7.0 and 0.8.0. Waves 1, 4 and 5 (except Vault UI links) are built, wave 2 mostly, and wave 3 apart from a few items; [section 6](#6-where-things-stand) lists what's built and what's left · **Written:** 2026-11-21 · **Updated:** 2026-11-22 · **Owner:** unassigned
 
 This compares what Lockstep can do with what the Vault web UI (the "Vault GUI") offers, lists the functions Lockstep doesn't cover, and proposes which gaps to fill, how, and in what order.
 
@@ -292,19 +292,19 @@ Lockstep's policy matcher was verified against Vault 1.21.4, so on 2.2.2 its ans
 - **Sign-in and overview (wave 5):** login MFA in the web UI and CLI, and the overview.
 - **Correctness:** the policy matcher follows Vault 2.2.2+ as well as 1.x.
 
-**Left:**
-- **Try this policy:** a short-lived token with a draft policy, to check access for real.
-- **Generate a policy for this folder,** from Browse.
-- **Userpass users:** read, compare, create and reset passwords on dev Vaults. Also LDAP group mappings, read-only and compared.
-- **Group policies:** editing them.
+**Decided on 2026-11-22, and where each one went** (built in Lockstep 0.8.0):
+- **Try this policy:** a short-lived token with a draft policy, to check access for real. Built (#79).
+- **Generate a policy for this folder,** from Browse. Built (#80).
+- **Group policies:** editing them, through the access review and plans. Built (#81).
+- **Userpass users:** read, compare, create and reset passwords on dev Vaults (`LOCKSTEP_USER_WRITE`). Also LDAP group mappings, read-only and compared. Built (#83).
 - **Configuration:**
-  - profiles that pair names that differ between Vaults;
-  - copying a role or mount tuning to the other side, through the access review and plans;
-  - Azure, GCP and LDAP engine roles;
-  - comparing custom metadata as an option.
-- **Links into the Vault UI** from objects Lockstep shows.
-- **Tokens:** renew a connection's token.
-- **Namespaces (policy builder phase 7) ENT:** needs an Enterprise Vault to test against. License expiry ENT in the overview goes with it.
+  - Azure, GCP and LDAP engine roles: built (#84);
+  - comparing custom metadata as an option: built (#85);
+  - profiles that pair names that differ between Vaults: built (#86);
+  - copying a role or mount tuning to the other side, through the access review and plans: built (#87).
+- **Tokens:** renew a connection's token. Built (#78).
 - **Keeping up with Vault releases:**
-  - a scheduled CI job that checks the matcher against each new Vault release (`vault-latest` is pinned by hand today);
-  - possibly moving the dev stack to Vault 2.x.
+  - a scheduled CI job that checks the matcher against each new Vault release: built (#89);
+  - moving the dev stack to Vault 2.x: planned in [vault-2-dev-stack.md](vault-2-dev-stack.md) (#90), not implemented yet.
+- **Links into the Vault UI:** dropped. Browse now covers what the links were for.
+- **Namespaces (policy builder phase 7) and licence expiry in the overview (Enterprise):** wanted, but blocked. The `hashicorp/vault-enterprise` image won't start without a licence, even in dev mode ("license check failed: no autoloaded license provided"). This needs a trial licence in `.env` as `VAULT_LICENSE` for a dev Enterprise service.

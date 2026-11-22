@@ -17,4 +17,22 @@ check "charts/lockstep/Chart.yaml artifacthub.io/images" "$(sed -n 's|^ *image: 
 check "backend/pyproject.toml" "$(sed -n 's/^version = "\(.*\)"/\1/p' backend/pyproject.toml)"
 check "frontend/package.json" "$(sed -n 's/^  "version": "\(.*\)",/\1/p' frontend/package.json)"
 if grep -q "^## \[$v\]" CHANGELOG.md; then echo "ok  CHANGELOG.md has [$v]"; else echo "!!  CHANGELOG.md has no '## [$v]' section" >&2; fail=1; fi
+# Artifact Hub reads these annotations as YAML inside YAML: a description with ": " in it
+# unquoted becomes a mapping and the whole package is rejected
+if out=$(ruby -ryaml -e '
+  ann = YAML.safe_load(File.read("charts/lockstep/Chart.yaml"))["annotations"] || {}
+  kinds = %w[added changed deprecated removed fixed security]
+  begin
+    ch = YAML.safe_load(ann["artifacthub.io/changes"].to_s)
+  rescue Psych::SyntaxError => e
+    abort "artifacthub.io/changes is not valid YAML (quote descriptions that contain a colon): #{e.message}"
+  end
+  ok = ch.is_a?(Array) && !ch.empty? && ch.all? { |c| c.is_a?(Hash) && kinds.include?(c["kind"]) && c["description"].is_a?(String) }
+  abort "artifacthub.io/changes must be a list of {kind, description} with string descriptions (quote them)" unless ok
+  %w[artifacthub.io/links artifacthub.io/images].each { |k| YAML.safe_load(ann[k].to_s) if ann[k] }
+  puts "#{ch.length} entries"' 2>&1); then
+  echo "ok  Chart.yaml artifacthub.io annotations parse ($out)"
+else
+  echo "!!  Chart.yaml artifacthub.io annotations: $out" >&2; fail=1
+fi
 exit $fail

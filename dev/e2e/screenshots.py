@@ -62,9 +62,10 @@ def open_row(page: Page, path: str):
 
 
 def scroll_to(locator, offset: int = 24) -> None:
-    """Put an element `offset` px below the top of the window (scroll_into_view_if_needed
+    """Put an element `offset` px below the sticky top bar (scroll_into_view_if_needed
     does nothing when the element is already partly visible)."""
-    locator.evaluate("(el, off) => window.scrollTo(0, el.getBoundingClientRect().top + window.scrollY - off)", offset)
+    locator.evaluate("(el, off) => window.scrollTo(0, el.getBoundingClientRect().top + window.scrollY - off"
+                     " - (document.querySelector('.topbar')?.offsetHeight ?? 0))", offset)
 
 
 def reveal(page: Page) -> None:
@@ -95,7 +96,7 @@ def scenes(page: Page, theme: str) -> None:
     sign_in(page, "app-config")
     compare(page)
     page.locator(".results-head").scroll_into_view_if_needed()
-    page.evaluate("window.scrollTo(0, document.querySelector('.compare-bar').offsetTop - 12)")
+    scroll_to(page.locator(".profile-bar"), 12)
     shot(page, "02-compare", theme)
 
     # 3. Key-level detail with values shown, a staged copy and last-changed metadata.

@@ -70,7 +70,7 @@ export function AccessApply({ changes, label, onClose, plan, connIds = [], canAp
           {rows.map((i) => (
             <li key={i.id} className={`plan ${["denied", "invalid", "conflict", "error"].includes(i.status) ? i.status : ""}`}>
               <div className="plan-head">
-                <span className="mono">{i.kind === "policy" ? `policy ${i.name}` : `auth/${i.name.replace(/\/([^/]+)$/, "/role/$1")}`}</span>
+                <span className="mono">{i.kind === "policy" ? `policy ${i.name}` : i.kind === "group" ? `group ${i.name}: policies` : i.kind === "tune" ? `${i.name} tuning` : i.kind === "engine" ? i.name : `auth/${i.name.replace(/\/([^/]+)$/, "/role/$1")}`}</span>
                 <span className="plan-head-end">
                   <span className={`badge ${ACTION[i.action][1]}`}>{ACTION[i.action][0]}</span>
                   <span className={`badge ${i.status === "ready" || i.status === "applied" ? "equal" : i.status === "noop" ? "unknown" : "error"}`}>{STATUS[i.status]}</span>

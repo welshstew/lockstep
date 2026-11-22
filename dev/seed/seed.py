@@ -276,6 +276,23 @@ def seed_database(v: Vault) -> None:
     print(f"[{v.name}] database ready")
 
 
+def seed_ldap_secrets(v: Vault) -> None:
+    """The LDAP secrets engine at directory/: a dynamic and a static role (no directory behind
+    them: they're created without contacting it), for Configuration -> Engine roles and keys."""
+    mounts = v.req("GET", "sys/mounts")["data"]
+    if "directory/" in mounts:
+        v.req("DELETE", "sys/mounts/directory")
+    v.req("POST", "sys/mounts/directory", {"type": "ldap", "description": "Directory service accounts"})
+    v.req("POST", "directory/role/dev-users", {
+        "creation_ldif": "dn: cn={{.Username}},ou=users,dc=example,dc=internal\nobjectClass: person\n",
+        "deletion_ldif": "dn: cn={{.Username}},ou=users,dc=example,dc=internal\nchangetype: delete\n",
+        "default_ttl": "1h", "max_ttl": "8h" if v.name == "vault-a" else "24h"})
+    v.req("POST", "directory/static-role/reporting", {
+        "dn": "cn=reporting,ou=services,dc=example,dc=internal", "username": "reporting",
+        "rotation_period": "24h", "skip_import_rotation": True})
+    print(f"[{v.name}] ldap secrets engine ready")
+
+
 def seed_transit(v: Vault) -> None:
     """Transit keys for the Tools tab's playground: one for encryption, one for signing."""
     mounts = v.req("GET", "sys/mounts")["data"]
@@ -498,17 +515,42 @@ def seed_password_finder(a: Vault, b: Vault, pki: dict) -> None:
         v.kv_put("certs", "some-secrets/strings/API_URL", {"value": "https://api.example.com"})
 
 
+def seed_ldap_and_users(v: Vault) -> None:
+    """An LDAP auth mount with group mappings (no LDAP server: the mappings are Vault's own),
+    and a service user on userpass, with drift between the Vaults for the compare."""
+    auths = v.req("GET", "sys/auth")["data"]
+    if "ldap/" not in auths:  # not tuned to show on the login screen: there's no directory behind it
+        v.req("POST", "sys/auth/ldap", {"type": "ldap", "description": "Company directory (mappings only in dev)"})
+    v.req("POST", "auth/ldap/config", {
+        "url": "ldaps://ldap.example.internal", "userdn": "ou=people,dc=example,dc=internal", "userattr": "uid",
+        "groupdn": "ou=groups,dc=example,dc=internal", "groupattr": "cn",
+        "token_ttl": "8h" if v.name == "vault-a" else "1h"})
+    groups = {"payments-devs": ["payments-dev" if v.name == "vault-a" else "payments-prod"],
+              "platform": ["lockstep-readonly"], "auditors": ["lockstep-readonly"]}
+    if v.name == "vault-a":
+        groups["sandbox-users"] = ["lockstep-limited"]
+    for name, pols in groups.items():
+        v.req("POST", f"auth/ldap/groups/{name}", {"policies": ",".join(pols)})
+    v.req("POST", "auth/ldap/users/dana", {"groups": "payments-devs,platform" if v.name == "vault-a" else "payments-devs"})
+    svc = {"password": DEV_PASSWORD, "token_policies": "ci-drift-check" if v.name == "vault-a" else "lockstep-readonly",
+           "token_ttl": "15m"}
+    v.req("POST", "auth/userpass/users/svc-ci", svc)
+    print(f"[{v.name}] ldap mappings and service user ready")
+
+
 def main() -> None:
     a = Vault("vault-a", os.environ["VAULT_A_ADDR"], os.environ["VAULT_A_TOKEN"])
     b = Vault("vault-b", os.environ["VAULT_B_ADDR"], os.environ["VAULT_B_TOKEN"])
     for v in (a, b):
         v.wait_ready()
         configure_auth(v)
+        seed_ldap_and_users(v)
         print(f"[{v.name}] auth configured")
     seed_pki(a)
     seed_database(a)
     for v in (a, b):
         seed_transit(v)
+        seed_ldap_secrets(v)
     for v, policies in ((a, POLICIES_A), (b, POLICIES_B)):
         for name, text in policies.items():
             v.policy(name, text)

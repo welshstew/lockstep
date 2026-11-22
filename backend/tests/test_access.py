@@ -150,3 +150,45 @@ def test_access_plan_conflict(client, ctx):
     assert out["status"] == "conflict"
     assert "z" in v.get(f"sys/policies/acl/acc-{tag}-b").json()["data"]["policy"]
     assert client.post("/api/access/plans", json={"conn_id": conn, "policies": [{"name": f"acc-{tag}-b", "text": 'path "z" { capabilities = ["list"] }'}]}).status_code == 400  # nothing to do
+
+
+def test_set_a_groups_policies_with_review_and_plan(client, ctx):
+    tag, v, mount, conn = ctx
+    name = f"acc-group-{tag}"
+    v.post(f"identity/group/name/{name}", json={"policies": ["lockstep-readonly"]}).raise_for_status()
+    try:
+        body = {"conn_id": conn, "group_policies": [{"name": name, "policies": ["lockstep-readonly", "lockstep-limited", "nope-" + tag]}]}
+        [it] = client.post("/api/access/preview", json=body).json()
+        assert it["id"] == f"group:{name}" and it["action"] == "change" and it["status"] == "ready"
+        assert "+lockstep-limited" in it["diff"] and any("nope-" in w for w in it["warnings"])
+        out = client.post("/api/access/apply", json=body | {"expected": {it["id"]: it["hash"]}, "confirm": True}).json()
+        assert out[0]["status"] == "applied"
+        got = v.get(f"identity/group/name/{name}").json()["data"]["policies"]
+        assert sorted(got) == sorted(["lockstep-readonly", "lockstep-limited", "nope-" + tag])
+        # the same again is a no-op; a stale hash is a conflict
+        [it] = client.post("/api/access/preview", json=body).json()
+        assert it["action"] == "same" and it["status"] == "noop"
+        body2 = {"conn_id": conn, "group_policies": [{"name": name, "policies": []}]}
+        out = client.post("/api/access/apply", json=body2 | {"expected": {f"group:{name}": "stale"}, "confirm": True}).json()
+        assert out[0]["status"] == "conflict"
+        # in a saved plan
+        plan = client.post("/api/access/plans", json=body2).json()
+        chk = client.post("/api/access/plans/check", json={"conn_ids": [conn], "plan": plan}).json()
+        assert chk["items"][0]["id"] == f"group:{name}" and chk["items"][0]["status"] == "ready"
+    finally:
+        v.delete(f"identity/group/name/{name}")
+
+
+def test_group_must_exist_and_no_root(client, ctx):
+    tag, v, mount, conn = ctx
+    [it] = client.post("/api/access/preview", json={"conn_id": conn, "group_policies": [{"name": f"none-{tag}", "policies": []}]}).json()
+    assert it["action"] == "absent" and it["status"] == "invalid"
+
+
+def test_plans_signed_before_groups_still_verify(client, ctx):
+    tag, v, mount, conn = ctx
+    body = {"conn_id": conn, "policies": [{"name": f"acc-{tag}-a", "text": 'path "x" { capabilities = ["read"] }'}]}
+    plan = client.post("/api/access/plans", json=body).json()
+    plan["changes"].pop("group_policies")  # as a 0.7.0 plan file has it
+    r = client.post("/api/access/plans/check", json={"conn_ids": [conn], "plan": plan})
+    assert r.status_code == 200, r.text

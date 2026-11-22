@@ -114,3 +114,33 @@ def test_reveal_denied(client):
     carol = connect(client, 0, method="userpass", username="carol", password="password")
     r = client.get(f"/api/connections/{carol}/secret", params={"mount": "app-config", "path": "payments/api"})
     assert r.status_code == 403
+
+
+def test_custom_metadata_as_an_option(client, ab, vaults):
+    import uuid
+
+    import httpx
+    a, b = ab
+    tag = f"cm-{uuid.uuid4().hex[:6]}"
+    sides = [httpx.Client(base_url=f"{addr}/v1/", headers={"X-Vault-Token": tok}) for addr, tok in
+             ((vaults[0], "root-a"), (vaults[1], "root-b"))]
+    try:
+        for i, c in enumerate(sides):
+            for name in ("same", "meta"):
+                c.post(f"app-config/data/{tag}/{name}", json={"data": {"k": "v"}}).raise_for_status()
+            c.post(f"app-config/metadata/{tag}/meta", json={"custom_metadata": {"owner": "team-a" if i == 0 else "team-b",
+                                                                                 **({"ticket": "OPS-1"} if i == 0 else {})}})
+        left, right = {"conn_id": a, "mount": "app-config", "prefix": tag}, {"conn_id": b, "mount": "app-config", "prefix": tag}
+        _, s = compare(client, left, right)
+        assert s["meta"]["status"] == "equal" and s["meta"]["metadata"] == []  # off by default
+        r = client.post("/api/compare", json={"left": left, "right": right, "custom_metadata": True}).json()
+        s = {x["path"]: x for x in r["secrets"]}
+        assert s["same"]["status"] == "equal"
+        assert s["meta"]["status"] == "different"
+        assert s["meta"]["metadata"] == [{"key": "owner", "status": "different", "left": "team-a", "right": "team-b"},
+                                         {"key": "ticket", "status": "left_only", "left": "OPS-1", "right": None}]
+        assert r["summary"]["metadata_different"] == 1
+    finally:
+        for c in sides:
+            for name in ("same", "meta"):
+                c.delete(f"app-config/metadata/{tag}/{name}")

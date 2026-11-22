@@ -13,6 +13,7 @@
   <link rel="canonical" href="https://getlockstep.cloud/">
   <meta name="color-scheme" content="light dark">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect x='1' y='3' width='6' height='10' rx='1' fill='%234f6bed'/><rect x='9' y='3' width='6' height='10' rx='1' fill='%23e0864a'/></svg>">
+  <link rel="preload" href="/fonts/schibsted-grotesk-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/site.css">
   <script type="application/ld+json">
   {
@@ -34,14 +35,14 @@
   }
   </script>
 </head>
-<body>
+<body class="home">
   <a class="skip" href="#main">Skip to content</a>
 
   <header class="top">
     <div class="wrap top-row">
       <a class="brand" href="/"><span class="mark" aria-hidden="true"><i></i><i></i></span>Lockstep</a>
       <nav aria-label="Main">
-        <a href="#features">Features</a>
+        <a href="#what">What it does</a>
         <a href="#install">Install</a>
         <a href="/docs/">Docs</a>
         <a href="https://github.com/welshstew/lockstep">GitHub</a>
@@ -52,80 +53,79 @@
 
   <main id="main">
     <section class="hero">
-      <div class="wrap">
-        <p class="eyebrow">Open source · MIT · built for Kubernetes</p>
-        <h1>Keep your Vault clusters <span class="l">in</span> <span class="r">lockstep</span>.</h1>
-        <p class="lede">Compare, inspect, sync and migrate KV&nbsp;v2 secrets across HashiCorp Vault clusters, environments and mounts. Values are compared on the server, so nothing is shown unless you ask for it.</p>
-        <div class="ctas">
-          <a class="btn primary" href="https://demo.getlockstep.cloud">Try the live demo</a>
-          <a class="btn" href="https://github.com/welshstew/lockstep">View on GitHub</a>
+      <div class="wrap hero-grid">
+        <div class="hero-copy">
+          <h1>See where your Vaults disagree. Bring them back in step.</h1>
+          <p class="lede">Lockstep lines up two HashiCorp Vault KV&nbsp;v2 mounts, across clusters, environments or paths, and shows every secret and key that differs. Values are compared on the server and stay hidden until you ask. Copies go through a review and never overwrite a change you didn’t see.</p>
+          <div class="ctas">
+            <a class="btn primary" href="https://demo.getlockstep.cloud">Try the live demo</a>
+            <a class="btn" href="https://github.com/welshstew/lockstep">View the source</a>
+          </div>
+          <p class="hint">Open source under the MIT licence. Runs in Kubernetes, in Docker, or as a command-line tool.</p>
         </div>
-        <p class="hint">Demo: sign in as <code>alice</code> / <code>password</code> on both sides, choose <code>app-config</code>, press Compare.</p>
-      </div>
-      <div class="wrap shot hero-shot">
-        <picture>
-          <source media="(prefers-color-scheme: dark)" srcset="/images/02-compare-dark.png">
-          <img src="/images/02-compare-light.png" width="1440" height="900" alt="Two Vaults compared side by side: each secret marked Different, Left only, Right only or Equal, with values hidden">
-        </picture>
+
+        <figure class="ledger" aria-label="Example: the app-config mount of a production and a staging Vault, compared">
+          <div class="ledger-head">
+            <span class="side l">prod <span class="where">app-config/</span></span>
+            <span class="side r">staging <span class="where">app-config/</span></span>
+          </div>
+          <ol class="ledger-rows">
+            <li class="row-eq"><span class="p l">payments/api</span><span class="s">same</span><span class="p r">payments/api</span></li>
+            <li class="row-diff"><span class="p l">payments/db</span><span class="s">password differs</span><span class="p r">payments/db</span></li>
+            <li class="row-diff"><span class="p l">frontend/settings</span><span class="s">2 keys differ</span><span class="p r">frontend/settings</span></li>
+            <li class="row-lo"><span class="p l">legacy/old-service</span><span class="s">only in prod</span><span class="p r none">missing</span></li>
+            <li class="row-ro"><span class="p l none">missing</span><span class="s">only in staging</span><span class="p r">new-service/config</span></li>
+            <li class="row-eq"><span class="p l">crypto/keys</span><span class="s">same</span><span class="p r">crypto/keys</span></li>
+            <li class="row-diff"><span class="p l">types/mixed</span><span class="s"><code>5432</code> vs <code>"5432"</code></span><span class="p r">types/mixed</span></li>
+          </ol>
+          <figcaption>7 secrets compared: 3 differ, 2 on one side only. No value left the server.</figcaption>
+        </figure>
       </div>
     </section>
 
-    <section id="features" class="features">
+    <section id="what" class="what">
       <div class="wrap">
-        <h2>Everything you need to keep secrets in sync</h2>
-        <div class="grid">
-          <article>
-            <h3>Browse and edit</h3>
-            <p>A folder tree of any KV v2 mount, values hidden until you ask, versions with diffs and roll back. Edit in place and save with check-and-set, so you never overwrite a change you didn't see.</p>
-          </article>
-          <article>
-            <h3>Made for development environments</h3>
-            <p>Dev, test, integration and a preview per branch drift apart a little every week. Find the missing key behind "works in dev, fails in test", fix it in place, stand up new environments from old ones, and clean up after them. <a href="/guides/vault-secrets-in-development-environments/">How teams use it</a>.</p>
-          </article>
-          <article>
-            <h3>Compare anything to anything</h3>
-            <p>Two Vaults, two mounts or two path prefixes. See which secrets and keys are equal, different, or only on one side, down to a <code>5432</code> vs <code>"5432"</code> type change.</p>
-          </article>
-          <article>
-            <h3>Values stay hidden</h3>
-            <p>The browser only gets a status per key. <strong>Show values</strong> reveals them for the secrets you open, and nothing else.</p>
-          </article>
-          <article>
-            <h3>Copies you can trust</h3>
-            <p>Copy a key or a whole secret with ← / → after a review. Check-and-set writes never overwrite a change made since you compared. Nothing is deleted unless you ask, and every write is audit-logged.</p>
-          </article>
-          <article>
-            <h3>Sync plans</h3>
-            <p>Save reviewed changes as a signed file, with no values in it, for someone with write access to apply. If anything in it has changed since, nothing is written.</p>
-          </article>
-          <article>
-            <h3>Certificates and keystores</h3>
-            <p>Base64, PEM, X.509 chains validated link by link, PKCS#12, JKS and JCEKS. Inspect them, compare them field by field, and see every certificate's expiry on one dashboard.</p>
-          </article>
-          <article>
-            <h3>Comparison profiles</h3>
-            <p>Pair <code>services/*/prod/**</code> with <code>services/*/staging/**</code> and ignore keys that differ by design. Build the rules by clicking <strong>Ignore</strong> in the results, then share them with your team.</p>
-          </article>
-          <article>
-            <h3>Export, import and migrate</h3>
-            <p>Export a mount to an encrypted file, compare a Vault against it, or import it elsewhere with rules: leave paths and keys out, and turn <code>dev</code> into <code>test</code> on the way. Optionally make the target an exact match, keeping the secrets you mark.</p>
-          </article>
-          <article>
-            <h3>Set values yourself</h3>
-            <p><strong>Edit any value in place</strong>, starting from the other side's, add keys or delete them on one side or both, all through the same review and check-and-set write as a copy. Typed values are never logged.</p>
-          </article>
-          <article>
-            <h3>Explain Vault policies</h3>
-            <p>See what a policy, or your own token, allows on every secret of a mount, in plain words: read, write, delete, destroy. Click a secret to see the rule behind each answer, and get warnings for the usual KV v2 mistakes.</p>
-          </article>
-          <article>
-            <h3>Clean up for good</h3>
-            <p><strong>Destroy</strong> a secret, or every secret under a filter, with all its versions and metadata. You type a confirmation first, anything changed since you compared is skipped, and every destroy is audit-logged.</p>
-          </article>
-          <article>
-            <h3>Finds keystore passwords</h3>
-            <p>A <code>certs.p12</code> in one folder, its password in <code>strings/KEYSTORE_PASSWORD</code> in another: Lockstep tries the likely candidates on the server and offers the one that opens it, without showing a value.</p>
-          </article>
+        <h2>What it does</h2>
+        <div class="jobs">
+          <div class="job">
+            <h3>Find drift</h3>
+            <dl>
+              <dt>Compare anything to anything</dt>
+              <dd>Two Vaults, two mounts or two path prefixes, down to a number that became a string.</dd>
+              <dt>Comparison profiles</dt>
+              <dd>Pair <code>services/*/prod/**</code> with <code>services/*/staging/**</code> and ignore keys that differ by design. Build the rules by clicking Ignore in the results.</dd>
+              <dt>Configuration, too</dt>
+              <dd>Secrets engines, auth methods, their tuning, roles and keys, compared across two Vaults.</dd>
+              <dt>Drift checks in CI</dt>
+              <dd><code>lockstep compare</code> exits non-zero when environments drift, with no values in the log.</dd>
+            </dl>
+          </div>
+          <div class="job">
+            <h3>Change safely</h3>
+            <dl>
+              <dt>Review, then write</dt>
+              <dd>Every copy, edit and delete is reviewed first and written with check-and-set, so a change made since you compared is never overwritten.</dd>
+              <dt>Plans for someone else</dt>
+              <dd>Save reviewed changes as a signed file, without values, for a colleague with write access to apply.</dd>
+              <dt>Browse and edit</dt>
+              <dd>A folder tree of one mount, versions with diffs and roll back, metadata, one-time sharing.</dd>
+              <dt>Export and import</dt>
+              <dd>Encrypted exports, and imports that turn <code>dev</code> into <code>test</code> on the way.</dd>
+            </dl>
+          </div>
+          <div class="job">
+            <h3>Understand what’s there</h3>
+            <dl>
+              <dt>Who can do what</dt>
+              <dd>What a policy, or your own token, allows on every secret, in plain words. Build policies, try them for real, and write them after a review.</dd>
+              <dt>Certificates and keystores</dt>
+              <dd>PEM chains validated link by link, PKCS#12, JKS and JCEKS, opened with the password stored next to them.</dd>
+              <dt>Expiry at a glance</dt>
+              <dd>Every certificate in one or both mounts, including those in keystores and PKI engines, sorted by expiry.</dd>
+              <dt>Developer tools</dt>
+              <dd>Transit encryption, database credentials, leases, and development certificates from PKI.</dd>
+            </dl>
+          </div>
         </div>
       </div>
     </section>
@@ -134,7 +134,7 @@
       <div class="wrap row">
         <div class="copy">
           <h2>Review before anything is written</h2>
-          <p>Stage copies key by key. The review shows exactly what each target will get, its version change, and whether you're allowed to write it. Then apply it yourself, or save it as a plan for someone else.</p>
+          <p>Stage copies key by key. The review shows exactly what each target will get, its version change, and whether you’re allowed to write it. Then apply it yourself, or save it as a plan for someone else.</p>
         </div>
         <div class="shot">
           <picture>
@@ -146,8 +146,8 @@
       <div class="wrap row flip">
         <div class="copy">
           <h2>Promote a whole environment</h2>
-          <p>Export production's <code>services/</code> with a one-time key, then import it into staging: paths <code>/prod/</code> become <code>/staging/</code>, values ending <code>-prod</code> end <code>-staging</code>. The preview shows every secret and key before anything is written, and keys only on the target are kept.</p>
-          <p><a href="/guides/export-import-vault-secrets/">Guide: export, import and migrate secrets →</a></p>
+          <p>Export production’s <code>services/</code> with a one-time key, then import it into staging: paths <code>/prod/</code> become <code>/staging/</code>, values ending <code>-prod</code> end <code>-staging</code>. The preview shows every secret and key before anything is written.</p>
+          <p><a href="/guides/export-import-vault-secrets/">Guide: export, import and migrate secrets</a></p>
         </div>
         <div class="shot">
           <picture>
@@ -159,8 +159,8 @@
       <div class="wrap row">
         <div class="copy">
           <h2>Ignore the noise in a few clicks</h2>
-          <p>Hostnames and per-environment passwords are meant to differ. Press <strong>Pick what to ignore…</strong>, click Ignore on the secrets, folders and keys that don't matter, check the result, and save it as a profile for the next comparison and for CI.</p>
-          <p><a href="/guides/build-a-comparison-profile/">Guide: build a comparison profile →</a></p>
+          <p>Hostnames and per-environment passwords are meant to differ. Press <strong>Pick what to ignore</strong>, click Ignore on what doesn’t matter, check the result, and save it as a profile for the next comparison and for CI.</p>
+          <p><a href="/guides/build-a-comparison-profile/">Guide: build a comparison profile</a></p>
         </div>
         <div class="shot">
           <picture>
@@ -172,7 +172,7 @@
       <div class="wrap row flip">
         <div class="copy">
           <h2>Know what each value is</h2>
-          <p>Lockstep works out what's inside each value: a PKCS#12 file, a Java keystore, a certificate chain, an image. It opens keystores with the password stored next to them, or finds it elsewhere in the folder, and checks every certificate.</p>
+          <p>Lockstep works out what’s inside each value: a PKCS#12 file, a Java keystore, a certificate chain, an image. It opens keystores with the password stored next to them, or finds it elsewhere in the folder, and checks every certificate.</p>
         </div>
         <div class="shot">
           <picture>
@@ -181,22 +181,10 @@
           </picture>
         </div>
       </div>
-      <div class="wrap row">
-        <div class="copy">
-          <h2>See what expires when</h2>
-          <p>Every certificate in one or both mounts, including those inside keystores, sorted by expiry. Filter, inspect, and export to CSV.</p>
-        </div>
-        <div class="shot">
-          <picture>
-            <source media="(prefers-color-scheme: dark)" srcset="/images/11-expiry-dark.png">
-            <img src="/images/11-expiry-light.png" width="1440" height="900" loading="lazy" alt="Certificate expiry dashboard with expired, 30-day, 90-day and later counts">
-          </picture>
-        </div>
-      </div>
-      <div class="wrap row flip cli-row">
+      <div class="wrap row cli-row">
         <div class="copy">
           <h2>From the terminal, too</h2>
-          <p><code>lockstep compare</code> writes a YAML report of what differs: no values, but a Vault UI link and a <code>vault kv get</code> command for every secret. Set an action on the keys to change and <code>lockstep apply</code> copies them, asking before each one. It logs in like the <code>vault</code> CLI, and its exit code makes it a drift check in CI.</p>
+          <p><code>lockstep compare</code> writes a YAML report of what differs: no values, but a Vault UI link and a <code>vault kv get</code> command for every secret. Set an action on the keys to change and <code>lockstep apply</code> copies them, asking before each one.</p>
         </div>
         <div class="shot">
 <pre class="term" aria-label="A terminal session comparing two Vaults and applying one change"><code><span class="prompt">$</span> lockstep compare --mount app-config -o report.yaml
@@ -207,8 +195,8 @@
 12 secrets: 9 equal, 1 different, 1 left only, 1 right only.
 
 <span class="prompt">$</span> lockstep apply report.yaml
-→ staging · app-config/payments/db   from prod · app-config/payments/db
-  1 key to write (v7 → v8):
+staging · app-config/payments/db   from prod · app-config/payments/db
+  1 key to write (v7 to v8):
     update password
   Write password? [y]es / [n]o / [a]ll / [q]uit: y
   Written: v8 (1 key).</code></pre>
@@ -221,11 +209,11 @@
         <h2>Built to run in production</h2>
         <ul class="checks">
           <li><strong>Stateless.</strong> Sessions live in an encrypted cookie, so any number of replicas can serve any request.</li>
-          <li><strong>Sign in your way.</strong> Token, userpass, LDAP, OIDC redirect, JWT (a CI job's identity token), or the pod's Kubernetes service account.</li>
+          <li><strong>Sign in your way.</strong> Token, userpass, LDAP, OIDC, JWT from a CI job, or the pod’s Kubernetes service account, with login MFA.</li>
           <li><strong>Hardened images.</strong> Distroless and non-root on Red Hat Hardened Images, multi-arch, signed with cosign, with an SBOM and build provenance.</li>
-          <li><strong>A Helm chart that's tested.</strong> Read-only filesystem, NetworkPolicy, PodDisruptionBudget, a session key kept across upgrades, all installed into a real cluster in CI.</li>
-          <li><strong>Scanned on every change.</strong> CVEs, leaked secrets, misconfigurations and base image signatures, plus end-to-end browser tests.</li>
-          <li><strong>Configured by environment.</strong> Everything is a <code>LOCKSTEP_*</code> variable or a chart value, including whether exports are allowed, encrypted-only or off.</li>
+          <li><strong>A tested Helm chart.</strong> Read-only filesystem, NetworkPolicy, PodDisruptionBudget, and a session key kept across upgrades, installed into a real cluster in CI.</li>
+          <li><strong>Look-only when you want it.</strong> One setting refuses every write; others turn off exports, destroy or policy writes.</li>
+          <li><strong>Audited.</strong> Every write is logged with who, where and a hash of what was there, never a value.</li>
         </ul>
       </div>
     </section>
@@ -251,12 +239,11 @@ open http://localhost:8080</code></pre>
           </div>
           <div class="span">
             <h3>Command line</h3>
-<pre><code>pipx install "git+https://github.com/welshstew/lockstep@v0.6.0#subdirectory=backend"
+<pre><code>pipx install "git+https://github.com/welshstew/lockstep@v0.8.0#subdirectory=backend"
 lockstep compare --help
-lockstep export --help    # and lockstep import
 
 # or run it from the image
-docker run --rm -it --entrypoint lockstep ghcr.io/welshstew/lockstep:0.6.0 --help</code></pre>
+docker run --rm -it --entrypoint lockstep ghcr.io/welshstew/lockstep:0.8.0 --help</code></pre>
           </div>
         </div>
         <p class="more">Configuration, authentication, deployment and <a href="/docs/cli/">command-line</a> guides are in the <a href="/docs/">documentation</a>.</p>
@@ -266,36 +253,22 @@ docker run --rm -it --entrypoint lockstep ghcr.io/welshstew/lockstep:0.6.0 --hel
     <section class="guides">
       <div class="wrap">
         <h2>Guides</h2>
-        <div class="grid">
-          <article>
-            <h3><a href="/guides/vault-secrets-in-development-environments/">Lockstep for development environments</a></h3>
-            <p>Its main job: find why test differs from dev, bring environments back in step, stand up new ones and clean up after them.</p>
-          </article>
-          <article>
-            <h3><a href="/guides/compare-hashicorp-vault-clusters/">How to compare secrets between two Vault clusters</a></h3>
-            <p>Diffing with the vault CLI and where it falls short, then comparing whole mounts in the browser or from the terminal.</p>
-          </article>
-          <article>
-            <h3><a href="/guides/sync-vault-secrets-between-environments/">Syncing secrets between environments safely</a></h3>
-            <p>Check-and-set writes, merges without deletes, reviews, and sync plans for changes someone else applies.</p>
-          </article>
-          <article>
-            <h3><a href="/guides/detect-vault-secret-drift-in-ci/">Detecting secret drift in CI</a></h3>
-            <p>Fail a pipeline when two Vault environments drift apart, with a read-only token and no values in the logs.</p>
-          </article>
-          <article>
-            <h3><a href="/guides/export-import-vault-secrets/">Exporting, importing and migrating Vault secrets</a></h3>
-            <p>Encrypted exports, comparing a Vault against a backup, and promoting dev to test with import rules.</p>
-          </article>
-          <article>
-            <h3><a href="/guides/build-a-comparison-profile/">Building a comparison profile</a></h3>
-            <p>Pick what to ignore in the results, map paths between layouts, and reuse the profile in the UI and in CI.</p>
-          </article>
-          <article>
-            <h3><a href="/guides/vault-jwt-login-from-ci/">Logging in with JWT from CI</a></h3>
-            <p>Use a pipeline's OIDC identity token with Vault's JWT auth method: no stored secrets, short-lived tokens.</p>
-          </article>
-        </div>
+        <ul class="guide-list">
+          <li><a href="/guides/vault-secrets-in-development-environments/">Lockstep for development environments</a>
+            <span>Find why test differs from dev, bring environments back in step, stand up new ones and clean up after them.</span></li>
+          <li><a href="/guides/compare-hashicorp-vault-clusters/">How to compare secrets between two Vault clusters</a>
+            <span>Diffing with the vault CLI and where it falls short, then comparing whole mounts.</span></li>
+          <li><a href="/guides/sync-vault-secrets-between-environments/">Syncing secrets between environments safely</a>
+            <span>Check-and-set writes, merges without deletes, reviews, and plans someone else applies.</span></li>
+          <li><a href="/guides/detect-vault-secret-drift-in-ci/">Detecting secret drift in CI</a>
+            <span>Fail a pipeline when two environments drift apart, with a read-only token.</span></li>
+          <li><a href="/guides/export-import-vault-secrets/">Exporting, importing and migrating Vault secrets</a>
+            <span>Encrypted exports, comparing against a backup, and promoting dev to test.</span></li>
+          <li><a href="/guides/build-a-comparison-profile/">Building a comparison profile</a>
+            <span>Pick what to ignore, map paths between layouts, and reuse the profile in CI.</span></li>
+          <li><a href="/guides/vault-jwt-login-from-ci/">Logging in with JWT from CI</a>
+            <span>Use a pipeline’s OIDC identity token: no stored secrets, short-lived tokens.</span></li>
+        </ul>
       </div>
     </section>
 
@@ -312,9 +285,10 @@ docker run --rm -it --entrypoint lockstep ghcr.io/welshstew/lockstep:0.6.0 --hel
 
   <footer class="foot">
     <div class="wrap">
-      <p><a class="brand small" href="/"><span class="mark" aria-hidden="true"><i></i><i></i></span>Lockstep</a> is open source under the <a href="https://github.com/welshstew/lockstep/blob/main/LICENSE">MIT licence</a>. <a href="https://github.com/welshstew/lockstep">GitHub</a> · <a href="https://github.com/welshstew/lockstep/releases">Releases</a> · <a href="/docs/">Docs</a> · <a href="https://github.com/welshstew/lockstep/blob/main/SECURITY.md">Security</a></p>
+      <p><a class="brand small" href="/"><span class="mark" aria-hidden="true"><i></i><i></i></span>Lockstep</a> is open source under the <a href="https://github.com/welshstew/lockstep/blob/main/LICENSE">MIT licence</a>.
+        <a href="https://github.com/welshstew/lockstep">GitHub</a>, <a href="https://github.com/welshstew/lockstep/releases">releases</a>, <a href="/docs/">docs</a>, <a href="https://github.com/welshstew/lockstep/blob/main/SECURITY.md">security</a>.</p>
       <p class="fine">Lockstep is an independent project. It is not affiliated with, endorsed by or sponsored by HashiCorp. HashiCorp and Vault are trademarks of HashiCorp, Inc.</p>
-      <p class="fine">Privacy: this site sets no cookies for tracking and loads no third-party scripts. The server keeps access logs (including IP addresses) for 30 days to keep the site secure and to count visits; visit statistics are produced with anonymised IP addresses. The demo's sign-in cookie only holds your demo session.</p>
+      <p class="fine">Privacy: this site sets no cookies for tracking and loads no third-party scripts or fonts. The server keeps access logs (including IP addresses) for 30 days to keep the site secure and to count visits; visit statistics are produced with anonymised IP addresses. The demo’s sign-in cookie only holds your demo session.</p>
     </div>
   </footer>
 </body>

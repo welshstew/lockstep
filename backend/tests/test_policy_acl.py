@@ -160,6 +160,9 @@ def _check_against(addr: str, token: str, trials: int, vocab, depth: int, seed: 
 
 
 LATEST = os.environ.get("VAULT_LATEST_ADDR")
+# The scheduled vault-release workflow explores more: other seeds each run, and more trials
+FUZZ_SEED = int(os.environ.get("FUZZ_SEED", "0"))
+FUZZ_SCALE = max(1, int(os.environ.get("FUZZ_SCALE", "1")))
 
 
 def _latest_up() -> bool:
@@ -175,7 +178,7 @@ def _latest_up() -> bool:
 @pytest.mark.parametrize("vocab,depth,trials,seed", [(SEGMENTS, 4, 150, 20261121), (MIXED, 3, 60, 20261122)])
 def test_matching_agrees_with_the_latest_vault(vocab, depth, trials, seed):
     """The same checks against the newest Vault release, whose evaluation rules changed in 2.2.2."""
-    _check_against(LATEST, "root-latest", trials, vocab, depth, seed)
+    _check_against(LATEST, "root-latest", trials * FUZZ_SCALE, vocab, depth, seed + FUZZ_SEED)
 
 
 @pytest.mark.usefixtures("vaults")

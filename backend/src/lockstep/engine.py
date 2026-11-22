@@ -11,7 +11,7 @@ import asyncio
 from dataclasses import dataclass
 
 from .analyze.detect import badge
-from .diff import SecretDiff, SideInfo, diff_secret, summarize
+from .diff import SecretDiff, SideInfo, diff_metadata, diff_secret, summarize
 from .rules import Rules, pair_paths
 from .vault import TreeResult, VaultClient, VaultError
 
@@ -46,12 +46,34 @@ async def _read_side(v: VaultClient, sem: asyncio.Semaphore, mount: str, full_pa
     return SideInfo(state=s.state, version=s.version, updated=s.updated), s.data
 
 
+async def _custom_metadata(v: VaultClient, sem: asyncio.Semaphore, mount: str, path: str) -> tuple[dict | None, str]:
+    try:
+        async with sem:
+            return (await v.kv_metadata(mount, path)).get("custom_metadata") or {}, ""
+    except VaultError as e:
+        if e.denied:
+            return None, f"can't read the metadata on {mount}/metadata/{path}"
+        return None, e.message
+
+
+async def _compare_metadata(d: SecretDiff, lv, lsem, lmount: str, lpath: str, rv, rsem, rmount: str, rpath: str) -> None:
+    (lm, lerr), (rm, rerr) = await asyncio.gather(_custom_metadata(lv, lsem, lmount, lpath),
+                                                  _custom_metadata(rv, rsem, rmount, rpath))
+    if lm is None or rm is None:
+        d.metadata_note = "Custom metadata not compared: " + "; ".join(x for x in (lerr, rerr) if x)
+        return
+    d.metadata = diff_metadata(lm, rm)
+    if d.metadata and d.status == "equal":
+        d.status = "different"
+
+
 async def compare(lv: VaultClient, lmount: str, lprefix: str,
                   rv: VaultClient, rmount: str, rprefix: str,
-                  rules: Rules | None = None, max_secrets: int = 5000) -> Comparison:
+                  rules: Rules | None = None, max_secrets: int = 5000, custom_metadata: bool = False) -> Comparison:
     """Compare lmount/lprefix on one Vault with rmount/rprefix on another (or the same).
     Prefixes are "" or end in "/". Listing errors other than "permission denied" raise
-    VaultError; unreadable folders and secrets are reported per secret instead."""
+    VaultError; unreadable folders and secrets are reported per secret instead.
+    `custom_metadata`: also compare each pair's custom metadata (a difference makes it Different)."""
     ltree, rtree = await asyncio.gather(lv.kv_tree(lmount, lprefix, max_secrets=max_secrets),
                                         rv.kv_tree(rmount, rprefix, max_secrets=max_secrets))
     lrel = {s[len(lprefix):] for s in ltree.secrets}
@@ -78,6 +100,8 @@ async def compare(lv: VaultClient, lmount: str, lprefix: str,
             rb = badge(rd[name]) if rd and name in rd else None
             if lb or rb:
                 d.badges[name] = {"left": lb, "right": rb}
+        if custom_metadata and li.state in ("present", "deleted") and ri.state in ("present", "deleted"):
+            await _compare_metadata(d, lv, lsem, lmount, lprefix + lp, rv, rsem, rmount, rprefix + rp)
         return d  # values are dropped once this returns
 
     diffs = list(await asyncio.gather(*(one(k) for k in sorted(pairs))))
@@ -85,4 +109,5 @@ async def compare(lv: VaultClient, lmount: str, lprefix: str,
     totals["ignored_paths"] = ignored_paths
     totals["ignored_keys"] = sum(d.ignored_keys for d in diffs)
     totals["mapped"] = sum(d.left_path != d.right_path for d in diffs)
+    totals["metadata_different"] = sum(bool(d.metadata) for d in diffs)
     return Comparison(secrets=diffs, left_tree=ltree, right_tree=rtree, summary=totals)

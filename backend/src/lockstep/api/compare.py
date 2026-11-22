@@ -67,6 +67,7 @@ class CompareRequest(BaseModel):
     left: AnySide
     right: AnySide
     rules: Rules | None = None  # a comparison profile's mappings and ignore rules
+    custom_metadata: bool = False  # also compare each secret's custom metadata
 
 
 class SideSummary(BaseModel):
@@ -104,7 +105,7 @@ async def compare(body: CompareRequest, session: Sess, settings: Conf):
     async with side_client(body.left, lconn, settings) as lv, side_client(body.right, rconn, settings) as rv:
         try:
             result = await engine.compare(lv, lmount, lprefix, rv, rmount, rprefix, body.rules,
-                                          max_secrets=settings.max_tree_secrets)
+                                          max_secrets=settings.max_tree_secrets, custom_metadata=body.custom_metadata)
         except VaultError as e:
             raise vault_http_error(e) from e
 

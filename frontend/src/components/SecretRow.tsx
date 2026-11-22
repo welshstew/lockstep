@@ -395,6 +395,18 @@ export function SecretRow({ secret, left, right, reveal, open, onToggle, changes
       {open && (
         <div className="keys">
           {secret.note && <div className="notice error">{secret.note}</div>}
+          {secret.metadata_note && <div className="notice warn">{secret.metadata_note}</div>}
+          {secret.metadata && secret.metadata.length > 0 && (
+            <div className="notice info meta-diff" aria-label="Custom metadata differences">
+              <strong>Custom metadata differs:</strong>
+              <ul>{secret.metadata.map((m) => (
+                <li key={m.key}><span className="mono">{m.key}</span>{" "}
+                  {m.status === "different" ? <><span className="mono">{m.left}</span> → <span className="mono">{m.right}</span></>
+                    : m.status === "left_only" ? <>only on the left: <span className="mono">{m.left}</span></>
+                    : <>only on the right: <span className="mono">{m.right}</span></>}
+                </li>))}</ul>
+            </div>
+          )}
           {secret.status === "no_access" && (
             <div className="notice info">
               One side can’t read this secret, so its keys can’t be compared.

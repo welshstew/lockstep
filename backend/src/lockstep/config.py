@@ -9,7 +9,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
-from .policy.compare import PolicyProfile
+from .policy.compare import ConfigProfile, PolicyProfile
 from .policy.suggest import SuggestPattern
 from .rules import Profile
 
@@ -42,6 +42,8 @@ class Settings(BaseSettings):
     # Writing ACL policies and auth roles from the Policies tab: "on", or "off" where Terraform (or
     # another source of truth) owns them. Building and exporting for an admin always works.
     policy_apply: Literal["on", "off"] = "on"
+    # Creating userpass users and resetting their passwords: for development Vaults, off by default
+    user_write: Literal["on", "off"] = "off"
     # Refuse every write (copies, edits, imports, plan applies, destroys): for look-only installs
     read_only: bool = False
     # Offer a Copy button next to shown values (an admin may prefer not to)
@@ -52,6 +54,8 @@ class Settings(BaseSettings):
     profiles: Annotated[list[Profile], NoDecode] = []
     # Shared policy profiles (JSON list): how to pair and rewrite policies between two Vaults
     policy_profiles: Annotated[list[PolicyProfile], NoDecode] = []
+    # Shared configuration profiles (JSON list): how to pair mounts and rewrite values between two Vaults
+    config_profiles: Annotated[list[ConfigProfile], NoDecode] = []
     # Shared suggestion patterns (JSON list): how to suggest policies from a mount's layout
     policy_patterns: Annotated[list[SuggestPattern], NoDecode] = []
 
@@ -73,7 +77,7 @@ class Settings(BaseSettings):
     vault_ca_bundle: str | None = None  # path to a CA bundle for talking to Vault
     static_dir: str | None = None  # built SPA, served at /
 
-    @field_validator("profiles", "policy_profiles", "policy_patterns", mode="before")
+    @field_validator("profiles", "policy_profiles", "config_profiles", "policy_patterns", mode="before")
     @classmethod
     def _parse_profiles(cls, v):
         return json.loads(v) if isinstance(v, str) else v

@@ -2,8 +2,8 @@ apiVersion: v2
 name: lockstep
 description: Compare, inspect and sync KV secrets across HashiCorp Vault clusters.
 type: application
-version: 0.7.0
-appVersion: "0.7.0"
+version: 0.8.0
+appVersion: "0.8.0"
 kubeVersion: ">=1.27.0-0"
 keywords: [vault, hashicorp-vault, secrets, kv, compare, sync, certificates]
 icon: https://getlockstep.cloud/icon.svg
@@ -17,26 +17,30 @@ annotations:
   # The image this chart version runs: update with every release (scripts/check-version.sh checks it)
   artifacthub.io/images: |
     - name: lockstep
-      image: ghcr.io/welshstew/lockstep:0.7.0
+      image: ghcr.io/welshstew/lockstep:0.8.0
       platforms: [linux/amd64, linux/arm64]
   # What changed in this chart version, shown on Artifact Hub: rewrite for every release
   artifacthub.io/changes: |
     - kind: added
-      description: Browse tab (the default): explore one Vault's KV v2 mount, edit with check-and-set, versions, metadata, share once, snippets
+      description: "Try a draft policy for real with a short-lived token, and start a policy from a Browse folder"
     - kind: added
-      description: Policies: explain, build, suggest, compare across Vaults, and apply from Lockstep, with saved access plans
+      description: "Edit identity groups' policies; userpass users and LDAP group mappings read and compared"
     - kind: added
-      description: Auth roles: Kubernetes, JWT/OIDC and AppRole roles explained, built, compared and applied
+      description: "New value userWrite (off by default): create userpass users and reset passwords on development Vaults"
     - kind: added
-      description: Configuration tab: two Vaults' engines, auth methods, and engine roles and keys compared
+      description: "Configuration: Azure, GCP and LDAP engine roles; profiles that pair mounts with different paths (value configProfiles)"
     - kind: added
-      description: Tools tab: Transit playground, database credentials and leases; issue development certificates from PKI
+      description: "Configuration: copy a mount's tuning or an engine role to the other Vault through the access review"
     - kind: added
-      description: Login MFA for Vaults that enforce it
+      description: "Compare: custom metadata as an option, and a one-click way back to the whole mount from a path prefix"
     - kind: added
-      description: New values readOnly, allowClipboard, policyApply, policyProfiles and policyPatterns
+      description: "Renew a connection's token"
+    - kind: changed
+      description: "A new look: navigation in a sticky top bar, new fonts and colours"
     - kind: fixed
-      description: Policy matching follows Vault 2.2.2's rules on Vault 2.2.2 and later
+      description: "Artifact Hub can read the chart's change log again (0.7.0's annotation was rejected)"
+    - kind: fixed
+      description: "Browse: a key's actions sit on one line again"
   artifacthub.io/links: |
     - name: Website
       url: https://getlockstep.cloud

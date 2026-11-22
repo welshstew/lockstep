@@ -83,6 +83,51 @@
       "title": "ReportKey",
       "type": "object"
     },
+    "ReportMeta": {
+      "additionalProperties": false,
+      "description": "A custom metadata key that differs. Custom metadata isn't secret, so its values are shown.",
+      "properties": {
+        "key": {
+          "title": "Key",
+          "type": "string"
+        },
+        "status": {
+          "description": "different, left_only or right_only.",
+          "title": "Status",
+          "type": "string"
+        },
+        "left": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Left"
+        },
+        "right": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Right"
+        }
+      },
+      "required": [
+        "key",
+        "status"
+      ],
+      "title": "ReportMeta",
+      "type": "object"
+    },
     "ReportSecret": {
       "additionalProperties": false,
       "description": "A secret that differs (or every secret, with --include-equal).",
@@ -153,6 +198,15 @@
             "$ref": "#/$defs/ReportKey"
           },
           "title": "Keys",
+          "type": "array"
+        },
+        "custom_metadata": {
+          "default": [],
+          "description": "Custom metadata keys that differ (with --custom-metadata). Informational: `lockstep apply` doesn't copy metadata.",
+          "items": {
+            "$ref": "#/$defs/ReportMeta"
+          },
+          "title": "Custom Metadata",
           "type": "array"
         }
       },

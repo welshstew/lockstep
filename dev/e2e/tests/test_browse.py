@@ -238,3 +238,51 @@ def test_yaml_view_masks_values(page, sandbox, vault_a):
     page.get_by_text("Show values", exact=True).click()
     expect(yaml).to_contain_text("pw: s3cret")
     expect(yaml).to_contain_text("port: 5432")
+
+
+def test_start_a_policy_for_this_folder(page, sandbox, vault_a):
+    vault_a.put("app-config", f"{sandbox}/svc", {"user": "u"})
+    open_browse(page, sandbox)
+    tree(page).get_by_role("button", name="svc", exact=True).click()
+    page.locator(".secret-panel").get_by_role("button", name="Policy for this folder…").click()
+    expect(page.get_by_role("tab", name="Policies", exact=True)).to_have_attribute("aria-selected", "true")
+    expect(page.get_by_label("Policy name")).to_have_value(re.compile(r"^app-config-.*-read$"))
+    expect(page.get_by_label("Rule 1 where")).to_have_value(f"{sandbox}/**")
+    expect(page.get_by_label("Generated HCL")).to_contain_text(f'path "app-config/data/{sandbox}/*"')
+
+
+def test_compare_this_folder_shows_the_prefix_and_clears_it(page, sandbox, vault_a):
+    vault_a.put("app-config", f"{sandbox}/svc", {"user": "u"})
+    open_browse(page, sandbox)
+    tree(page).get_by_role("button", name="svc", exact=True).click()
+    page.locator(".secret-panel").get_by_role("button", name="Compare this folder…").click()
+    sign_in_userpass(page, "right", "alice", vault="Vault B")
+    choose_mount(page, "right", "app-config")
+    chip = page.locator(".scope-chip.left")
+    expect(chip).to_contain_text(f"Left: only under app-config/{sandbox}/")
+    page.get_by_role("button", name=re.compile(r"^\s*Compare$")).click()
+    expect(page.locator(".cols-head")).to_be_visible()
+    chip.get_by_role("button", name="Compare the whole mount on the left side").click()
+    expect(page.locator(".scope-chip")).to_have_count(0)
+    expect(page.locator(".cols-head")).to_be_visible()  # compared again, over the whole mount
+    expect(page.locator(".secret-path", has_text="payments/db")).to_have_count(1)
+
+
+def test_clear_the_prefix_on_a_collapsed_side(page, sandbox):
+    sign_in_userpass(page, "left", "alice", vault="Vault A")
+    choose_mount(page, "left", "app-config", "payments")
+    card = page.locator("section.side-card.left")
+    page.get_by_role("button", name="Collapse the left side").click()
+    expect(card.locator(".side-summary")).to_contain_text("app-config/payments")
+    card.get_by_role("button", name="Clear the path prefix on the left side").click()
+    expect(card.locator(".side-summary .where")).to_have_text("app-config")
+    expect(card.get_by_role("button", name="Clear the path prefix on the left side")).to_have_count(0)
+
+
+def test_key_actions_sit_on_one_line(page, sandbox, vault_a):
+    vault_a.put("app-config", f"{sandbox}/one", {"user": "u"})
+    open_browse(page, sandbox)
+    tree(page).get_by_role("button", name="one", exact=True).click()
+    tools = page.locator(".browse-keys td.tools").first
+    show, inspect = tools.get_by_role("button", name="Show"), tools.get_by_role("button", name="Inspect")
+    assert abs(show.bounding_box()["y"] - inspect.bounding_box()["y"]) < 4  # side by side, not stacked

@@ -5,6 +5,35 @@ the image, the Helm chart and the app share one version.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-22
+
+0.7.1 was prepared but never released; its fix is included here.
+
+### Added
+
+- **Try this policy for real:** the policy builder's **Try for real on …** writes the draft as a temporary policy, creates a two-minute token with only that policy, checks each rule's paths with Vault's own capabilities, then deletes both. It lists where Vault and Lockstep's matcher disagree. Audit-logged as `policy.try`. `POST /api/policies/try`.
+- **Browse, Policy for this folder…:** starts the policy builder with a read policy for the folder you're in.
+- **Identity groups' policies:** **Edit policies** on a group in Policies › Roles, through the access review and saved plans.
+- **Userpass users and LDAP group mappings:** Policies › Roles lists a userpass mount's users and an LDAP auth mount's group mappings, and compares them across Vaults. With `LOCKSTEP_USER_WRITE=on` (chart value `userWrite`, off by default) you can create users and reset passwords on development Vaults; the generated password is shown once and never logged. `/api/authusers/…`.
+- **Configuration, more engines:** Azure roles; GCP rolesets, static and impersonated accounts; LDAP secrets engine roles, static roles and library sets.
+- **Configuration profiles:** pair mounts whose paths differ between Vaults (`kv-dev ⇄ kv-prod`), rewrite names and ignore mounts. Shared with `LOCKSTEP_CONFIG_PROFILES` (chart value `configProfiles`) or kept per browser; `lockstep config compare --profile`. `GET /api/config/profiles`.
+- **Configuration, copy to the other side:** copy a mount's or auth method's tuning, or a PKI, database, SSH, Kubernetes, AWS, Azure or LDAP role (and Transit key settings), through the access review and saved plans. Secrets and credential-rotating objects are never copied. `POST /api/config/copy`.
+- **Compare, custom metadata:** **Include custom metadata** (and `lockstep compare --custom-metadata`) also compares each secret's custom metadata; differences show on the secret and in the report.
+- **Compare, path prefix:** when a side is limited to a path prefix (for example after Browse's **Compare this folder…**), a chip above the results says so, and **✕ Whole mount** compares the whole mount again. The prefix can also be cleared from its field, and from a collapsed side's summary.
+- **Renew a connection's token:** **Renew** on a connection extends its token, up to its max TTL. `POST /api/connections/{id}/renew`.
+- **CI:** a weekly workflow runs the policy matcher's tests against the newest Vault release and opens an issue when they disagree.
+- **Proposal:** [moving the dev stack to Vault 2.x](docs/proposals/vault-2-dev-stack.md).
+
+### Changed
+
+- **A new look:** the view tabs sit in a sticky top bar, so switching views doesn't mean scrolling up past the connection cards. New fonts (self-hosted), colours matched to the landing page, sentence-case labels, and a theme switch with **Auto**.
+- **Landing page:** the hero is a typeset comparison of two Vaults instead of a screenshot, and the feature cards are three short lists.
+
+### Fixed
+
+- **Helm chart:** Artifact Hub rejected 0.7.0's `artifacthub.io/changes` annotation, because descriptions containing `: ` weren't quoted. They are now, and `scripts/check-version.sh` parses the annotations so a release can't ship a bad one again.
+- **Browse:** a key's Show, Inspect, Edit and Delete buttons were stacked one per line in 0.7.0; they're on one line again.
+
 ## [0.7.0] - 2026-11-22
 
 ### Added
@@ -159,6 +188,7 @@ First public release.
 - **Helm chart:** hardened defaults, session key kept across upgrades, Ingress, NetworkPolicy, PodDisruptionBudget, Kubernetes auth, shared profiles; validated by a schema and tested in k3s.
 - Runs on Red Hat Hardened Images (distroless, non-root). Every change is scanned (CVEs, secrets, misconfigurations, base image signatures) and tested end to end in a browser.
 
+[0.8.0]: https://github.com/welshstew/lockstep/releases/tag/v0.8.0
 [0.7.0]: https://github.com/welshstew/lockstep/releases/tag/v0.7.0
 [0.6.0]: https://github.com/welshstew/lockstep/releases/tag/v0.6.0
 [0.5.0]: https://github.com/welshstew/lockstep/releases/tag/v0.5.0

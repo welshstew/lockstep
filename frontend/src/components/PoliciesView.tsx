@@ -38,7 +38,7 @@ function Mark({ cell }: { cell: PolicyCell }) {
 }
 
 /** The Policies tab: explain policies on a mount, or compare policies across the two Vaults. */
-export function PoliciesView({ targets, sides, canApply = false }: { targets: ScanTarget[]; sides: CompareSides; canApply?: boolean }) {
+export function PoliciesView({ targets, sides, canApply = false, userWrite = false }: { targets: ScanTarget[]; sides: CompareSides; canApply?: boolean; userWrite?: boolean }) {
   type Mode = "explain" | "build" | "roles" | "compare";
   const [mode, setModeState] = useState<Mode>(() => {
     try { const v = localStorage.getItem(MODE_KEY); return v === "compare" || v === "build" || v === "roles" ? v : "explain"; } catch { return "explain"; }
@@ -72,7 +72,7 @@ export function PoliciesView({ targets, sides, canApply = false }: { targets: Sc
       {planError && <div className="notice error" role="alert">{planError}</div>}
       {plan && <AccessApply plan={plan} connIds={connIds} canApply={canApply} onClose={() => setPlan(null)} />}
       {mode === "explain" ? <ExplainPolicies targets={targets} /> : mode === "build" ? <PolicyBuild targets={targets} canApply={canApply} />
-        : mode === "roles" ? <PolicyRoles targets={targets} sides={sides} canApply={canApply} />
+        : mode === "roles" ? <PolicyRoles targets={targets} sides={sides} canApply={canApply} userWrite={userWrite} />
         : <PolicyCompare sides={sides} targets={targets} canApply={canApply} />}
     </section>
   );
@@ -275,7 +275,17 @@ export function ExplainResultView({ result }: { result: ExplainResult }) {
           </span>
         ))}
       </div>
-      {result.mode === "vault" && (
+      {result.temporary_policy ? (
+        <div className={`notice ${result.disagreements?.length ? "warn" : "info"}`} role="status">
+          <strong>Tried for real:</strong> Vault answered for a two-minute token holding only this draft
+          {result.with_default ? " and the default policy" : ""} (<span className="mono">{result.temporary_policy}</span>,
+          removed again).{" "}
+          {result.disagreements?.length
+            ? <>Lockstep’s reading of the policy differs from Vault’s on {result.disagreements.length} cell{result.disagreements.length === 1 ? "" : "s"}:
+                <ul>{result.disagreements.slice(0, 20).map((d) => <li key={d.path + d.column}><span className="mono">{d.path}</span> {d.column}: Vault says {d.vault ? "allowed" : "denied"}</li>)}</ul></>
+            : "Lockstep’s reading of the policy agrees with Vault everywhere."}
+        </div>
+      ) : result.mode === "vault" && (
         <div className="notice info">
           You may not read every policy of your token, so these answers come from Vault itself (<span className="mono">sys/capabilities-self</span>).
           They’re complete, but the rule behind each one can’t be shown.

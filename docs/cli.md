@@ -374,7 +374,7 @@ lockstep policy suggest --vault-addr https://vault-dev --mount app-config --patt
 
 ## Configuration
 
-`lockstep config compare` compares two Vaults' secrets engines and auth methods (type, plugin version, tuning, options, auth configuration) and the roles and keys of engines both have (PKI, database, Transit, SSH, Kubernetes, AWS), with sensitive fields left out, like the web UI's [Configuration](usage.md#8-configuration) tab. It logs in with the `--left-*` and `--right-*` options.
+`lockstep config compare` compares two Vaults' secrets engines and auth methods (type, plugin version, tuning, options, auth configuration) and the roles and keys of engines both have (PKI, database, Transit, SSH, Kubernetes, AWS, Azure, GCP, LDAP), with sensitive fields left out, like the web UI's [Configuration](usage.md#8-configuration) tab. It logs in with the `--left-*` and `--right-*` options.
 
 ```sh
 lockstep config compare --left-addr https://vault-staging --right-addr https://vault-prod
@@ -388,6 +388,18 @@ left only   auth method k8s-staging/ (kubernetes)
 ```
 
 `--include-system` adds `sys/`, `identity/`, `cubbyhole/` and `token/`; `--show-equal` lists equal ones; `--json` prints everything. **Exit codes:** 0 the same, 1 differences, 2 couldn't compare.
+
+`--profile FILE|NAME` uses a configuration profile, a YAML/JSON file or a name from `LOCKSTEP_CONFIG_PROFILES`, when the Vaults name things differently:
+
+```yaml
+name: staging vs prod
+mappings:                         # mount paths, * allowed; a mount's roles and keys follow it
+  - {left: kv-staging, right: kv-prod}
+  - {left: "kubernetes-*", right: "k8s-*"}
+rewrites:                         # on the left side's values, before comparing
+  - {find: staging.example.com, replace: prod.example.com}
+ignore: ["sandbox-*"]             # paths to leave out
+```
 
 ## Reports and sync plans
 

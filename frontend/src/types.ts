@@ -14,6 +14,7 @@ export interface AppConfig {
   read_only?: boolean;
   allow_clipboard?: boolean;
   policy_apply?: boolean;
+  user_write?: boolean;
   k8s_auth: {
     available: boolean;
     mount: string;
@@ -34,6 +35,7 @@ export interface Connection {
   display_name: string;
   policies: string[];
   expires_at: number | null;
+  renewable?: boolean;
   status: ConnStatus;
 }
 
@@ -84,6 +86,8 @@ export interface SecretDiff {
   right_path: string;
   ignored_keys: number;
   note: string;
+  metadata?: { key: string; status: "different" | "left_only" | "right_only"; left: string | null; right: string | null }[];
+  metadata_note?: string;
 }
 
 export interface SideSummary {
@@ -546,6 +550,10 @@ export interface ExplainResult {
   findings: PolicyFinding[];
   denied: string[];
   truncated: boolean;
+  /** Set when the draft was tried for real: a temporary policy and token, answered by Vault */
+  temporary_policy?: string;
+  with_default?: boolean;
+  disagreements?: { path: string; column: PolicyColumn; predicted: boolean; vault: boolean }[];
 }
 
 export interface PolicyProfile {
@@ -702,7 +710,7 @@ export interface RolePair {
 
 export interface AccessItem {
   id: string;
-  kind: "policy" | "role";
+  kind: "policy" | "role" | "group" | "tune" | "engine";
   name: string;
   action: "new" | "change" | "same" | "delete" | "absent";
   hash: string | null;
@@ -718,6 +726,9 @@ export interface AccessChanges {
   roles?: RoleDraft[];
   delete_policies?: string[];
   delete_roles?: { mount: string; name: string }[];
+  group_policies?: { name: string; policies: string[] }[];
+  tunes?: { kind: "secret" | "auth"; path: string; config: Record<string, unknown> }[];
+  engine_objects?: { mount: string; kind: string; name: string; body: Record<string, unknown> }[];
 }
 
 export interface AccessPlanInfo {
@@ -731,14 +742,39 @@ export interface VaultOverview {
   replication: Record<string, string> | null;
 }
 export interface ConfigPair {
-  path: string; type: string | null; system: boolean; status: "equal" | "different" | "left_only" | "right_only";
+  path: string; right_path?: string | null; mapped_to?: string; type: string | null; system: boolean; status: "equal" | "different" | "left_only" | "right_only";
   fields: { field: string; left: unknown; right: unknown }[]; left: Record<string, unknown> | null; right: Record<string, unknown> | null;
 }
 export interface ConfigCompare {
   overview: { left: VaultOverview; right: VaultOverview };
   mounts: ConfigPair[]; auth: ConfigPair[]; engines: ConfigPair[]; summary: Record<string, number>;
   missing: { left: string[]; right: string[] };
+  profile?: string | null;
 }
 
 export interface MfaConstraint { name: string; methods: { id: string; type: string; uses_passcode: boolean; name: string }[] }
 export interface MfaChallenge { mfa_required: true; constraints: MfaConstraint[] }
+
+export interface AuthUserMount { path: string; type: "userpass" | "ldap"; description: string }
+export type AuthUserEntry = { name: string; error?: string } & Record<string, unknown>;
+export interface AuthUsersList {
+  mount: string;
+  type: "userpass" | "ldap";
+  users: AuthUserEntry[];
+  groups?: AuthUserEntry[];
+  config?: Record<string, unknown> | null;
+  missing: string[];
+}
+export interface AuthUserPair {
+  name: string;
+  status: "equal" | "different" | "left_only" | "right_only";
+  fields: { field: string; left: unknown; right: unknown }[];
+}
+export interface AuthUsersCompare {
+  type: "userpass" | "ldap";
+  users: AuthUserPair[];
+  groups?: AuthUserPair[];
+  config?: { field: string; left: unknown; right: unknown }[];
+  summary: Record<AuthUserPair["status"], number>;
+  missing: { left: string[]; right: string[] };
+}
