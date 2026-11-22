@@ -194,7 +194,7 @@ async def connect(t: Target, settings: Settings, name: str) -> Connection:
         elif t.auth == "jwt":
             mount = t.auth_mount or "jwt"
             try:
-                token = (await anon.login_jwt(_read_jwt(t), t.role, mount=mount))["client_token"]
+                token = await _second_factor(anon, t, await anon.login_jwt(_read_jwt(t), t.role, mount=mount))
             except VaultError as e:
                 raise CliError(f"jwt login to {t.addr} (auth/{mount}) failed: {e.message}") from e
             minted = True
@@ -204,7 +204,7 @@ async def connect(t: Target, settings: Settings, name: str) -> Connection:
             mount = t.auth_mount or t.auth
             try:
                 login = anon.login_userpass if t.auth == "userpass" else anon.login_ldap
-                token = (await login(t.user, _password(t), mount=mount))["client_token"]
+                token = await _second_factor(anon, t, await login(t.user, _password(t), mount=mount))
             except VaultError as e:
                 raise CliError(f"{t.auth} login to {t.addr} as {t.user} failed: {e.message}") from e
             minted = True
@@ -217,6 +217,36 @@ async def connect(t: Target, settings: Settings, name: str) -> Connection:
             raise CliError(f"The {t.which} Vault ({t.addr}) rejected the token: {e.message}") from e
     return connection_from_token(token=token, info=info, url=t.addr, namespace=t.namespace, name=name,
                                  preset_id=None, method=t.auth, minted=minted)
+
+
+async def _second_factor(anon: VaultClient, t: Target, auth: dict) -> str:
+    """The token from a login, after login MFA if the Vault asks for it. A passcode comes from
+    LOCKSTEP_<SIDE>_MFA_CODE, or is asked for in a terminal; push methods (Duo, Okta, PingID)
+    wait for approval on the user's device."""
+    from ..api.connections import mfa_constraints
+    constraints = mfa_constraints(auth)
+    if constraints is None:
+        return auth["client_token"]
+    payload: dict[str, list[str]] = {}
+    for c in constraints:
+        m = c["methods"][0]
+        if not m["uses_passcode"]:
+            print(f"{t.which}: approve the sign-in request ({m['type']}) on your device…", file=sys.stderr)
+            payload[m["id"]] = []
+            continue
+        code = os.environ.get(env(t.which, "MFA_CODE"), "").strip()
+        if not code:
+            if not sys.stdin.isatty():
+                raise CliError(f"The {t.which} Vault asks for a second factor ({m['type']}): set "
+                               f"{env(t.which, 'MFA_CODE')} or run in a terminal.")
+            code = getpass.getpass(f"{t.which}: {m['type']} code for {t.addr}: ").strip()
+        payload[m["id"]] = [code]
+    try:
+        res = await anon.request("POST", "sys/mfa/validate", token="",
+                                 json={"mfa_request_id": auth["mfa_requirement"]["mfa_request_id"], "mfa_payload": payload})
+    except VaultError as e:
+        raise CliError(f"The {t.which} Vault didn't accept the second factor: {e.message}") from e
+    return res["auth"]["client_token"]
 
 
 async def connect_both(targets: dict[str, Target], settings: Settings,

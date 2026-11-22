@@ -77,10 +77,14 @@ class VaultClient:
         await self._http.aclose()
 
     async def request(self, method: str, path: str, json: Any = None,
-                      params: dict | None = None) -> dict:
+                      params: dict | None = None, headers: dict | None = None, token: str | None = None) -> dict:
+        """`token`: send this token instead of the connection's ("" sends none)."""
         path = path.lstrip("/")
+        hdrs = dict(headers or {})
+        if token is not None:
+            hdrs["X-Vault-Token"] = token
         try:
-            r = await self._http.request(method, path, json=json, params=params)
+            r = await self._http.request(method, path, json=json, params=params, headers=hdrs or None)
         except httpx.HTTPError as e:
             raise VaultError(0, f"cannot reach Vault: {e.__class__.__name__}: {e}", path) from e
         if r.status_code >= 400:
@@ -257,16 +261,66 @@ class VaultClient:
         res = await self.request("POST", f"{mount}/data/{_q(path)}", json=body)
         return res["data"]["version"]
 
+    async def kv_patch(self, mount: str, path: str, changes: dict, cas: int | None) -> int:
+        """Change some keys (JSON merge patch: a null removes a key). Needs the `patch` capability."""
+        body: dict = {"data": changes}
+        if cas is not None:
+            body["options"] = {"cas": cas}
+        res = await self.request("PATCH", f"{mount}/data/{_q(path)}", json=body,
+                                 headers={"Content-Type": "application/merge-patch+json"})
+        return res["data"]["version"]
+
     async def kv_delete(self, mount: str, path: str) -> None:
         """Soft-delete the latest version: the data stays in Vault's history and
         `vault kv undelete` restores it. KV v2 has no check-and-set for deletes, so callers
         check the version just before."""
         await self.request("DELETE", f"{mount}/data/{_q(path)}")
 
+    async def kv_delete_versions(self, mount: str, path: str, versions: list[int]) -> None:
+        """Soft-delete specific versions (`vault kv delete -versions=`)."""
+        await self.request("POST", f"{mount}/delete/{_q(path)}", json={"versions": versions})
+
+    async def kv_undelete(self, mount: str, path: str, versions: list[int]) -> None:
+        """Restore soft-deleted versions (`vault kv undelete`)."""
+        await self.request("POST", f"{mount}/undelete/{_q(path)}", json={"versions": versions})
+
+    async def kv_destroy_versions(self, mount: str, path: str, versions: list[int]) -> None:
+        """Permanently delete the data of specific versions (`vault kv destroy`). Can't be undone."""
+        await self.request("PUT", f"{mount}/destroy/{_q(path)}", json={"versions": versions})
+
     async def kv_destroy_all(self, mount: str, path: str) -> None:
         """Permanently delete every version and the metadata (`vault kv metadata delete`).
         Can't be undone."""
         await self.request("DELETE", f"{mount}/metadata/{_q(path)}")
+
+    async def wrap(self, data: dict, ttl_seconds: int) -> dict:
+        """Wrap data in a single-use token (sys/wrapping/wrap). Returns Vault's wrap_info."""
+        res = await self.request("POST", "sys/wrapping/wrap", json=data, headers={"X-Vault-Wrap-TTL": str(ttl_seconds)})
+        return res["wrap_info"]
+
+    async def wrap_lookup(self, token: str) -> dict:
+        """Look up a wrapping token without using it up."""
+        return (await self.request("POST", "sys/wrapping/lookup", json={"token": token}))["data"]
+
+    async def unwrap(self, token: str) -> dict:
+        """Open a wrapping token (single use)."""
+        return (await self.request("POST", "sys/wrapping/unwrap", token=token)).get("data") or {}
+
+    async def server_version(self) -> str | None:
+        """The Vault version, from sys/seal-status (no token needed). None if it can't be read."""
+        try:
+            return (await self.request("GET", "sys/seal-status")).get("version")
+        except VaultError:
+            return None
+
+    async def policy_names(self) -> list[str]:
+        """ACL policy names (LIST sys/policies/acl)."""
+        res = await self.request("LIST", "sys/policies/acl")
+        return sorted((res.get("data") or {}).get("keys") or [])
+
+    async def policy_text(self, name: str) -> str:
+        res = await self.request("GET", f"sys/policies/acl/{_q(name)}")
+        return (res.get("data") or {}).get("policy") or ""
 
     async def capabilities(self, paths: list[str]) -> dict[str, list[str]]:
         """This token's capabilities on each path (sys/capabilities-self)."""

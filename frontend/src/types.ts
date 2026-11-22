@@ -11,6 +11,9 @@ export interface AppConfig {
   demo_banner?: string;
   export_mode?: "any" | "encrypted" | "off";
   allow_destroy?: boolean;
+  read_only?: boolean;
+  allow_clipboard?: boolean;
+  policy_apply?: boolean;
   k8s_auth: {
     available: boolean;
     mount: string;
@@ -497,3 +500,245 @@ export interface ImportPreview {
   plans: ChangePlan[];
   warnings: string[];
 }
+
+// --------------------------------------------------------------------------- policies
+
+export type PolicyColumn = "names" | "read" | "write" | "delete" | "destroy" | "history";
+
+export interface PolicyCell {
+  ok: boolean;
+  rule: number | null; // index into ExplainResult.rules
+  deny: boolean; // decided by a deny rule
+  caps: string[];
+}
+
+export interface PolicyRuleSource { policy: string; path: string; line: number | null; capabilities: string[] }
+
+export interface PolicyRule {
+  key: string;
+  kind: "exact" | "prefix" | "segment";
+  capabilities: string[];
+  sources: PolicyRuleSource[];
+}
+
+export interface PolicyFinding {
+  level: "error" | "warn" | "info";
+  message: string;
+  policy: string | null;
+  path: string | null;
+  line: number | null;
+}
+
+export interface ExplainResult {
+  mount: string;
+  prefix: string;
+  policies: { name: string; origin: "vault" | "pasted" | "token" | "identity"; rules: number; error: string | null }[];
+  identity?: { label: string; sources: { from: string; policies: string[]; note?: string }[] } | null;
+  missing: string[];
+  complete: boolean;
+  mode: "policies" | "vault";
+  root: boolean;
+  vault_version?: string | null;
+  evaluation?: string;
+  columns: { id: PolicyColumn; label: string }[];
+  rules: PolicyRule[];
+  rows: { path: string; cells: Record<PolicyColumn, PolicyCell> }[];
+  findings: PolicyFinding[];
+  denied: string[];
+  truncated: boolean;
+}
+
+export interface PolicyProfile {
+  name: string;
+  description?: string;
+  mappings: { left: string; right: string }[];
+  rewrites: { find: string; replace: string }[];
+  ignore: string[];
+}
+
+export type PolicyPairStatus = "equal" | "different" | "left_only" | "right_only" | "error";
+
+export interface PolicyRuleDiff {
+  path: string;
+  left: string[] | null;
+  right: string[] | null;
+  left_extra: Record<string, unknown> | null;
+  right_extra: Record<string, unknown> | null;
+  change: "same" | "changed" | "left_only" | "right_only";
+}
+
+export interface PolicyPair {
+  left: string | null;
+  right: string | null;
+  status: PolicyPairStatus;
+  mapped: boolean;
+  formatting: boolean;
+  note: string;
+  rules: PolicyRuleDiff[];
+  left_text: string | null;
+  right_text: string | null;
+}
+
+export interface PolicyCompareResult {
+  left: { count: number; error: string | null };
+  right: { count: number; error: string | null };
+  pairs: PolicyPair[];
+  summary: Record<PolicyPairStatus, number>;
+  missing: string[];
+}
+
+export interface AccessCompareResult {
+  columns: { id: PolicyColumn; label: string }[];
+  rows: { path: string; left: Record<PolicyColumn, { ok: boolean; deny: boolean }> | null;
+          right: Record<PolicyColumn, { ok: boolean; deny: boolean }> | null; differs: boolean }[];
+  left: { mount: string; prefix: string; missing: string[]; denied: string[]; truncated: boolean };
+  right: { mount: string; prefix: string; missing: string[]; denied: string[]; truncated: boolean };
+}
+
+// --------------------------------------------------------------------------- browse
+
+export interface BrowseEntry {
+  name: string;
+  path: string; // inside the mount
+  folder: boolean;
+  caps: { list?: boolean | null; read?: boolean | null; write?: boolean | null; history?: boolean | null };
+}
+
+export interface BrowseList {
+  mount: string;
+  folder: string;
+  total: number;
+  offset: number;
+  entries: BrowseEntry[];
+  denied: boolean;
+}
+
+export interface BrowseVersion { version: number; created: string | null; deleted: boolean; destroyed: boolean; by?: string | null; deleted_by?: string | null }
+
+export interface BrowseSecret {
+  path: string;
+  mount: string;
+  state: "present" | "deleted" | "destroyed" | "absent";
+  version: number | null;
+  current_version: number | null;
+  updated: string | null;
+  keys: string[] | null;
+  keys_only?: boolean; // names from subkeys/: the values can't be read
+  read_error: string | null;
+  metadata: { max_versions: number; cas_required: boolean; delete_version_after: string;
+              custom_metadata: Record<string, string> | null; created_time: string; updated_time: string;
+              oldest_version: number; updated_by?: string | null; hash: string } | null;
+  metadata_error: string | null;
+  versions: BrowseVersion[];
+  caps: Record<"read" | "write" | "patch" | "delete" | "delete_versions" | "undelete" | "destroy_versions" | "destroy" | "history",
+               boolean | null>;
+}
+
+export interface BrowseEdit {
+  path: string;
+  action: "write" | "delete" | "undelete" | "destroy" | "rollback";
+  expected_version?: number | null;
+  set?: Record<string, unknown>;
+  remove?: string[];
+  versions?: number[];
+  rollback_to?: number;
+}
+
+export interface BrowseEditResult {
+  path: string;
+  action: string;
+  status: "ready" | "noop" | "conflict" | "invalid" | "error" | "applied" | "denied";
+  old_version: number | null;
+  new_version: number | null;
+  versions: number[];
+  keys: { key: string; action: "add" | "update" | "remove" | "unchanged"; old: unknown; new: unknown }[];
+  message: string;
+  patch?: boolean;
+}
+
+export interface BrowseDiff {
+  a: number;
+  b: number;
+  keys: { key: string; change: "added" | "removed" | "changed" | "same"; a?: unknown; b?: unknown }[];
+}
+
+export type PolicyCan = "names" | "read" | "write" | "delete" | "destroy" | "history";
+export interface PolicyBuildRule { where: string; can: PolicyCan[] }
+
+export interface PolicyDraft {
+  name: string;
+  mount: string;
+  rules: PolicyBuildRule[];
+  hcl?: string; // set in Advanced mode: the text is used as it is
+  description?: string;
+}
+
+export interface SuggestResult {
+  layout: string;
+  why: string[];
+  notes: string[];
+  secrets: number;
+  truncated: boolean;
+  suggestions: { name: string; description: string; rules: PolicyBuildRule[]; hcl: string; template: string }[];
+  profile: PolicyProfile | null;
+  pattern_yaml: string;
+}
+
+export interface TerraformOptions { tool: "terraform" | "opentofu"; provider: "~> 5.0" | "~> 4.0"; layout: "single" | "files"; imports: boolean }
+
+// --------------------------------------------------------------------------- auth roles
+
+export type RoleKind = "kubernetes" | "jwt" | "approle";
+export interface RoleFinding { level: "error" | "warn" | "info"; message: string; field: string | null }
+export interface AuthMount { path: string; type: string; kind: RoleKind; description: string }
+export interface RoleItem { name: string; role?: Record<string, unknown>; policies?: string[]; findings?: RoleFinding[]; error?: string }
+export interface RolesList { mount: string; kind: RoleKind; labels: Record<string, string>; roles: RoleItem[]; policies_known: boolean }
+export interface RoleTemplate { id: string; kind: RoleKind; label: string; body: Record<string, unknown> }
+export interface RoleDraft { kind: RoleKind; mount: string; name: string; body: Record<string, unknown> }
+export interface RolePair {
+  left: string | null; right: string | null; mapped: boolean; status: "equal" | "different" | "left_only" | "right_only";
+  fields: { field: string; label: string; left: unknown; right: unknown }[]; note: string;
+}
+
+export interface AccessItem {
+  id: string;
+  kind: "policy" | "role";
+  name: string;
+  action: "new" | "change" | "same" | "delete" | "absent";
+  hash: string | null;
+  diff: string;
+  allowed: boolean | null;
+  status: "ready" | "noop" | "denied" | "invalid" | "conflict" | "applied" | "error";
+  problems: string[];
+  warnings: string[];
+}
+export interface AccessChanges {
+  conn_id: string;
+  policies?: { name: string; text: string }[];
+  roles?: RoleDraft[];
+  delete_policies?: string[];
+  delete_roles?: { mount: string; name: string }[];
+}
+
+export interface AccessPlanInfo {
+  format: string; version: number; id: string; created: string; created_by: string;
+  vault: string; preset: boolean; namespace: string | null; items: { id: string; action: string; status: string }[];
+}
+
+export interface VaultOverview {
+  version: string | null; cluster_name: string | null; sealed: boolean | null; seal_type: string | null;
+  storage_type: string | null; ha_enabled: boolean | null; performance_standby: boolean | null;
+  replication: Record<string, string> | null;
+}
+export interface ConfigPair {
+  path: string; type: string | null; system: boolean; status: "equal" | "different" | "left_only" | "right_only";
+  fields: { field: string; left: unknown; right: unknown }[]; left: Record<string, unknown> | null; right: Record<string, unknown> | null;
+}
+export interface ConfigCompare {
+  overview: { left: VaultOverview; right: VaultOverview };
+  mounts: ConfigPair[]; auth: ConfigPair[]; engines: ConfigPair[]; summary: Record<string, number>;
+  missing: { left: string[]; right: string[] };
+}
+
+export interface MfaConstraint { name: string; methods: { id: string; type: string; uses_passcode: boolean; name: string }[] }
+export interface MfaChallenge { mfa_required: true; constraints: MfaConstraint[] }

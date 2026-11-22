@@ -106,6 +106,7 @@ Each side looks for its settings in this order; the first one found wins.
   ```sh
   LOCKSTEP_RIGHT_TOKEN=$(VAULT_ADDR=https://vault-b vault login -method=oidc -token-only)
   ```
+- **Login MFA:** when a Vault asks for a second factor at login (TOTP, Duo, Okta, PingID), a passcode comes from `LOCKSTEP_LEFT_MFA_CODE` (or `LOCKSTEP_VAULT_MFA_CODE`, and so on), or the CLI asks for it in a terminal. For push methods it waits until you approve the request on your device.
 - **Same Vault on both sides:** to compare two mounts or prefixes in one Vault, give only the left address. The right side then reuses the left side's connection.
 - **TLS:** `--ca-cert` or `VAULT_CACERT`; `--tls-skip-verify` or `VAULT_SKIP_VERIFY` (insecure).
 
@@ -307,7 +308,86 @@ lockstep import payments.json --vault-addr https://vault-test --mount app-config
 - **`--delete-missing`:** make the target match the file. Imported secrets are written with only the file's keys (the preview shows other keys as `(remove)`), and secrets under `--prefix` that aren't in the file are soft-deleted (`delete` in the preview; `vault kv undelete` restores them). Entries with `"keep": true` and no data are left alone. See [deleting what isn't in the file](usage.md#deleting-what-isnt-in-the-file).
 - **Exit codes:** 0 done (or nothing to do), 1 some secrets weren't written (changed meanwhile, no permission, or left out by a collision), 2 couldn't run.
 
-`lockstep schema export` and `lockstep schema import-rules` print the files' JSON Schemas.
+`lockstep schema export` and `lockstep schema import-rules` print the files' JSON Schemas; `lockstep schema policy-profile` prints a policy profile's, and `lockstep schema suggest-pattern` a suggestion pattern's.
+
+## Policies
+
+`lockstep policy explain` shows what Vault ACL policies allow on every secret of a KV v2 mount: the same grid, findings and deciding rules as the web UI's [Policies](usage.md#7-policies) tab. It logs in with the `--vault-*` options, like `export`, and is read-only.
+
+```sh
+# Policies by name, from Vault
+lockstep policy explain payments-dev default --vault-addr https://vault-dev --mount app-config --prefix payments
+
+# A policy file you're writing (HCL or JSON); repeat --file for several
+lockstep policy explain --file payments-dev.hcl --vault-addr https://vault-dev --mount app-config
+
+# Your own token's policies, and why one secret is or isn't readable
+lockstep policy explain --self --vault-addr https://vault-dev --mount app-config --why payments/api
+```
+
+```text
+secret        See names  Read  Write  Delete  Destroy  History
+payments/api      ✓       ✗      ✗      ✗        ·        ✓
+payments/db       ✓       ✓      ✓      ·        ·        ✓
+```
+
+- ✓ allowed, · not allowed, ✗ refused by a `deny` rule. `--allowed-only` hides secrets where nothing is allowed.
+- `--why PATH` lists, for one secret, the rule that decided each column, with its policy and line.
+- `--json` prints the whole result.
+- **Exit codes:** 0 explained, 1 a policy has an error Vault would refuse (or a named or `--file` policy couldn't be read or parsed), 2 couldn't run. That makes `--file` usable as a check in CI before `vault policy write`.
+
+`lockstep policy compare` compares every policy on two Vaults by meaning, like the web UI's [Compare across Vaults](usage.md#compare-policies-across-vaults). It logs in with the `--left-*` and `--right-*` options, like `compare`.
+
+```sh
+lockstep policy compare --left-addr https://vault-dev --right-addr https://vault-prod \
+    --map '*-dev=*-prod' --rewrite /dev/=/prod/
+
+# or with a policy profile file (YAML or JSON; the web UI's Export mine writes one)
+lockstep policy compare --left-addr https://vault-dev --right-addr https://vault-prod --profile dev-prod.yaml
+```
+
+```text
+different   payments-dev ⇄ payments-prod
+              path "app-config/data/payments/*"  [create, delete, read, update] → [read]
+right only  orders-app
+
+8 policies: 5 equal, 1 different, 1 left only, 1 right only.
+```
+
+- `--profile FILE|NAME`: a policy profile file (`mappings`, `rewrites`, `ignore`; `--profile-name` picks one from a list), or a name from `LOCKSTEP_POLICY_PROFILES`. `--map LEFT=RIGHT` and `--rewrite FIND=REPLACE` add to it.
+- `--show-equal` lists equal policies too; `--json` prints the whole result, texts included.
+- **Exit codes,** like `compare`: 0 the same, 1 differences (or a policy couldn't be read), 2 couldn't compare. Use it in CI to catch access drift between clusters.
+
+`lockstep policy suggest` suggests policies from a mount's layout, like the web UI's [Build & suggest](usage.md#build-and-suggest-policies), and prints them as HCL:
+
+```sh
+lockstep policy suggest --vault-addr https://vault-dev --mount app-config --prefix services
+lockstep policy suggest --vault-addr https://vault-dev --mount app-config --pattern teams.yaml \
+    --only billing-prod-app --bundle billing.zip --terraform --profile-out dev-prod.json
+```
+
+- `--pattern FILE` uses a suggestion pattern (YAML or JSON; `lockstep schema suggest-pattern`); `--only NAME` keeps some suggestions.
+- `--profile-out FILE` writes the pattern's policy profile, for `lockstep policy compare --profile`.
+- `--bundle ZIP` writes the admin bundle (HCL, `apply.sh`, README); `--terraform` or `--opentofu` add infrastructure code, `--provider '~> 4.0'` pins another provider version, `--tf-files` makes one `.tf` file per policy.
+
+`lockstep policy export FILE.hcl… --bundle ZIP` makes the same bundle from policy files you have, named after the files. It needs no Vault.
+
+## Configuration
+
+`lockstep config compare` compares two Vaults' secrets engines and auth methods (type, plugin version, tuning, options, auth configuration) and the roles and keys of engines both have (PKI, database, Transit, SSH, Kubernetes, AWS), with sensitive fields left out, like the web UI's [Configuration](usage.md#8-configuration) tab. It logs in with the `--left-*` and `--right-*` options.
+
+```sh
+lockstep config compare --left-addr https://vault-staging --right-addr https://vault-prod
+```
+
+```text
+Vault 1.21.4 ⇄ Vault 2.2.2  (versions differ)
+different   secrets engine app-config/ (kv)
+              config.max_lease_ttl: 3600 → 7200
+left only   auth method k8s-staging/ (kubernetes)
+```
+
+`--include-system` adds `sys/`, `identity/`, `cubbyhole/` and `token/`; `--show-equal` lists equal ones; `--json` prints everything. **Exit codes:** 0 the same, 1 differences, 2 couldn't compare.
 
 ## Reports and sync plans
 

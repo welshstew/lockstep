@@ -39,6 +39,7 @@ from ..config import Settings, get_settings
 from ..session import Connection, SessionData, load_session
 from .compare import FileSide, Side
 from .connections import get_connection
+from .guard import require_writable
 from .sync import MAX_CHANGES, ApplyOut, Change, Direction, SyncRequest, _Ctx, apply_changes, evaluate
 
 router = APIRouter(prefix="/api/plans", tags=["plans"])
@@ -345,6 +346,7 @@ async def check(body: CheckRequest, session: Sess, settings: Conf):
 
 @router.post("/apply", response_model=ApplyPlanOut)
 async def apply(body: ApplyPlanRequest, session: Sess, settings: Conf):
+    require_writable(settings)
     if not body.confirm:
         raise HTTPException(400, detail={"message": "Applying a plan requires confirm=true"})
     plan = load_plan(body.plan, settings)

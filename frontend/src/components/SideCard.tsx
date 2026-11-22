@@ -28,8 +28,49 @@ function expiry(c: Connection): string {
   return hours < 48 ? `expires in ${hours} h` : `expires in ${Math.round(hours / 24)} days`;
 }
 
+const COLLAPSE_KEY = (side: string) => `lockstep.collapsed.${side}`;
+
+function loadCollapsed(side: string): boolean {
+  try { return localStorage.getItem(COLLAPSE_KEY(side)) === "1"; } catch { return false; }
+}
+
+/** One line about what this side is: the account signed in and where it points. */
+function Summary({ conn, file, selection }: { conn: Connection | null; file: LoadedFile | null; selection: SideSelection }) {
+  const where = selection.mount ? `${selection.mount}${selection.prefix ? `/${selection.prefix.replace(/^\/+|\/+$/g, "")}` : ""}` : null;
+  if (file) {
+    return (
+      <div className="side-summary">
+        <span className="dot ok" />
+        <span className="who"><strong>{file.name}</strong> <span className="subtle">export file, read-only</span></span>
+        {selection.prefix && <span className="mono">{selection.prefix}</span>}
+      </div>
+    );
+  }
+  if (!conn) return <div className="side-summary"><span className="dot unknown" /><span className="subtle">Not connected. Expand to sign in.</span></div>;
+  const policies = conn.policies.filter((p) => p !== "default");
+  return (
+    <div className="side-summary">
+      <span className={`dot ${conn.status}`} title={conn.status} />
+      <span className="who">
+        <strong>{conn.display_name || conn.auth_method}</strong>{" "}
+        <span className="subtle">via {conn.auth_method} on</span> <strong>{conn.name}</strong>
+        {conn.namespace && <span className="subtle"> · namespace {conn.namespace}</span>}
+      </span>
+      <span className="subtle" title={conn.policies.join(", ")}>
+        {policies.length ? `policies: ${policies.join(", ")}` : "default policy only"} · {expiry(conn)}
+      </span>
+      {where ? <span className="mono where">{where}</span> : <span className="subtle">no mount chosen</span>}
+    </div>
+  );
+}
+
 export function SideCard(props: Props) {
-  const { side, files, selection, onChange, onFile } = props;
+  const { side, files, selection, onChange, onFile, connections } = props;
+  const [collapsed, setCollapsedState] = useState(() => loadCollapsed(side));
+  const setCollapsed = (c: boolean) => {
+    setCollapsedState(c);
+    try { localStorage.setItem(COLLAPSE_KEY(side), c ? "1" : "0"); } catch { /* ignore */ }
+  };
   // The selection decides when it can (it follows ⇄ swaps); the switch only matters for an empty side.
   const [wantFile, setWantFile] = useState(false);
   const mode: "vault" | "file" = selection.fileId ? "file" : selection.connId ? "vault" : wantFile ? "file" : "vault";
@@ -37,10 +78,14 @@ export function SideCard(props: Props) {
   const file = files.find((f) => f.id === selection.fileId) ?? null;
 
   return (
-    <section className={`card side-card ${side}`} aria-label={`${side} side`}>
+    <section className={`card side-card ${side}${collapsed ? " collapsed" : ""}`} aria-label={`${side} side`}>
       <div className="side-head">
-        <h2 className="side-title">{side === "left" ? "◧ Left / source" : "Right / target ◨"}</h2>
-        <div className="segmented small" role="group" aria-label={`${side} side source`}>
+        <button type="button" className="collapse-btn" aria-expanded={!collapsed} onClick={() => setCollapsed(!collapsed)}
+                aria-label={`${collapsed ? "Expand" : "Collapse"} the ${side} side`} title={collapsed ? "Show the connection details" : "Collapse to a summary"}>
+          <span className="caret">▸</span>
+          <h2 className="side-title">{side === "left" ? "◧ Left / source" : "Right / target ◨"}</h2>
+        </button>
+        {!collapsed && <div className="segmented small" role="group" aria-label={`${side} side source`}>
           <button type="button" aria-pressed={mode === "vault"} onClick={() => {
             setMode("vault");
             if (selection.fileId) onChange({ connId: null, mount: null, prefix: "" });
@@ -49,9 +94,13 @@ export function SideCard(props: Props) {
             setMode("file");
             if (selection.connId) onChange({ connId: null, mount: null, prefix: "" });
           }}>Export file</button>
-        </div>
+        </div>}
       </div>
-      {mode === "vault" ? <VaultSide {...props} /> : file ? (
+      {collapsed ? (
+        <button type="button" className="summary-btn" onClick={() => setCollapsed(false)} aria-label={`${side} side summary: expand`}>
+          <Summary conn={connections.find((c) => c.id === selection.connId) ?? null} file={file} selection={selection} />
+        </button>
+      ) : mode === "vault" ? <VaultSide {...props} /> : file ? (
         <>
           <div className="conn-chip file-chip">
             <span className="dot ok" />

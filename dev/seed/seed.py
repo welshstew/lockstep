@@ -200,6 +200,95 @@ path "app-config/data/payments/api" { capabilities = ["deny"] }
 """
 
 
+# Policies that differ between the two Vaults, for the Policies tab's Compare (dev in A, prod in B)
+POLICIES_A = {
+    "payments-dev": """
+# Developers on payments: full access in dev, read in test
+path "app-config/metadata/*" { capabilities = ["list"] }
+path "app-config/data/payments/*" { capabilities = ["create", "read", "update", "delete"] }
+""",
+    "ci-drift-check": """
+path "app-config/metadata/*" { capabilities = ["read", "list"] }
+path "app-config/data/*" { capabilities = ["read"] }
+""",
+    "search-app": """path "app-config/data/services/search/*" { capabilities = ["read"] }""",
+}
+POLICIES_B = {
+    "payments-prod": """
+path "app-config/metadata/*" {
+  capabilities = ["list"]
+}
+path "app-config/data/payments/*" {
+  capabilities = ["read"]
+}
+""",
+    "ci-drift-check": """
+# Same as Vault A, written differently
+path "app-config/data/*" { capabilities = ["read"] }
+path "app-config/metadata/*" { capabilities = ["list", "read"] }
+""",
+    "orders-app": """path "app-config/data/services/orders/*" { capabilities = ["read"] }""",
+}
+
+
+def seed_pki(v: Vault) -> None:
+    """A PKI engine in Vault A for issuing development certificates (Certificate expiry tab)."""
+    mounts = v.req("GET", "sys/mounts")["data"]
+    if "pki-dev/" in mounts:
+        v.req("DELETE", "sys/mounts/pki-dev")
+    v.req("POST", "sys/mounts/pki-dev", {"type": "pki", "description": "Development certificates",
+                                         "config": {"max_lease_ttl": "87600h"}})
+    v.req("POST", "pki-dev/root/generate/internal", {"common_name": "Lockstep Dev Root CA", "ttl": "87600h",
+                                                      "issuer_name": "dev-root"}, ok=(200,))
+    v.req("POST", "pki-dev/roles/dev-services", {"allowed_domains": ["dev.internal"], "allow_subdomains": True,
+                                                  "max_ttl": "72h", "key_type": "ec", "key_bits": 256})
+    print(f"[{v.name}] pki-dev ready")
+
+
+def seed_database(v: Vault) -> None:
+    """Vault A's database engine against the dev Postgres: two dynamic roles."""
+    url = os.environ.get("POSTGRES_URL")
+    if not url:
+        return
+    mounts = v.req("GET", "sys/mounts")["data"]
+    if "database/" in mounts:
+        v.req("DELETE", "sys/mounts/database")
+    v.req("POST", "sys/mounts/database", {"type": "database", "description": "Dev Postgres credentials"})
+    for attempt in range(20):  # Postgres may still be finishing its first start
+        try:
+            v.req("POST", "database/config/orders", {
+                "plugin_name": "postgresql-database-plugin", "connection_url": url,
+                "username": "postgres", "password": os.environ.get("POSTGRES_PASSWORD", "dev-postgres"),
+                "allowed_roles": ["orders-readonly", "orders-app"], "verify_connection": True})
+            break
+        except RuntimeError:
+            if attempt == 19:
+                raise
+            time.sleep(2)
+    v.req("POST", "database/roles/orders-readonly", {
+        "db_name": "orders", "default_ttl": "1h", "max_ttl": "24h",
+        "creation_statements": ["CREATE ROLE \"{{name}}\" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}';",
+                                "GRANT pg_read_all_data TO \"{{name}}\";"]})
+    v.req("POST", "database/roles/orders-app", {
+        "db_name": "orders", "default_ttl": "15m", "max_ttl": "1h",
+        "creation_statements": ["CREATE ROLE \"{{name}}\" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}';",
+                                "GRANT pg_read_all_data, pg_write_all_data TO \"{{name}}\";"]})
+    print(f"[{v.name}] database ready")
+
+
+def seed_transit(v: Vault) -> None:
+    """Transit keys for the Tools tab's playground: one for encryption, one for signing."""
+    mounts = v.req("GET", "sys/mounts")["data"]
+    if "transit/" in mounts:
+        v.req("DELETE", "sys/mounts/transit")
+    v.req("POST", "sys/mounts/transit", {"type": "transit", "description": "Encryption as a service"})
+    v.req("POST", "transit/keys/app-key", {"type": "aes256-gcm96"})
+    v.req("POST", "transit/keys/signing-key", {"type": "ed25519"})
+    if v.name == "vault-b":  # drift for Configuration -> Engine roles and keys
+        v.req("POST", "transit/keys/app-key/config", {"deletion_allowed": True, "auto_rotate_period": "720h"})
+    print(f"[{v.name}] transit ready")
+
+
 def configure_auth(v: Vault) -> None:
     v.policy("lockstep-admin", POLICY_ADMIN)
     v.policy("lockstep-readonly", POLICY_READONLY)
@@ -416,6 +505,13 @@ def main() -> None:
         v.wait_ready()
         configure_auth(v)
         print(f"[{v.name}] auth configured")
+    seed_pki(a)
+    seed_database(a)
+    for v in (a, b):
+        seed_transit(v)
+    for v, policies in ((a, POLICIES_A), (b, POLICIES_B)):
+        for name, text in policies.items():
+            v.policy(name, text)
     pki = build_pki()
     seed_data(a, b, pki)
     seed_value_tool_fixtures(a, b, pki)

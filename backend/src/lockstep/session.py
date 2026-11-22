@@ -54,9 +54,27 @@ class PendingOidc(BaseModel):
         return time.time() - self.created_at > max_age
 
 
+class PendingMfa(BaseModel):
+    """A login Vault accepted but wants a second factor for (login MFA), until it's given."""
+
+    request_id: str  # Vault's mfa_request_id
+    constraints: list[dict]  # [{"name", "methods": [{"id", "type", "uses_passcode", "name"}]}]
+    url: str
+    namespace: str | None = None
+    name: str
+    preset_id: int | None = None
+    method: str
+    side: str | None = None
+    created_at: float = Field(default_factory=time.time)
+
+    def expired(self, max_age: float = 300) -> bool:
+        return time.time() - self.created_at > max_age
+
+
 class SessionData(BaseModel):
     connections: list[Connection] = []
     pending_oidc: PendingOidc | None = None
+    pending_mfa: PendingMfa | None = None
 
     def get(self, conn_id: str) -> Connection | None:
         return next((c for c in self.connections if c.id == conn_id), None)

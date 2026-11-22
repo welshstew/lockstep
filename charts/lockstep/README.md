@@ -46,6 +46,11 @@ vaults:
 | `allowCustomConnections` | `false` | Let users type any Vault address (the pods will call it) |
 | `customUrlPatterns` | `[]` | Regexes a custom address must fully match |
 | `maxTreeSecrets` | `5000` | Per side, most secrets listed in one comparison |
+| `policyPatterns` | `[]` | Shared suggestion patterns for **Build & suggest**: `name`, `layout` (`{app}/{env}/**`), `values`, `policies` (`name`, `rules` of `where`/`can`), `compare` |
+| `policyProfiles` | `[]` | Shared policy profiles for comparing policies across Vaults: `name`, `mappings` (`left`/`right` with `*`), `rewrites` (`find`/`replace`), `ignore` |
+| `policyApply` | `on` | Write ACL policies and auth roles from the Policies tab; `off` where Terraform owns them |
+| `readOnly` | `false` | Look-only Lockstep: every write is hidden and refused |
+| `allowClipboard` | `true` | Offer **Copy** next to shown values in Browse |
 | `allowDestroy` | `true` | Offer **Destroy** (every version and the metadata of a secret, can't be undone). Vault policies still decide who may |
 | `exportMode` | `any` | Secret-engine exports (they hold values): `any`, `encrypted` (only with a one-time key) or `off` |
 | `vaultTls.verify` | `true` | |

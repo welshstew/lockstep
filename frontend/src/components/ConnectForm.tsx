@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
+import { MfaPrompt } from "./MfaPrompt";
 import { api, type AuthInput } from "../api";
-import type { AppConfig, Connection } from "../types";
+import type { AppConfig, Connection, MfaConstraint } from "../types";
 
 type Method = "token" | "userpass" | "ldap" | "oidc" | "jwt" | "kubernetes";
 
@@ -34,6 +35,7 @@ export function ConnectForm({ config, onConnected, onCancel, initialPresetId, si
   const [role, setRole] = useState("");
   const [jwt, setJwt] = useState("");
   const [busy, setBusy] = useState(false);
+  const [mfa, setMfa] = useState<MfaConstraint[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [methods, setMethods] = useState<LoginMethod[] | null>(null);
   // Set once the user picks a login method, so a slow discovery reply never overrides it.
@@ -101,12 +103,17 @@ export function ConnectForm({ config, onConnected, onCancel, initialPresetId, si
       setPassword("");
       setToken("");
       setJwt("");
-      onConnected(conn);
+      if ("mfa_required" in conn) setMfa(conn.constraints);
+      else onConnected(conn);
     } catch (err) {
       setError((err as Error).message);
     } finally {
       setBusy(false);
     }
+  }
+
+  if (mfa) {
+    return <MfaPrompt constraints={mfa} onCancel={() => setMfa(null)} onDone={(c) => { setMfa(null); onConnected(c); }} />;
   }
 
   return (

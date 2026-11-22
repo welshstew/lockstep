@@ -47,6 +47,7 @@ class ScanSide(BaseModel):
 
 class ExpiryRequest(BaseModel):
     sides: list[ScanSide] = Field(min_length=1, max_length=2)
+    include_pki: bool = False  # also certificates issued by (and the issuers of) PKI engines on these Vaults
 
 
 class CertRow(BaseModel):
@@ -153,6 +154,67 @@ async def _waiting(task: asyncio.Task, beat: dict) -> AsyncIterator[dict]:
         yield beat
 
 
+MAX_PKI_CERTS = 2000
+
+
+async def _pki_rows(v, side: str, conn_id: str) -> list["CertRow"]:
+    """Certificates issued by each PKI engine (not revoked), and the engines' issuers."""
+    from cryptography import x509
+    from .pki import pki_mounts
+    out: list[CertRow] = []
+    try:
+        mounts = await pki_mounts(v)
+    except VaultError:
+        return out
+    sem = asyncio.Semaphore(READS)
+
+    def row(mount: str, path: str, container: str, pem: str) -> CertRow | None:
+        try:
+            cert = x509.load_pem_x509_certificate(pem.encode())
+        except ValueError:
+            return None
+        st, days = certs.validity(cert)
+        return CertRow(side=side, conn_id=conn_id, mount=mount, path=path, key="certificate", container=container,
+                       subject=cert.subject.rfc4514_string(), subject_cn=_cn(cert.subject), issuer_cn=_cn(cert.issuer),
+                       not_before=cert.not_valid_before_utc.isoformat(), not_after=cert.not_valid_after_utc.isoformat(),
+                       days_left=days, status=st, is_ca=certs.is_ca(cert), self_signed=certs.is_self_signed(cert),
+                       serial=format(cert.serial_number, "x"), sha256=certs.fingerprint(cert))
+
+    async def lst(path: str) -> list[str]:
+        try:
+            return ((await v.request("LIST", path)).get("data") or {}).get("keys") or []
+        except VaultError:
+            return []
+
+    for m in mounts:
+        mount = m["path"]
+
+        async def cert(serial: str):
+            async with sem:
+                try:
+                    d = (await v.request("GET", f"{mount}/cert/{serial}"))["data"]
+                except VaultError:
+                    return None
+            if d.get("revocation_time"):
+                return None
+            return row(mount, f"certs/{serial}", "PKI-issued", d.get("certificate") or "")
+
+        async def issuer(i: str):
+            async with sem:
+                try:
+                    d = (await v.request("GET", f"{mount}/issuer/{i}"))["data"]
+                except VaultError:
+                    return None
+            return row(mount, f"issuer/{d.get('issuer_name') or i}", "PKI issuer", d.get("certificate") or "")
+
+        serials, issuers = await asyncio.gather(lst(f"{mount}/certs"), lst(f"{mount}/issuers"))
+        issuer_rows = [r for r in await asyncio.gather(*(issuer(i) for i in issuers)) if r]
+        issuer_serials = {r.serial for r in issuer_rows}
+        cert_rows = [r for r in await asyncio.gather(*(cert(s) for s in serials[:MAX_PKI_CERTS])) if r]
+        out += issuer_rows + [r for r in cert_rows if r.serial not in issuer_serials]  # CAs are listed under certs too
+    return out
+
+
 async def scan(body: ExpiryRequest, session: SessionData, settings: Settings) -> AsyncIterator[dict]:
     """The scan, as a stream of events: {"progress": {...}} now and then, {"result": ExpiryOut} last.
     Vault errors are raised (as HTTPException) wherever they happen."""
@@ -248,6 +310,16 @@ async def scan(body: ExpiryRequest, session: SessionData, settings: Settings) ->
                                values=n_values, denied=tree.denied, truncated=tree.truncated, unreadable=unreadable))
 
         yield progress("done", total, total)
+
+    if body.include_pki:
+        seen: set[tuple[str, str | None]] = set()
+        for s, conn in zip(body.sides, conns):
+            if (conn.url, conn.namespace) in seen:  # the same Vault on both sides: scan its PKI once
+                continue
+            seen.add((conn.url, conn.namespace))
+            yield {"progress": {"side": s.side, "stage": "pki", "done": 0, "total": 0, "certificates": len(rows)}}
+            async with client_for(conn, settings) as v:
+                rows += await _pki_rows(v, s.side, conn.id)
 
     rows.sort(key=lambda r: (r.not_after, r.side, r.path, r.key))
     yield {"result": ExpiryOut(certificates=rows, locked=locked, sides=stats)}

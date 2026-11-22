@@ -32,6 +32,7 @@ from ..session import SessionData, load_session
 from ..vault import VaultError
 from .compare import FileSide, Side
 from .connections import client_for, get_connection, vault_http_error
+from .guard import require_writable
 from .sync import ApplyOut, Change, ChangePlan, _Ctx, apply_changes, evaluate
 
 router = APIRouter(tags=["exports"])
@@ -249,6 +250,7 @@ async def import_preview(body: ImportPreviewRequest, session: Sess, settings: Co
 
 @router.post("/api/import/apply", response_model=ApplyOut)
 async def import_apply(body: ImportApplyRequest, session: Sess, settings: Conf):
+    require_writable(settings)
     if not body.confirm:
         raise HTTPException(400, detail={"message": "Importing requires confirm=true"})
     prep = await asyncio.to_thread(ex.prepare, body.export, body.rules)

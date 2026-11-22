@@ -9,6 +9,7 @@ the browser (never imported).
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from pathlib import Path
@@ -36,6 +37,7 @@ def sign_in(page: Page, mount: str, prefix: str = "") -> None:
         api(page, "DELETE", f"/api/connections/{c['id']}")
     a = api(page, "POST", "/api/connections", {"preset_id": 0, "auth": {"method": "userpass", "username": "alice", "password": "password"}})
     b = api(page, "POST", "/api/connections", {"preset_id": 1, "auth": {"method": "userpass", "username": "alice", "password": "password"}})
+    page.evaluate("localStorage.setItem('lockstep.view', 'compare')")
     page.evaluate("s => localStorage.setItem('lockstep.sides', JSON.stringify(s))",
                   [{"connId": a["id"], "mount": mount, "prefix": prefix}, {"connId": b["id"], "mount": mount, "prefix": prefix}])
     page.reload()
@@ -255,6 +257,202 @@ def scenes(page: Page, theme: str) -> None:
     scroll_to(imp.locator(".transform-row").first, 80)
     shot(page, "17-import", theme)
     page.get_by_role("tab", name="Compare").click()
+
+    # 18. Explaining a policy on app-config: the matrix, a finding, and why one secret is denied.
+    sign_in(page, "app-config", "")
+    page.get_by_role("tab", name="Policies", exact=True).click()
+    page.get_by_role("tab", name="Paste a policy").click()
+    page.get_by_label("Name").fill("payments-dev")
+    page.get_by_label("Policy text").fill(
+        'path "app-config/metadata/*" { capabilities = ["list"] }\n'
+        'path "app-config/data/payments/*" { capabilities = ["read", "create", "update"] }\n'
+        'path "app-config/data/payments/api" { capabilities = ["deny"] }\n'
+        'path "app-config/data/+/prod/*" { capabilities = ["read"] }\n'
+        'path "app-config/frontend/*" { capabilities = ["read"] }\n')
+    page.get_by_role("button", name="Explain", exact=True).click()
+    page.get_by_role("button", name="Why: payments/api").click()
+    expect(page.locator(".why")).to_be_visible()
+    scroll_to(page.locator(".policy-sources"), 60)
+    shot(page, "18-policies", theme)
+
+    # 19. Policies compared across the two Vaults with a profile, side cards collapsed to summaries.
+    for side in ("left", "right"):
+        page.get_by_role("button", name=f"Collapse the {side} side").click()
+    page.get_by_role("tab", name="Compare across Vaults").click()
+    page.get_by_role("button", name="New profile…").click()
+    page.get_by_label("Name").fill("dev vs prod")
+    page.get_by_role("button", name="＋ Add mapping").click()
+    page.get_by_label("Mapping 1 left").fill("*-dev")
+    page.get_by_label("Mapping 1 right").fill("*-prod")
+    page.get_by_role("button", name="Hide rules").click()
+    page.get_by_role("button", name="Compare policies").click()
+    page.get_by_role("button", name="Everything").click()
+    pair = page.locator(".policy-pair", has_text="payments-dev")
+    pair.locator(".pair-head").click()
+    expect(pair.locator(".rule-diff")).to_be_visible()
+    page.evaluate("window.scrollTo(0, 0)")
+    shot(page, "19-policy-compare", theme)
+    page.get_by_role("tab", name="Explain on a mount").click()
+    for side in ("left", "right"):
+        page.get_by_role("button", name=f"Expand the {side} side").click()
+
+    # 21. Building policies: suggestions from the services/ layout, one added and its generated HCL.
+    sign_in(page, "app-config", "services")
+    for side in ("left", "right"):
+        page.get_by_role("button", name=f"Collapse the {side} side").click()
+    page.get_by_role("tab", name="Policies", exact=True).click()
+    page.get_by_role("tab", name="Build & suggest").click()
+    page.get_by_role("button", name="Suggest policies for app-config/services").click()
+    box = page.locator(".suggest-box")
+    expect(box).to_contain_text("billing-prod-app")
+    box.get_by_role("button", name="None").click()
+    for n in ("billing-developer", "billing-prod-app"):
+        box.locator("label", has_text=n).locator("input").check()
+    box.get_by_role("button", name="Add 2 to my policies").click()
+    expect(page.get_by_label("Generated HCL")).to_be_visible()
+    page.get_by_role("button", name="Suggest policies for app-config/services").click()
+    expect(page.locator(".suggest-box")).to_be_visible()
+    page.evaluate("window.scrollTo(0, 0)")
+    shot(page, "21-policy-build", theme)
+    page.locator(".suggest-box").get_by_role("button", name="Close suggestions").click()
+    page.get_by_role("tab", name="Explain on a mount").click()
+    for side in ("left", "right"):
+        page.get_by_role("button", name=f"Expand the {side} side").click()
+
+    # 22. Auth roles: the JWT role, its findings, and what it can do on app-config/payments.
+    sign_in(page, "app-config", "payments")
+    for side in ("left", "right"):
+        page.get_by_role("button", name=f"Collapse the {side} side").click()
+    page.get_by_role("tab", name="Policies", exact=True).click()
+    page.get_by_role("tab", name="Roles", exact=True).click()
+    page.get_by_label("Auth mount for roles").select_option("jwt")
+    editor = page.get_by_label("Role default")
+    editor.get_by_role("button", name="What can it do on app-config/payments?").click()
+    expect(page.locator(".policy-table")).to_be_visible()
+    page.evaluate("window.scrollTo(0, 0)")
+    shot(page, "22-roles", theme)
+    page.get_by_role("tab", name="Explain on a mount").click()
+    for side in ("left", "right"):
+        page.get_by_role("button", name=f"Expand the {side} side").click()
+
+    # 23. Configuration: the two dev Vaults' engines and auth methods compared.
+    sign_in(page, "app-config", "")
+    for side in ("left", "right"):
+        page.get_by_role("button", name=f"Collapse the {side} side").click()
+    page.get_by_role("tab", name="Configuration").click()
+    page.get_by_role("button", name="Compare configuration").click()
+    engines = page.get_by_role("region", name="Secrets engines")
+    expect(engines).to_be_visible()
+    first = page.locator(".config-section .policy-pair", has_text="Different").first
+    if first.count():
+        first.locator(".pair-head").click()
+    page.evaluate("window.scrollTo(0, 0)")
+    shot(page, "23-config", theme)
+    for side in ("left", "right"):
+        page.get_by_role("button", name=f"Expand the {side} side").click()
+
+    # 20. Browsing Vault A: the tree, a secret with one value shown and an edit waiting to be saved.
+    sign_in(page, "app-config", "")
+    for side in ("left", "right"):
+        page.get_by_role("button", name=f"Collapse the {side} side").click()
+    page.get_by_role("tab", name="Browse", exact=True).click()
+    nav = page.get_by_role("navigation", name="Secrets")
+    nav.get_by_role("button", name="payments/").click()
+    nav.get_by_role("button", name="services/").click()
+    nav.get_by_role("button", name="db", exact=True).first.click()
+    panel = page.locator(".secret-panel")
+    panel.locator("tr", has=page.locator("td.key", has_text="host")).get_by_role("button", name="Show").click()
+    panel.locator("tr", has=page.locator("td.key", has_text="port")).get_by_role("button", name="Edit").click()
+    panel.get_by_label("New value for port").fill("6432")
+    panel.get_by_role("button", name="Set value").click()
+    expect(panel.get_by_role("region", name="Unsaved changes")).to_be_visible()
+    page.evaluate("window.scrollTo(0, 0)")
+    shot(page, "20-browse", theme)
+    panel.get_by_role("region", name="Unsaved changes").get_by_role("button", name="Discard").click()
+    for side in ("left", "right"):
+        page.get_by_role("button", name=f"Expand the {side} side").click()
+    page.get_by_role("tab", name="Compare", exact=True).click()
+
+    tool_scenes(page, theme)
+
+
+def tool_scenes(page: Page, theme: str) -> None:
+    """Tools (Transit, database credentials, leases), PKI issuing and an access plan."""
+    def collapsed(mount: str = "app-config", prefix: str = "") -> None:
+        sign_in(page, mount, prefix)
+        for side in ("left", "right"):
+            page.get_by_role("button", name=f"Collapse the {side} side").click()
+
+    def done() -> None:
+        page.keyboard.press("Escape")
+        for side in ("left", "right"):
+            page.get_by_role("button", name=f"Expand the {side} side").click()
+        page.get_by_role("tab", name="Compare", exact=True).click()
+
+    # 24. The Transit playground: a value encrypted with app-key.
+    collapsed()
+    page.get_by_role("tab", name="Tools").click()
+    page.get_by_role("tab", name="Transit playground").click()
+    page.get_by_role("navigation", name="Keys").get_by_role("button", name="app-key").click()
+    op = page.get_by_label("Transit operation")
+    op.get_by_label("Input").fill("card ending 4242")
+    op.get_by_role("button", name="Encrypt", exact=True).click()
+    expect(op.get_by_label("Output")).to_contain_text("vault:v1:")
+    page.evaluate("window.scrollTo(0, 0)")
+    shot(page, "24-transit", theme)
+
+    # 25. Database credentials from the dev Postgres, password still masked.
+    page.get_by_role("tab", name="Database credentials").click()
+    db = page.get_by_role("region", name="Database credentials")
+    db.get_by_label("Database role").select_option("orders-readonly")
+    db.locator("details summary").click()
+    db.get_by_role("button", name="Generate credentials").click()
+    creds = page.get_by_role("region", name="Generated credentials")
+    expect(creds).to_contain_text("Valid for")
+    page.evaluate("window.scrollTo(0, 0)")
+    shot(page, "25-database", theme)
+    creds.get_by_role("button", name="Revoke now").click()
+    expect(creds).to_contain_text("Revoked")
+
+    # 26. Leases: the userpass logins, with expiry times.
+    page.get_by_role("tab", name="Leases").click()
+    leases = page.get_by_role("region", name="Leases")
+    leases.get_by_role("button", name="auth/").click()
+    leases.get_by_role("button", name="userpass/").click()
+    leases.get_by_role("button", name="login/").click()
+    leases.get_by_role("button", name="alice/").click()
+    expect(leases.locator("tbody tr").first).to_be_visible()
+    page.evaluate("window.scrollTo(0, 0)")
+    shot(page, "26-leases", theme)
+    done()
+
+    # 27. Issuing a development certificate from the pki-dev role.
+    collapsed()
+    page.get_by_role("tab", name="Certificate expiry").click()
+    page.locator(".pki-issue summary").click()
+    page.get_by_label("Common name").fill("orders.dev.internal")
+    page.get_by_label("Other names").fill("orders-api.dev.internal")
+    page.get_by_role("button", name="Issue certificate").click()
+    expect(page.get_by_role("region", name="Issued certificate")).to_contain_text("orders.dev.internal")
+    page.evaluate("window.scrollTo(0, 0)")
+    shot(page, "27-pki-issue", theme)
+    done()
+
+    # 28. An access plan made by someone without the rights, opened for review.
+    collapsed()
+    conns = api(page, "GET", "/api/connections")
+    plan = api(page, "POST", "/api/access/plans", {"conn_id": conns[0]["id"], "policies": [{
+        "name": "payments-dev", "text": 'path "app-config/data/payments/dev/*" {\n  capabilities = ["read", "create", "update"]\n}\n\n'
+                                        'path "app-config/metadata/payments/dev/*" {\n  capabilities = ["list", "read"]\n}\n'}]})
+    path = Path("/tmp/lockstep-access-plan.json")
+    path.write_text(json.dumps(plan))
+    page.get_by_role("tab", name="Policies", exact=True).click()
+    page.get_by_label("Open an access plan").set_input_files(str(path))
+    review = page.get_by_role("dialog", name="Write policies and roles")
+    expect(review.locator(".plan").first).to_be_visible()
+    shot(page, "28-access-plan", theme)
+    review.get_by_role("button", name="Cancel").click()
+    done()
 
 
 def main() -> None:

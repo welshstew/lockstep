@@ -21,9 +21,9 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from ..config import Settings, get_settings
-from ..session import PendingOidc, SessionData, load_session, save_session
+from ..session import PendingMfa, PendingOidc, SessionData, load_session, save_session
 from ..vault import VaultClient, VaultError
-from .connections import (ConnectionCreate, TokenAuth, add_connection, connection_from_token,
+from .connections import (ConnectionCreate, TokenAuth, add_connection, connection_from_token, mfa_constraints,
                           resolve_target, vault_http_error)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -116,6 +116,14 @@ async def oidc_callback(session: Sess, settings: Conf, state: str = Query(""), c
             auth = await v.oidc_callback(pending.mount, state, code, pending.nonce)
         except VaultError as e:
             return fail(f"Vault rejected the login: {e.message}")
+    constraints = mfa_constraints(auth)
+    if constraints is not None:  # login MFA: the browser asks for the second factor next
+        session.pending_mfa = PendingMfa(request_id=auth["mfa_requirement"]["mfa_request_id"], constraints=constraints,
+                                         url=pending.url, namespace=pending.namespace, name=pending.name,
+                                         preset_id=pending.preset_id, method="oidc", side=pending.side)
+        r = RedirectResponse(_back(settings, mfa="1", side=pending.side), status_code=303)
+        save_session(r, session, settings)
+        return r
     token = auth["client_token"]
     async with VaultClient(pending.url, settings, token=token, namespace=pending.namespace) as v:
         try:

@@ -41,6 +41,12 @@ maxTreeSecrets: 5000
 exportMode: any
 # Offer Destroy (every version and the metadata of a secret, no undo). Vault policies still apply.
 allowDestroy: true
+# Look-only: refuse every write from Lockstep (browsing, comparing, exports and policies still work)
+readOnly: false
+# Write ACL policies and auth roles from the Policies tab: on | off (off where Terraform owns them)
+policyApply: "on"
+# Offer Copy next to shown values in Browse
+allowClipboard: true
 
 vaultTls:
   verify: true
@@ -64,6 +70,24 @@ serviceAccount:
   annotations: {}
   # Mount the token only when Kubernetes auth needs it ("auto"), or force true/false.
   automountToken: auto
+
+# Shared suggestion patterns for the Policies tab's Build & suggest: what each level of a mount's
+# tree means and which policies to suggest for it (see `lockstep schema suggest-pattern`).
+policyPatterns: []
+#  - name: per app and environment
+#    layout: "{app}/{env}/**"
+#    policies:
+#      - name: "{app}-{env}-app"
+#        rules: [{where: "{app}/{env}/**", can: [read, history]}]
+#    compare: {pair: {env: [dev, prod]}}
+
+# Shared policy profiles for the Policies tab's Compare: pair policy names between two Vaults
+# (* patterns), rewrite the left policy's paths before comparing, and leave policies out.
+policyProfiles: []
+#  - name: dev vs prod
+#    mappings: [{left: "*-dev", right: "*-prod"}]
+#    rewrites: [{find: "/dev/", replace: "/prod/"}]
+#    ignore: [root, default]
 
 # Shared comparison profiles, offered read-only to every user (see docs/usage.md).
 # Patterns are globs over secret paths: * = one path segment, ** = any depth.

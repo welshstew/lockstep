@@ -37,6 +37,8 @@ def browser():
 def page(browser, request):
     """A fresh browser context per test: its own cookies (session) and local storage."""
     ctx = browser.new_context(viewport={"width": 1440, "height": 900})
+    # Browse is the default tab; most tests start from Compare (test_browse checks the default)
+    ctx.add_init_script("try { if (!localStorage.getItem('lockstep.view')) localStorage.setItem('lockstep.view', 'compare') } catch (e) {}")
     pg = ctx.new_page()
     pg.set_default_timeout(15_000)
     pg.goto(BASE)

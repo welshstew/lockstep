@@ -43,3 +43,33 @@ def test_expiry_dashboard(page):
     insp = page.locator("dialog.inspector")
     expect(insp.locator(".node-label").first).to_contain_text(re.compile("Java keystore"))
     assert page.locator("body").inner_text().count("changeit") == 0  # no values on the page
+
+
+def test_issue_a_development_certificate(page, sandbox, vault_a):
+    from conftest import choose_mount, sign_in_userpass
+    sign_in_userpass(page, "left", "alice", vault="Vault A")
+    choose_mount(page, "left", "app-config", sandbox)
+    page.get_by_role("tab", name="Certificate expiry").click()
+    page.locator(".pki-issue summary").click()
+    page.get_by_label("Common name").fill("api.dev.internal")
+    page.get_by_label("Other names").fill("www.dev.internal")
+    page.get_by_text("Also store it in").click()
+    page.get_by_role("button", name="Issue certificate").click()
+    issued = page.get_by_role("region", name="Issued certificate")
+    expect(issued).to_contain_text("api.dev.internal")
+    expect(issued).to_contain_text("Lockstep Dev Root CA")
+    expect(issued).to_contain_text(f"stored in app-config/{sandbox}/certs/api.dev.internal")
+    stored = vault_a.get("app-config", f"{sandbox}/certs/api.dev.internal")
+    assert stored["certificate"].startswith("-----BEGIN CERTIFICATE")
+
+
+def test_scan_includes_pki_issued_certificates(page, sandbox):
+    from conftest import choose_mount, sign_in_userpass
+    sign_in_userpass(page, "left", "alice", vault="Vault A")
+    choose_mount(page, "left", "app-config", sandbox)
+    page.get_by_role("tab", name="Certificate expiry").click()
+    page.get_by_text("Include PKI-issued certificates").click()
+    page.get_by_role("button", name="Scan for certificates").click()
+    table = page.locator(".expiry-table")
+    expect(table).to_contain_text("Lockstep Dev Root CA")
+    expect(table).to_contain_text("issuer/dev-root")

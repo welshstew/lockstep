@@ -37,6 +37,7 @@ from ..config import Settings, get_settings
 from ..session import Connection, SessionData, load_session
 from ..vault import VaultClient, VaultError
 from .compare import AnySide, Side, side_client, side_connection
+from .guard import require_writable
 
 router = APIRouter(prefix="/api/sync", tags=["sync"])
 audit = logging.getLogger("lockstep.audit")
@@ -389,6 +390,7 @@ async def preview(body: SyncRequest, session: Sess, settings: Conf):
 
 @router.post("/apply", response_model=ApplyOut)
 async def apply(body: ApplyRequest, session: Sess, settings: Conf):
+    require_writable(settings)
     if not body.confirm:
         raise HTTPException(400, detail={"message": "Applying changes requires confirm=true"})
     async with _Ctx(body, session, settings) as ctx:

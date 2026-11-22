@@ -77,6 +77,15 @@ vault auth tune -listing-visibility=unauth jwt
 
 Use `jwks_url` or `jwt_validation_pubkeys` instead of `oidc_discovery_url` if your issuer doesn't publish OIDC discovery. For CI tokens, bind the role to the claims that identify the pipeline (`bound_claims`), not just the audience.
 
+## Login MFA
+
+If a Vault enforces login MFA (an MFA method with a login enforcement on the auth method), the sign-in doesn't finish straight away: Vault returns an MFA request instead of a token.
+
+- **Passcodes** (TOTP authenticator apps): Lockstep asks for the passcode, then sends it to Vault (`sys/mfa/validate`).
+- **Push methods** (Duo, Okta, PingID): Lockstep tells you to approve the request on your device, then finishes the sign-in.
+
+This works for username, LDAP, JWT and OIDC sign-ins; after an OIDC redirect, the prompt appears at the top of the page. The half-finished sign-in is kept in the encrypted session cookie for at most five minutes, and a wrong passcode can be tried again within that time. On the command line, see [Logging in](cli.md#logging-in).
+
 ## Kubernetes service account
 
 When the tool runs in Kubernetes, it can sign in to a Vault **as its own pod's service account**, through Vault's `kubernetes` auth method. You choose the **mount path** (default `kubernetes`) and the **role name** for each Vault login.

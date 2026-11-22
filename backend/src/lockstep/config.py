@@ -9,6 +9,8 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from .policy.compare import PolicyProfile
+from .policy.suggest import SuggestPattern
 from .rules import Profile
 
 
@@ -37,10 +39,21 @@ class Settings(BaseSettings):
     # Destroying secrets (every version and the metadata, can't be undone) from the compare view.
     # Vault's policies still decide who may; this turns the feature off for everyone.
     allow_destroy: bool = True
+    # Writing ACL policies and auth roles from the Policies tab: "on", or "off" where Terraform (or
+    # another source of truth) owns them. Building and exporting for an admin always works.
+    policy_apply: Literal["on", "off"] = "on"
+    # Refuse every write (copies, edits, imports, plan applies, destroys): for look-only installs
+    read_only: bool = False
+    # Offer a Copy button next to shown values (an admin may prefer not to)
+    allow_clipboard: bool = True
     # Optional notice shown at the top of the UI (e.g. for a public demo)
     demo_banner: str = ""
     # Shared comparison profiles (JSON list), offered read-only to every user
     profiles: Annotated[list[Profile], NoDecode] = []
+    # Shared policy profiles (JSON list): how to pair and rewrite policies between two Vaults
+    policy_profiles: Annotated[list[PolicyProfile], NoDecode] = []
+    # Shared suggestion patterns (JSON list): how to suggest policies from a mount's layout
+    policy_patterns: Annotated[list[SuggestPattern], NoDecode] = []
 
     # Kubernetes auth: log in to Vault as the pod's own service account. Off by default,
     # because anyone who can open the UI then gets that service account's Vault access.
@@ -60,7 +73,7 @@ class Settings(BaseSettings):
     vault_ca_bundle: str | None = None  # path to a CA bundle for talking to Vault
     static_dir: str | None = None  # built SPA, served at /
 
-    @field_validator("profiles", mode="before")
+    @field_validator("profiles", "policy_profiles", "policy_patterns", mode="before")
     @classmethod
     def _parse_profiles(cls, v):
         return json.loads(v) if isinstance(v, str) else v

@@ -5,6 +5,81 @@ the image, the Helm chart and the app share one version.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-22
+
+### Added
+
+- **Browse:** a new first tab, and the one Lockstep opens on, for exploring one side's KV v2 mount. It has:
+  - a lazily loaded folder tree with permission marks, find by name, go to path and shareable links;
+  - masked values with **Show**, **Copy** and **Inspect**, and per-key "last changed";
+  - versions, with diffs, roll back, delete, undelete and destroy, and metadata.
+
+  Edits (change, add and delete keys, new secrets) save after an inline confirmation, or collect with **Stage changes** for one review. Every write uses check-and-set and is audit-logged without values. `GET/POST /api/browse/…`. See the [proposal](docs/proposals/browse.md).
+- **Read-only mode:** `LOCKSTEP_READ_ONLY=true` (chart value `readOnly`) hides and refuses every write.
+- `LOCKSTEP_ALLOW_CLIPBOARD=false` (chart value `allowClipboard`) removes Browse's **Copy** button.
+- **Proposal:** [Browse](docs/proposals/browse.md).
+- **Browse, more of KV v2:**
+  - who wrote (and deleted) each version;
+  - **Edit metadata** (max versions, require check-and-set, delete versions after, custom metadata), checked against what you loaded;
+  - **Share once**: values in a one-time Vault wrapping token, with **Open a shared token…** to read one;
+  - **Snippets**: `vault kv`, `curl` and Terraform for a secret or your unsaved changes;
+  - **Generate** a random value;
+  - a light/dark/system theme switch.
+
+  `POST /api/browse/metadata`, `/share`, `/unwrap`. Wave 1 of the [gap analysis](docs/proposals/vault-ui-gap-analysis.md).
+- **Auth roles (Kubernetes, JWT/OIDC):** the Policies tab's **Roles**:
+  - list a mount's roles in plain terms, with findings (unbound JWT roles, `*` service accounts or namespaces, no audience, plain-HTTP redirects, missing policies, long TTLs);
+  - explain what a role's policies allow on a mount;
+  - find which roles grant a policy;
+  - compare roles across Vaults (with policy profiles);
+  - build new ones from templates (Kubernetes, GitLab CI, GitHub Actions, Kubernetes via JWT, OIDC group).
+
+  Roles join the admin bundle: `roles/<mount>/<name>.json`, `apply.sh`, and Terraform/OpenTofu resources with `import` blocks. `/api/roles/…`. Phase 4 of the [policy builder](docs/proposals/policy-builder.md).
+- **Write policies and roles from Lockstep:** write built policies and roles, copy a policy to the other Vault from **Compare across Vaults** (with the profile's rewrites), and delete policies and roles after a typed confirmation. A review shows each item as new, change (with a diff against Vault), same or delete, with permission checks and a warning when you change a policy you hold yourself. Each item is re-read and skipped if it changed since the review. `root` and `default` are protected. Audit-logged with hashes. `POST /api/access/preview` and `/apply`; `LOCKSTEP_POLICY_APPLY=off` (chart value `policyApply`) turns writing off. Phase 5 of the [policy builder](docs/proposals/policy-builder.md).
+- **Configuration drift across Vaults:** a new **Configuration** tab (and `lockstep config compare` for CI, with diff-style exit codes) compares two Vaults side by side:
+  - an overview: version, seal, storage, HA and replication;
+  - every secrets engine and auth method, field by field: type, plugin version, tuning, options, and auth method configuration with sensitive fields left out.
+
+  Read-only. `GET /api/config/overview`, `POST /api/config/compare`. Wave 2 of the [gap analysis](docs/proposals/vault-ui-gap-analysis.md).
+- **Login MFA:** signing in to a Vault that enforces login MFA now works. Lockstep asks for the passcode (TOTP), or waits for push approval (Duo, Okta, PingID), for username, LDAP, JWT and OIDC sign-ins. The CLI reads `LOCKSTEP_<SIDE>_MFA_CODE` or asks in a terminal. `GET/POST /api/connections/mfa`. Before this, such Vaults couldn't be used at all.
+- **Browse, limited access and YAML:** key names through `subkeys/` when values can't be read; edits sent as a patch (`PATCH`, check-and-set) when you have `patch` but not `update` or `read`; a YAML view of the secret, with values masked unless shown.
+- **Explain someone else, identity groups:** Explain works for an entity, an identity group or a token (by accessor). It combines their own, their groups' and parent groups' policies, shows where each came from, and names the rights you're missing. Identity groups are listed (policies, members), explained, compared across Vaults, and included in "which roles grant policy…". `GET /api/identity/groups`, `POST /api/identity/compare-groups`, `identity` in `/api/policies/explain`. Part of phase 6 of the [policy builder](docs/proposals/policy-builder.md).
+- **AppRole:** AppRole roles join the Roles view, with these warnings:
+  - no secret ID;
+  - secret IDs that never expire;
+  - unlimited uses from anywhere.
+
+  They also join compare, the templates (a CI pipeline or app), the admin bundle (`vault_approle_auth_backend_role`) and writing. **Issue a secret ID…** hands one over wrapped in a one-time token, with the role ID. `POST /api/roles/secret-id`.
+- **Issue development certificates:** **Certificate expiry → Issue a development certificate** issues one from a PKI role and shows the issuer, names and validity. It downloads the certificate, key and chain, or stores them in a new KV secret. Audit-logged with the serial, never the key. `/api/pki/mounts`, `/overview`, `/issue`. The dev stack has a `pki-dev` engine to try it. Wave 4 of the [gap analysis](docs/proposals/vault-ui-gap-analysis.md).
+- **Tools tab, Transit playground:** encrypt, decrypt, rewrap, sign, verify and HMAC with a Transit key, with your own sign-in, and see each key's settings. `/api/transit/mounts`, `/keys`, `/run`. The dev stack seeds `transit/` keys. Wave 4 of the [gap analysis](docs/proposals/vault-ui-gap-analysis.md).
+- **Certificate expiry: PKI-issued certificates.** **Include PKI-issued certificates** adds every non-revoked certificate the Vaults' PKI engines issued, and their issuing CAs, to the dashboard (`"include_pki": true`).
+- **Tools → Leases:** browse leases by path with issue and expiry times, renew one, or revoke selected leases after a typed confirmation. Audit-logged. Works around the `default` policy hiding the top of the lease tree. `/api/leases`, `/lookup`, `/renew`, `/revoke`.
+- **Tools → Database credentials:** a database engine's connections and roles (read-only), and short-lived credentials generated from a dynamic role. They stay masked until shown and can be revoked straight away. Audit-logged without the password. `/api/database/mounts`, `/overview`, `/creds`. The dev stack adds a PostgreSQL container (Red Hat Hardened Image).
+- **Configuration: engine roles and keys.** For engines both Vaults have, their roles and keys are compared too: PKI roles; database connections, roles and static roles; Transit key settings; SSH, Kubernetes and AWS roles. Secrets and self-changing values are left out. In the tab, `engines` in `/api/config/compare`, and `lockstep config compare`. The dev seed gives Vault B's Transit `app-key` some drift.
+- **Access plans:** **Save as access plan** writes policy and role changes to a signed file for someone with the rights. They open it in **Policies → Open an access plan…**, review it with diffs against Vault now (changes since are skipped) and apply it. Audit-logged with the plan ID. `/api/access/plans`, `/check`, `/apply`.
+- **Public demo:** a PostgreSQL container behind Vault A's database engine (its password generated into the server's `.env`), so **Tools → Database credentials** works on the demo. Leases, PKI issuing and the Transit playground work there too; the hourly reset revokes what visitors create.
+- **Screenshots** of the Tools tab (Transit, database credentials, leases), issuing a development certificate and an access plan, in the README and usage guide.
+- **Analysis:** [Lockstep and the Vault web UI](docs/proposals/vault-ui-gap-analysis.md): what the Vault UI does that Lockstep doesn't, and a proposal for which gaps to fill and in what order.
+- **Build and suggest policies:** the Policies tab's **Build & suggest** writes policies as "who can do what, where" (see names, read, write, delete, destroy, history on a folder or secret) and generates the right KV v2 paths, with a live preview on a real mount. It also suggests policies from the layout: it detects `<app>/<env>/…` and proposes developer, per-app-per-environment, read-only and admin policies, with the reason. Your own suggestion patterns (YAML/JSON, `LOCKSTEP_POLICY_PATTERNS` / chart `policyPatterns` to share them) can also produce the policy profile for comparing two environments. **Download for an admin** makes a zip with:
+  - one `.hcl` file per policy and a README;
+  - `apply.sh`, which diffs against Vault and has `--dry-run`;
+  - optionally Terraform or OpenTofu, with a pinned `hashicorp/vault` provider and `import` blocks for policies that already exist.
+
+  CLI: `lockstep policy suggest`, `lockstep policy export`, `lockstep schema suggest-pattern`. Phase 3 of the [policy builder](docs/proposals/policy-builder.md).
+- **Compare policies across Vaults:** the Policies tab's **Compare across Vaults** compares every ACL policy on two Vaults by meaning (comments, whitespace, order and how capabilities are listed don't count), shows the paths whose capabilities differ and both texts, and compares what a pair allows on each side's mount, secret by secret. **Policy profiles** pair names (`*-dev` ⇄ `*-prod`), rewrite paths before comparing and leave policies out; keep your own in the browser (import and export as JSON) or share them with `LOCKSTEP_POLICY_PROFILES` (chart value `policyProfiles`). `lockstep policy compare` does the same in CI, with diff-style exit codes. Phase 2 of the [policy builder](docs/proposals/policy-builder.md).
+- **Collapsible sides:** each side card collapses to one line with the signed-in account, sign-in method, Vault and namespace, policies, token expiry, and mount and prefix.
+- **Policies tab (explain):** see what Vault ACL policies allow on every secret of a KV v2 mount, as plain columns (see names, read, write, delete, destroy, history), with the rule, policy and line behind each answer. Explain your own token's policies (falling back to `sys/capabilities-self` when you may not read them), policies by name, or a pasted policy. Findings flag mistakes Vault would refuse, KV v2 paths without `data/`/`metadata/`, literal wildcards, risky grants and unused rules, and the rights your sign-in is missing. Path matching follows Vault's own priority rules and is tested against Vault. `lockstep policy explain` does the same on the command line; `POST /api/policies/explain`. This is phase 1 of the [policy builder](docs/proposals/policy-builder.md).
+- **Proposal:** [policy builder](docs/proposals/policy-builder.md): explain, build, suggest, compare and apply Vault policies and Kubernetes / JWT/OIDC roles, or export them for an admin. Not implemented; written down for discussion.
+
+### Fixed
+
+- **Policy matching follows Vault 2.2.2.** Vault 2.2.2 changed how ACL rules match:
+  - exact rules ignore a trailing slash;
+  - a list request weighs rules for both slash forms, with denies first;
+  - `deny` rules also apply whatever the case.
+
+  Lockstep's Explain and Compare access now read each Vault's version and match the way that version does, and say which rules they used. The tests compare Lockstep's answers with Vault's own on hundreds of random policies, against both the dev stack's Vault (1.21) and the latest release (2.2.2, a new `vault-latest` service in the test profile).
+
 ## [0.6.0] - 2026-11-20
 
 ### Added
@@ -84,6 +159,7 @@ First public release.
 - **Helm chart:** hardened defaults, session key kept across upgrades, Ingress, NetworkPolicy, PodDisruptionBudget, Kubernetes auth, shared profiles; validated by a schema and tested in k3s.
 - Runs on Red Hat Hardened Images (distroless, non-root). Every change is scanned (CVEs, secrets, misconfigurations, base image signatures) and tested end to end in a browser.
 
+[0.7.0]: https://github.com/welshstew/lockstep/releases/tag/v0.7.0
 [0.6.0]: https://github.com/welshstew/lockstep/releases/tag/v0.6.0
 [0.5.0]: https://github.com/welshstew/lockstep/releases/tag/v0.5.0
 [0.4.0]: https://github.com/welshstew/lockstep/releases/tag/v0.4.0

@@ -39,6 +39,7 @@ interface Props {
   /** Destroy this secret on one side (opens a confirmation) */
   onDestroy?: (side: Side) => void;
   canDestroy?: { left: boolean; right: boolean };
+  readOnly?: boolean;
 }
 
 type Values = Record<string, unknown> | null;
@@ -178,14 +179,14 @@ function StagedCell({ side, kind, value, reveal, onEdit, onUndo }: {
   );
 }
 
-export function SecretRow({ secret, left, right, reveal, open, onToggle, changeset, onChangeset, onInspect, sideNames, ignoreMode, draft, onDraft, fileDocs, onDestroy, canDestroy }: Props) {
+export function SecretRow({ secret, left, right, reveal, open, onToggle, changeset, onChangeset, onInspect, sideNames, ignoreMode, draft, onDraft, fileDocs, onDestroy, canDestroy, readOnly }: Props) {
   // An export file side is read-only and has no history; its values are in the opened file.
   const isFile = { left: left.kind === "file", right: right.kind === "file" };
   const fileData = (s: SideSummary, path: string) => {
     const d = fileDocs?.[s === left ? "left" : "right"];
     return d?.secrets.find((x) => x.path === path)?.data ?? null;
   };
-  const copyable = (d: Direction) => !isFile[d === "left_to_right" ? "right" : "left"];
+  const copyable = (d: Direction) => !readOnly && !isFile[d === "left_to_right" ? "right" : "left"];
   const [values, setValues] = useState<{ left: Values; right: Values } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<{ left: KeyHistory | null; right: KeyHistory | null } | null>(null);
@@ -236,7 +237,7 @@ export function SecretRow({ secret, left, right, reveal, open, onToggle, changes
                loc: { conn_id: s.conn_id, mount: s.mount, path: fullPath(s, sidePath(secret, side)), key: k.key } };
     });
   const copied = (key: string, side: Side) => isKeyStaged(changeset, secret.path, key, side === "right" ? "left_to_right" : "right_to_left");
-  const editable = (side: Side) => canOverride(secret, side) && !isFile[side];
+  const editable = (side: Side) => !readOnly && canOverride(secret, side) && !isFile[side];
   const copySecret = (d: Direction) => copyable(d) && canCopySecret(secret, d);
   const overridden = { left: overridesFor(changeset, secret.path, "left"), right: overridesFor(changeset, secret.path, "right") };
   const known = new Set(secret.keys.map((k) => k.key));

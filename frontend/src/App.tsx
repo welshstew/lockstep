@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, type SideRef } from "./api";
 import { ExpiryView, type ScanTarget } from "./components/ExpiryView";
+import { PoliciesView } from "./components/PoliciesView";
+import { ConfigView } from "./components/ConfigView";
+import { ToolsView } from "./components/ToolsView";
+import { MfaPrompt } from "./components/MfaPrompt";
+import { applyTheme, loadTheme, type Theme } from "./theme";
+import { type BrowseTarget, BrowseView } from "./components/BrowseView";
 import { PlansView } from "./components/PlansView";
 import { Results } from "./components/Results";
 import { type InspectTarget, Inspector, type TrustCandidate } from "./components/Inspector";
@@ -13,7 +19,7 @@ import {
 import { type Changeset, changesetSize } from "./staging";
 import { SideCard } from "./components/SideCard";
 import { TransferView } from "./components/TransferView";
-import type { AppConfig, CompareResult, Connection, LoadedFile, Profile, ProfileRules, SideSelection } from "./types";
+import type { AppConfig, CompareResult, Connection, LoadedFile, MfaConstraint, Profile, ProfileRules, SideSelection } from "./types";
 
 const EMPTY: SideSelection = { connId: null, mount: null, prefix: "" };
 const STORE_KEY = "lockstep.sides";
@@ -55,18 +61,30 @@ export function App() {
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [connections, setConnections] = useState<Connection[]>([]);
   const [sides, setSides] = useState<[SideSelection, SideSelection]>(loadSides);
+  // A Browse link to another mount than the side has chosen: switch the side to it
+  useEffect(() => {
+    const m = /^#\/browse\/(left|right)\/([^/]+)\//.exec(window.location.hash);
+    if (!m) return;
+    const i = m[1] === "left" ? 0 : 1;
+    const mount = decodeURIComponent(m[2]);
+    setSides((prev) => (prev[i].connId && prev[i].mount !== mount
+      ? prev.map((s, j) => (j === i ? { ...s, mount, prefix: "" } : s)) as typeof prev : prev));
+  }, []);
   const [result, setResult] = useState<CompareResult | null>(null);
   const [comparing, setComparing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reveal, setReveal] = useState(false);
+  const [oidcMfa, setOidcMfa] = useState<{ constraints: MfaConstraint[]; side: string | null } | null>(null);
+  const [theme, setTheme] = useState<Theme>(loadTheme);
   const [changeset, setChangeset] = useState<Changeset>({});
   const [reviewing, setReviewing] = useState(false);
   const [inspecting, setInspecting] = useState<InspectTarget[] | null>(null);
-  const [view, setView] = useState<"compare" | "expiry" | "plans" | "transfer">(() => {
+  const [view, setView] = useState<"browse" | "compare" | "expiry" | "plans" | "transfer" | "policies" | "config" | "tools">(() => {
+    if (window.location.hash.startsWith("#/browse/")) return "browse";
     try {
       const v = localStorage.getItem("lockstep.view");
-      return v === "expiry" || v === "plans" || v === "transfer" ? v : "compare";
-    } catch { return "compare"; }
+      return v === "compare" || v === "expiry" || v === "plans" || v === "transfer" || v === "policies" || v === "config" || v === "tools" ? v : "browse";
+    } catch { return "browse"; }
   });
   // Export files opened in this page: in memory only (they hold values), gone on reload
   const [files, setFiles] = useState<LoadedFile[]>([]);
@@ -131,7 +149,9 @@ export function App() {
     const oidcConn = q.get("oidc") === "ok" ? q.get("conn") : null;
     const oidcSide = q.get("side");
     if (q.get("oidc_error")) setError(`OIDC login failed: ${q.get("oidc_error")}`);
-    if (q.has("oidc") || q.has("oidc_error")) window.history.replaceState(null, "", window.location.pathname);
+    const mfaSide = q.get("mfa") === "1" ? q.get("side") : null;
+    if (q.has("oidc") || q.has("oidc_error") || q.has("mfa")) window.history.replaceState(null, "", window.location.pathname);
+    if (mfaSide !== null) api.pendingMfa().then((p) => setOidcMfa({ constraints: p.constraints, side: p.side })).catch((e) => setError(e.message));
 
     Promise.all([api.config().then(setConfig), refresh()])
       .then(() => {
@@ -195,6 +215,11 @@ export function App() {
       <header className="topbar">
         <div className="brand"><span className="brand-mark"><i /><i /></span> Lockstep <span className="brand-sub">compatible with HashiCorp Vault</span></div>
         <div className="spacer" />
+        <label className="theme-switch subtle" title="Colour theme">
+          <select aria-label="Theme" value={theme} onChange={(e) => { const t = e.target.value as Theme; setTheme(t); applyTheme(t); }}>
+            <option value="system">System theme</option><option value="light">Light</option><option value="dark">Dark</option>
+          </select>
+        </label>
         <label className="toggle" title="Values are always compared on the server. This only controls whether they are shown.">
           <input type="checkbox" checked={reveal} onChange={(e) => setReveal(e.target.checked)} />
           <span className="track" />
@@ -217,24 +242,62 @@ export function App() {
       </div>
 
       <nav className="tabs" role="tablist" aria-label="View">
+        <button type="button" role="tab" aria-selected={view === "browse"} onClick={() => setView("browse")}>Browse</button>
         <button type="button" role="tab" aria-selected={view === "compare"} onClick={() => setView("compare")}>Compare</button>
         <button type="button" role="tab" aria-selected={view === "expiry"} onClick={() => setView("expiry")}>Certificate expiry</button>
         <button type="button" role="tab" aria-selected={view === "plans"} onClick={() => setView("plans")}>Sync plans</button>
         <button type="button" role="tab" aria-selected={view === "transfer"} onClick={() => setView("transfer")}>Export &amp; import</button>
+        <button type="button" role="tab" aria-selected={view === "policies"} onClick={() => setView("policies")}>Policies</button>
+        <button type="button" role="tab" aria-selected={view === "config"} onClick={() => setView("config")}>Configuration</button>
+        <button type="button" role="tab" aria-selected={view === "tools"} onClick={() => setView("tools")}>Tools</button>
       </nav>
 
-      {view === "transfer" ? (
+      {view === "tools" ? (
+        <ToolsView sides={Object.fromEntries(sides.flatMap((s, i) => {
+          const c = !s.fileId && connections.find((x) => x.id === s.connId);
+          return c ? [[i === 0 ? "left" : "right", { conn_id: c.id, label: c.name }]] : [];
+        }))} readOnly={!!config.read_only} allowClipboard={config.allow_clipboard !== false} />
+      ) : view === "config" ? (
+        <ConfigView sides={Object.fromEntries(sides.flatMap((s, i) => {
+          const c = !s.fileId && connections.find((x) => x.id === s.connId);
+          return c ? [[i === 0 ? "left" : "right", { conn_id: c.id, label: c.name }]] : [];
+        }))} />
+      ) : view === "browse" ? (
+        <BrowseView config={config} reveal={reveal} onInspect={setInspecting}
+          targets={sides.flatMap((s, i): BrowseTarget[] => (s.connId && s.mount && !s.fileId
+            ? [{ side: i === 0 ? "left" : "right", conn_id: s.connId, mount: s.mount, prefix: s.prefix, label: label(s),
+                 url: connections.find((c) => c.id === s.connId)?.url
+                   ?? config.presets.find((p) => p.id === connections.find((c) => c.id === s.connId)?.preset_id)?.browser_url }] : []))}
+          onGo={(to, side, folder) => {
+            const i = side === "left" ? 0 : 1;
+            setSides((prev) => prev.map((s, j) => (j === i ? { ...s, prefix: folder } : s)) as typeof prev);
+            setResult(null);
+            setChangeset({});
+            if (to === "policies") {
+              try { localStorage.setItem("lockstep.policyMode", "explain"); localStorage.setItem("lockstep.policySource", "token"); } catch { /* ignore */ }
+            }
+            setView(to);
+          }} />
+      ) : view === "policies" ? (
+        <PoliciesView canApply={!!config.policy_apply}
+          targets={sides.flatMap((s, i): ScanTarget[] => (s.connId && s.mount && !s.fileId
+            ? [{ side: i === 0 ? "left" : "right", conn_id: s.connId, mount: s.mount, prefix: s.prefix, label: label(s) }] : []))}
+          sides={Object.fromEntries(sides.flatMap((s, i) => {
+            const c = !s.fileId && connections.find((x) => x.id === s.connId);
+            return c ? [[i === 0 ? "left" : "right", { conn_id: c.id, label: c.name }]] : [];
+          }))} />
+      ) : view === "transfer" ? (
         <TransferView config={config} reveal={reveal} files={files} onFile={addFile}
                       sides={sides.map((s, i) => ({ side: i === 0 ? "left" as const : "right" as const, label: label(s),
                         ref: s.connId && s.mount && !s.fileId ? { conn_id: s.connId, mount: s.mount, prefix: s.prefix } : null }))}
                       profiles={[...sharedProfiles, ...personal]} />
       ) : view === "plans" ? (
-        <PlansView connections={connections} leftConnId={sides[0].connId} rightConnId={sides[1].connId} />
+        <PlansView connections={connections} leftConnId={sides[0].connId} rightConnId={sides[1].connId} readOnly={!!config.read_only} />
       ) : view === "expiry" ? (
         <ExpiryView
           targets={sides.flatMap((s, i): ScanTarget[] => (s.connId && s.mount
             ? [{ side: i === 0 ? "left" : "right", conn_id: s.connId, mount: s.mount, prefix: s.prefix, label: label(s) }] : []))}
-          onInspect={setInspecting} />
+          onInspect={setInspecting} readOnly={!!config.read_only} />
       ) : (<>
       <ProfileBar
         shared={sharedProfiles} personal={personal} active={activeProfile ? activeRef : null}
@@ -319,6 +382,23 @@ export function App() {
       )}
 
       {error && <div className="notice error" role="alert">{error}</div>}
+      {oidcMfa && (
+        <div className="card mfa-card">
+          <MfaPrompt constraints={oidcMfa.constraints} onCancel={() => setOidcMfa(null)} onDone={(c) => {
+            const side = oidcMfa.side;
+            setOidcMfa(null);
+            refresh().then(() => {
+              if (side === "left" || side === "right") {
+                setSides((prev) => {
+                  const next: [SideSelection, SideSelection] = [prev[0], prev[1]];
+                  next[side === "left" ? 0 : 1] = { connId: c.id, mount: null, prefix: "" };
+                  return next;
+                });
+              }
+            });
+          }} />
+        </div>
+      )}
       {result && (activeProfile || draftRules > 0) && (
         <div className="notice info profile-effect">
           {activeProfile ? <>Profile <strong>{activeProfile.name}</strong>{draftRules > 0 && " plus unsaved rules"}</> : "Unsaved rules"}: {result.summary.mapped ?? 0} pair{result.summary.mapped === 1 ? "" : "s"} matched by a mapping
@@ -329,7 +409,7 @@ export function App() {
       {result && <Results result={result} reveal={reveal} leftLabel={label(sides[0])} rightLabel={label(sides[1])}
                           fileDocs={{ left: fileOf(sides[0])?.doc, right: fileOf(sides[1])?.doc }}
                           changeset={changeset} onChangeset={setChangeset} onInspect={setInspecting}
-                          ignoreMode={ignoreMode} draft={draft} onDraft={setDraft}
+                          ignoreMode={ignoreMode} draft={draft} onDraft={setDraft} readOnly={!!config.read_only}
                           destroy={config.allow_destroy === false ? undefined : {
                             left: vaultRef(sides[0]), right: vaultRef(sides[1]), onDone: () => runCompare(),
                           }} />}

@@ -2,8 +2,8 @@ apiVersion: v2
 name: lockstep
 description: Compare, inspect and sync KV secrets across HashiCorp Vault clusters.
 type: application
-version: 0.6.0
-appVersion: "0.6.0"
+version: 0.7.0
+appVersion: "0.7.0"
 kubeVersion: ">=1.27.0-0"
 keywords: [vault, hashicorp-vault, secrets, kv, compare, sync, certificates]
 icon: https://getlockstep.cloud/icon.svg
@@ -17,16 +17,26 @@ annotations:
   # The image this chart version runs: update with every release (scripts/check-version.sh checks it)
   artifacthub.io/images: |
     - name: lockstep
-      image: ghcr.io/welshstew/lockstep:0.6.0
+      image: ghcr.io/welshstew/lockstep:0.7.0
       platforms: [linux/amd64, linux/arm64]
   # What changed in this chart version, shown on Artifact Hub: rewrite for every release
   artifacthub.io/changes: |
     - kind: added
-      description: Destroy a secret, or every secret shown on one side, permanently after typing a confirmation phrase
+      description: Browse tab (the default): explore one Vault's KV v2 mount, edit with check-and-set, versions, metadata, share once, snippets
     - kind: added
-      description: New allowDestroy value (LOCKSTEP_ALLOW_DESTROY) turns destroying off for everyone
+      description: Policies: explain, build, suggest, compare across Vaults, and apply from Lockstep, with saved access plans
+    - kind: added
+      description: Auth roles: Kubernetes, JWT/OIDC and AppRole roles explained, built, compared and applied
+    - kind: added
+      description: Configuration tab: two Vaults' engines, auth methods, and engine roles and keys compared
+    - kind: added
+      description: Tools tab: Transit playground, database credentials and leases; issue development certificates from PKI
+    - kind: added
+      description: Login MFA for Vaults that enforce it
+    - kind: added
+      description: New values readOnly, allowClipboard, policyApply, policyProfiles and policyPatterns
     - kind: fixed
-      description: Removing every key of a secret soft-deletes its latest version instead of writing an empty one
+      description: Policy matching follows Vault 2.2.2's rules on Vault 2.2.2 and later
   artifacthub.io/links: |
     - name: Website
       url: https://getlockstep.cloud

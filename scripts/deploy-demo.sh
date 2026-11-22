@@ -49,6 +49,10 @@ if ! grep -q '^STATS_HASH=' .env; then
   { echo "STATS_USER=stats"; echo "STATS_PASSWORD=$pw"; echo "STATS_HASH='$hash'"; } >> .env
   echo "added a password for /stats to $DIR/.env (STATS_PASSWORD)"
 fi
+if ! grep -q '^POSTGRES_PASSWORD=' .env; then
+  echo "POSTGRES_PASSWORD=$(rand)" >> .env
+  echo "added a password for the demo Postgres to $DIR/.env"
+fi
 set -a; . ./.env; set +a
 # Dex doesn't expand environment variables in its config, so render it here.
 sed -e "s|\${LOGIN_HOST}|$LOGIN_HOST|g" -e "s|\${DEMO_HOST}|$DEMO_HOST|g" \

@@ -30,6 +30,8 @@ interface Props {
   fileDocs?: { left?: ExportDoc; right?: ExportDoc };
   /** Destroying secrets: each Vault side (not an export file), and what to do afterwards */
   destroy?: { left?: VaultSide; right?: VaultSide; onDone: () => void };
+  /** A read-only server: no copies, edits or deletes */
+  readOnly?: boolean;
 }
 
 const pathOn = (x: SecretDiff, side: Side) => (side === "left" ? x.left_path : x.right_path) || x.path;
@@ -67,7 +69,7 @@ function BulkCopy({ secrets, changeset, onChangeset, sides, what }: {
   return <span className="bulk-copy">{button("right_to_left")}{button("left_to_right")}</span>;
 }
 
-export function Results({ result, reveal, leftLabel, rightLabel, changeset, onChangeset, onInspect, ignoreMode, draft, onDraft, fileDocs, destroy }: Props) {
+export function Results({ result, reveal, leftLabel, rightLabel, changeset, onChangeset, onInspect, ignoreMode, draft, onDraft, fileDocs, destroy, readOnly }: Props) {
   const [destroying, setDestroying] = useState<{ side: Side; secrets: DestroyTarget[] } | null>(null);
   const [filter, setFilter] = useState<Filter>("changes");
   const [query, setQuery] = useState("");
@@ -77,7 +79,7 @@ export function Results({ result, reveal, leftLabel, rightLabel, changeset, onCh
   const [folded, setFolded] = useState<Set<string>>(new Set()); // collapsed group headers
   const s = result.summary;
   const changes = CHANGE_STATUSES.reduce((n, st) => n + s[st], 0);
-  const writable = { left: result.left.kind !== "file", right: result.right.kind !== "file" };
+  const writable = { left: !readOnly && result.left.kind !== "file", right: !readOnly && result.right.kind !== "file" };
 
   const setGrouping = (g: Grouping) => {
     setGroupingState(g);
@@ -144,7 +146,7 @@ export function Results({ result, reveal, leftLabel, rightLabel, changeset, onCh
                sideNames={{ left: leftLabel, right: rightLabel }}
                ignoreMode={ignoreMode} draft={draft} onDraft={onDraft} fileDocs={fileDocs}
                onDestroy={destroy && ((side) => setDestroying({ side, secrets: [targetOf(x, side)] }))}
-               canDestroy={{ left: !!destroy?.left, right: !!destroy?.right }} />
+               canDestroy={{ left: !!destroy?.left, right: !!destroy?.right }} readOnly={readOnly} />
   );
   const destroyAll = (side: Side) => {
     if (!destroy?.[side]) return null;

@@ -1,4 +1,4 @@
-<!-- description: How to use Lockstep: compare Vault KV v2 locations or an export, profiles, copying and overriding values, sync plans, value tools, certificate expiry, export and import. -->
+<!-- description: How to use Lockstep: compare Vault KV v2 locations or an export, profiles, copying and overriding values, sync plans, value tools, certificate expiry, export and import, and explaining policies. -->
 # Using the tool
 
 ## 1. Choose what to compare
@@ -11,7 +11,44 @@ Each side (left in blue, right in orange) needs:
 
 Both sides can be the same Vault with different mounts or prefixes. ⇄ swaps the sides.
 
+**▸ Left / source** and **▸ Right / target** collapse a side to one line: the account signed in, how (userpass, OIDC…), on which Vault and namespace, its policies and token expiry, and the mount and prefix. Click the line to open the side again. Each side remembers whether it was collapsed.
+
 **Or an export file.** Switch a side from **Vault** to **Export file** and open a [secret-engine export](#6-export-and-import) (with its key if it's encrypted) to compare a Vault against it: a backup, or another environment's export. *Show values* reads the file's values in the page. An export is read-only: you can copy values **from** it into a Vault, never into it, and it has no version history or value inspector. It's held in the page's memory only and is gone when you reload.
+
+## Browse
+
+**Browse**, the first tab and the one Lockstep opens on, explores one side's KV v2 mount. It starts at the mount and prefix chosen in the side card. When both sides have a Vault chosen, the switch at the top picks which one to browse.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/20-browse-dark.png">
+  <img alt="Browsing Vault A: a folder tree, the secret payments/db with one value shown and a changed port waiting to be saved" src="images/20-browse-light.png">
+</picture>
+
+- **The tree** lists folders as you open them, so a mount of any size opens straight away. Big folders show 200 entries at a time, and ⊘ marks what you can't list or read. **Find secrets by name** searches under the starting point; **Go to path** opens a path you type.
+- **A secret** shows its keys with values masked. **Show** reveals one value (*Show values* at the top reveals all), **Copy** puts it on the clipboard, and **Inspect** opens the value tools. Under each value is when that key last changed.
+- **Versions:** pick an older version to see it read-only, **Compare with** the current one key by key, **Roll back** to it (written as a new version), or undelete or destroy it. Each version says who wrote it and, if deleted, who deleted it (Vault 1.21 and later record this).
+- **Metadata** shows the version settings and custom metadata, and who last changed the secret. **Edit metadata** changes:
+  - max versions;
+  - *require check-and-set*;
+  - *delete versions after*;
+  - custom metadata labels such as `owner` or `ticket`.
+
+  Vault keeps no versions of metadata, so Lockstep checks that it hasn't changed since you opened it before saving.
+- **Share once…** puts chosen values in a one-time token (Vault response wrapping) that expires after 5 minutes to 24 hours. Send the token instead of pasting a password into chat. The other person opens it with **Open a shared token…** (signed in to the same Vault) or `vault unwrap`. **Check** shows when it was made and when it expires without using it up; **Open** shows the values once, after which nobody can open it again. Sharing is audit-logged with the key names, never the values.
+- **YAML** shows the whole secret as YAML, with values masked unless shown.
+- **Limited access:** if you may see a secret's structure but not its values (Vault's `subkeys`), Browse shows the key names. If you may `patch` but not `update` a secret, your edits are sent as a patch (only the changed keys, with check-and-set), so you can change keys without reading the others.
+- **Snippets** shows the `vault kv` commands, a `curl` call and a Terraform `vault_kv_secret_v2` block for the secret, and for your unsaved changes (as `vault kv patch`, or `put` when keys are removed), with placeholders instead of values. **Generate** in a value editor fills in a random 32-character value.
+- **Links:** the address names the side, mount and secret (`#/browse/left/app-config/payments/db`), so the back button works and a link can be shared. It holds no connection or token: whoever opens it uses their own sign-in. **Compare this folder…**, **Scan for certificates**, **Why can I…?** and **Export this folder…** open the other tabs on the secret's folder.
+
+### Editing
+
+**Edit** turns a value into a text field (tick **JSON** to store a number, list or object), **Delete** marks a key for removal, **＋ Add key** adds one, and **＋ New secret** in the tree starts a secret. The changes collect under the secret as *unsaved changes*, with the version the write will create. **Save** writes them; **Discard** drops them.
+
+- Every write is checked against the version you loaded (KV v2 check-and-set). If someone changed the secret in the meantime, nothing is written, the current version loads, and your changes stay so you can check and save again.
+- Removing every key soft-deletes the latest version instead of writing an empty one.
+- **Delete latest** soft-deletes the current version, and **Undelete** restores it. **Destroy secret…** uses the same typed confirmation as in Compare; destroying one version asks you to type `destroy vN`.
+- **Stage changes** (top right) collects edits across secrets instead of saving each one; **Review & apply** shows them all, then writes them.
+- Every write is [audit-logged](#audit-log) as `browse.write`, `browse.delete`, `browse.undelete`, `browse.destroy` or `browse.rollback`, with key names but never values.
 
 ## 2. Read the comparison
 
@@ -254,6 +291,23 @@ The **Certificate expiry** tab scans the mounts (and prefixes) chosen on one or 
 
 Keystores that need a password are opened with a password stored in the same secret (keys named like `*pass*`, `*pwd*`), or else with the 10 best candidates the [password finder](#finding-a-keystore-password) ranks from the keystore's top-level folder within the scanned tree: keys you can already read. The row says which key opened it. Keystores that can't be fully checked are listed under *not fully checked*, never silently skipped. Only certificate details come back from the server, never secret values.
 
+**Include PKI-issued certificates** also lists every certificate the Vaults' PKI engines have issued (except revoked ones), and their issuing CAs. That way certificates Vault issued expire on the same timeline as those stored in KV secrets. They show as *PKI-issued* or *PKI issuer*, with the engine and serial. It needs `list` and `read` on `<pki>/certs` and `<pki>/issuers`.
+
+### Issue a development certificate
+
+When a side's Vault has a PKI secrets engine, **Issue a development certificate** (at the top of the tab) issues one from a PKI role:
+- **Before issuing:** it shows the issuing CA and what the role allows (names, maximum TTL, key type).
+- **Issuing:** you give a common name, other names and a validity.
+- **Afterwards:** you can download the certificate, private key, CA chain or full chain, and optionally store all three in a new KV secret on the side's mount (`certs/<name>` by default; an existing secret is never overwritten). **Inspect** opens the stored certificate in the value inspector.
+
+The private key is shown only then. Issuing is audit-logged with the serial number, never the key, and is refused when the server is read-only. Configuring PKI itself (CAs, roles) stays in the Vault UI or Terraform.
+
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/27-pki-issue-dark.png">
+  <img alt="A certificate issued from a PKI role" src="images/27-pki-issue-light.png">
+</picture>
+
 ## 6. Export and import
 
 The **Export & import** tab moves a whole secret engine, values included, through a file: for a backup, a migration, a copy into an environment you can't reach from here, or to [compare against later](#1-choose-what-to-compare).
@@ -304,5 +358,264 @@ Only what the preview listed is deleted, and only at the version the preview saw
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/17-import-dark.png">
   <img alt="Import panel with prod to staging transforms and a preview of the secret to write" src="images/17-import-light.png">
+</picture>
+
+
+## 7. Policies
+
+The **Policies** tab shows what Vault ACL policies allow on every secret of a KV v2 mount, in plain terms, and which rule decides each answer. It uses the connection, mount and prefix chosen on either side. It's read-only: it reads policy texts and the names of secrets, never values, and writes nothing.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/18-policies-dark.png">
+  <img alt="A pasted policy explained on app-config: a grid of secrets by See names, Read, Write, Delete, Destroy and History, one finding, and the rules behind a denied secret" src="images/18-policies-light.png">
+</picture>
+
+Choose what to explain:
+
+- **My token's policies:** everything your sign-in on that side has, including policies from identity groups. If you may not read some of them (most people can't read `sys/policies/acl/…`), Lockstep asks Vault for the answers instead (`sys/capabilities-self`). They're complete, but the rule behind each one can't be shown.
+- **Policies in Vault:** pick one or more by name. If your token may not list policies, type the names.
+- **Someone else:** an entity (a person or workload), an identity group, or a token (by its accessor). Lockstep gathers their policies:
+  - their own;
+  - those of every group they're in, including parent groups;
+  - for a token, its policies plus its entity's.
+
+  It shows where each came from. For an entity, logins also get their auth role's policies, which depend on how they sign in. Reading someone else's policies needs `read` on `identity/…` (and `update` on `auth/token/lookup-accessor` for tokens): what's missing is listed, and the answer is marked incomplete.
+- **Paste a policy:** HCL or JSON, for a policy that isn't in Vault yet.
+
+Several policies are combined the way Vault combines them: rules with the same path add up, and `deny` wins.
+
+Each secret gets six columns. KV v2 keeps values and everything else under different paths, which is where most policy mistakes come from:
+
+| Column | Vault needs |
+|---|---|
+| **See names** | `list` on `<mount>/metadata/<folder>/`: the secret shows when its folder is listed |
+| **Read** | `read` on `<mount>/data/<path>` |
+| **Write** | `create` or `update` on `<mount>/data/<path>` |
+| **Delete** | `delete` on `<mount>/data/<path>`: soft-delete the latest version |
+| **Destroy** | `delete` on `<mount>/metadata/<path>`: every version and the metadata |
+| **History** | `read` on `<mount>/metadata/<path>`: versions and dates |
+
+✓ is allowed, · is not allowed (nothing grants it), ✗ is refused by a `deny` rule. Click a secret to see, for each column, the rule that decided it, with the policy and line it came from. When several rules match a path, Vault uses the most specific one. Its rules for that are subtle: for example, `data/payments/*` beats `data/+/dev/*` for `data/payments/dev/db`, because its first wildcard comes later in the path. Lockstep follows the same rules, and its tests check every answer against Vault's own (`sys/capabilities`). Vault 2.2.2 changed some details: exact rules ignore a trailing slash, a listing considers rules for both slash forms, and `deny` rules also match whatever the case. Lockstep reads each Vault's version and matches the way that version does, and the result says which rules it used.
+
+**Findings** point out mistakes and risky grants:
+- errors Vault would refuse, such as `+*` or an unknown capability;
+- KV v2 paths without `data/` or `metadata/` (with the path you probably meant);
+- `*` or `+` used where they're literal;
+- `list` on `data/`, where it does nothing;
+- broad grants: a whole mount, `sudo`, Vault's own configuration, destroy rights;
+- rules that don't match any secret listed, or that a more specific rule always overrides.
+
+The secrets listed are the ones *your* token can list. If it can't list some folders, they're named under **missing rights**, and their secrets aren't in the grid.
+
+The same is available on the command line: [`lockstep policy explain`](cli.md#policies).
+
+### Build and suggest policies
+
+**Build & suggest** writes policies as "who can do what, where" and turns each rule into the right KV v2 paths. Nothing is written to Vault from here: you export the policies for an admin.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/21-policy-build-dark.png">
+  <img alt="Suggested policies for app-config/services, from the detected layout {app}/{env}/**" src="images/21-policy-build-light.png">
+</picture>
+
+- **＋ New policy** starts one. Each rule has a **where** and the same six choices as the Explain grid. Lockstep shows the HCL it generates, with a comment saying which rule each path came from, and findings. **Preview on** a side shows the Explain grid for the policy on that side's mount, before anyone writes it. **Advanced (HCL)** edits the text directly.
+
+  | Where | Means |
+  |---|---|
+  | `payments/db` | one secret |
+  | `payments/dev/**` (or `payments/dev/`) | everything under a folder |
+  | `*/dev/**` | `*` is exactly one folder level |
+  | `**` | the whole mount |
+
+  *See names* on a folder lists that folder and everything below it, but not the folders above it: add rules for those if people browse from the top.
+- **Suggest policies for** the side's mount and prefix looks at how the secrets are laid out. It finds a level of environment names (`dev`, `test`, `staging`, `prod`…) and the apps above it, then suggests:
+  - `<app>-developer`: change dev, read test, see names in prod;
+  - `<app>-<env>-app`: read one app's secrets in one environment, for its Kubernetes or CI role;
+  - a read-only policy and an admin policy (everything except destroying) for the whole folder.
+
+  It says why it chose the layout. Tick the ones you want and **Add to my policies**. They're kept in this browser.
+- **Use my pattern…** describes the layout and the policies yourself, in YAML or JSON. Suggesting once fills in the detected pattern to start from. An admin can share patterns with everyone through [`LOCKSTEP_POLICY_PATTERNS`](configuration.md); **Load a shared pattern** picks one. The format is printed by `lockstep schema suggest-pattern`:
+
+  ```yaml
+  name: per app and environment
+  layout: "{app}/{env}/**"            # what each level means; * = any folder
+  values: {env: [dev, test, prod]}    # optional: limit or order a variable's values
+  policies:
+    - name: "{app}-{env}-app"         # one policy per app and environment found
+      rules: [{where: "{app}/{env}/**", can: [read, history]}]
+    - name: "{app}-developer"
+      rules:
+        - {where: "{app}/dev/**", can: [names, read, write, delete, history]}
+        - {where: "{app}/prod/**", can: [names]}
+  compare: {pair: {env: [dev, prod]}} # also make the policy profile for comparing dev with prod
+  ```
+
+  `{mount}` in a name is the mount and prefix. With `compare`, **Save policy profile** keeps a profile that pairs `*-dev-app` with `*-prod-app` and rewrites `/dev/` to `/prod/`, ready for **Compare across Vaults**.
+- **Download for an admin…** makes a zip:
+  - one `policies/<name>.hcl` per policy;
+  - a README;
+  - `apply.sh`, which compares each policy with Vault and shows a diff (`--dry-run` stops there), then writes the ones that changed with the `vault` CLI.
+
+  Optionally it adds **Terraform** or **OpenTofu** files: `vault_policy` resources, the `hashicorp/vault` provider pinned to the version you pick (`~> 5.0` or `~> 4.0`), and `import` blocks for policies that already exist on the side's Vault, so they're adopted into state rather than created twice. Use either the script or Terraform for a policy, not both.
+
+On the command line: [`lockstep policy suggest` and `lockstep policy export`](cli.md#policies).
+
+### Roles
+
+**Roles** shows the Kubernetes, JWT/OIDC and AppRole auth roles that decide who gets which policies when they log in.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/22-roles-dark.png">
+  <img alt="The JWT role auth/jwt/role/default in plain terms, with a warning, and what it allows on app-config/payments" src="images/22-roles-light.png">
+</picture>
+
+- **On a mount:** pick an auth mount to list its roles. A role shows:
+  - the policies a login gets (including `default` unless the role turns it off);
+  - its settings in plain words, with defaults left out and durations readable;
+  - findings:
+    - a JWT role nothing ties to a workload (anyone with a token from that issuer could log in);
+    - `*` for service accounts or namespaces;
+    - a Kubernetes role without an audience;
+    - plain-HTTP OIDC redirect URIs;
+    - policies that don't exist on that Vault;
+    - long-lived tokens;
+    - AppRole roles without a secret ID, or whose secret IDs never expire.
+
+  **What can it do on…** explains the role's policies together on the side's KV v2 mount, with the same grid as **Explain on a mount**.
+
+  For an AppRole role, **Issue a secret ID…** creates one and hands it over wrapped in a one-time token, never in plain text, together with the role ID. The app or pipeline unwraps it once (`vault unwrap`) and logs in. Issuing is audit-logged with the wrapping token's accessor only.
+- **Which roles grant policy…** lists every Kubernetes, JWT and OIDC role, and every identity group, that gives a policy. Entities and token roles can grant policies too, and aren't covered yet.
+- **Identity groups** (in the auth mount list) shows each group's type, policies and members, and what its members can do on the side's mount. **Compare identity groups** compares two Vaults' groups: policies, type, metadata and members by name.
+- **Compare across Vaults** compares the roles of an auth mount on each side, field by field, ignoring defaults. A policy profile pairs names (`*-dev` ⇄ `*-prod`) and rewrites values such as namespaces and policy names first.
+- **New role** starts from a template:
+  - a Kubernetes service account;
+  - a GitLab CI job (`id_tokens`);
+  - a GitHub Actions workflow;
+  - a Kubernetes service account through JWT auth;
+  - people in an identity-provider group (OIDC);
+  - a CI pipeline or app with AppRole.
+
+  You fill in a form, and the findings and the JSON update as you type. **Download for an admin…** adds your roles (and, if you like, your policies) to the same zip as policies: `roles/<mount>/<name>.json`, written by `apply.sh` after the policies, and `vault_kubernetes_auth_backend_role` / `vault_jwt_auth_backend_role` resources with `import` blocks when Terraform or OpenTofu is chosen.
+
+Reading roles needs `list` and `read` on `auth/<mount>/role`. Nothing here writes to Vault.
+
+### Writing policies and roles
+
+When the server allows it (`LOCKSTEP_POLICY_APPLY`, on by default) and you may write them, Lockstep writes policies and roles itself:
+- **Build & suggest → Write or download… → Write to…** writes the chosen policies.
+- **Roles → New role → Write to…** writes your roles.
+- **Copy to right → / ← Copy to left** in **Compare across Vaults** copies a policy to the other Vault, with the profile's rewrites applied (backwards for a copy to the left).
+- **Delete a policy…** (in Build & suggest; it first shows which roles use the policy) and **Delete role…** (in Roles) delete, after you type a confirmation phrase.
+
+Every write goes through a review:
+- each item shows **new**, **change** with a diff against what's in Vault, **same**, or **delete**;
+- it says whether your sign-in may do it, and warns when you change a policy your own sign-in holds.
+
+Vault keeps no versions of policies or roles, so each item is read again just before writing and skipped as **Changed** if it moved since the review. Policies are written before the roles that use them, and deletes come last. A role is written whole: fields you left out go back to their defaults.
+
+`root` and `default` can't be changed from Lockstep. Writes are audit-logged as `policy.write`, `policy.delete`, `role.write` and `role.delete`, with a hash of what was there before. Where Terraform owns policies, set `LOCKSTEP_POLICY_APPLY=off`: building and downloading for an admin still work.
+
+#### Access plans
+
+When you can't write policies or roles yourself, **Save as access plan** prepares them for someone who can. It's in **Write or download…**, beside the new-role drafts, and in the write review.
+- **The file:** a signed JSON file with the policies and roles, the Vault they're for, who made it, and a hash of what was in Vault at the time. Nothing in it is secret, so it can go in a ticket.
+- **Applying:** the person applying signs in to that Vault on either side and chooses **Policies → Open an access plan…**. Lockstep checks the plan was made by this server and not edited. It finds the right connection (the one with the rights, if both sides are on that Vault) and shows the same review as a write, with diffs.
+- **Changes since:** anything that changed in Vault after the plan was made is shown as *Changed* and skipped.
+- **Audit:** writes from a plan are logged with its `plan_id`, and making a plan is logged as `access.plan`.
+
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/28-access-plan-dark.png">
+  <img alt="An access plan opened for review" src="images/28-access-plan-light.png">
+</picture>
+
+### Compare policies across Vaults
+
+**Compare across Vaults** compares every ACL policy on the left Vault with every one on the right. It compares by meaning: each policy is reduced to its paths and capabilities (rules with the same path added up, `deny` winning, as Vault does), so comments, whitespace, rule order and how capabilities are listed don't count. Policies that differ only that way show as *Equal* with *formatting differs*. A policy that can't be parsed is compared as text.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/19-policy-compare-dark.png">
+  <img alt="Policies on two Vaults compared, with payments-dev mapped to payments-prod and the rule that differs" src="images/19-policy-compare-light.png">
+</picture>
+
+Each policy shows as *Equal*, *Different*, *Left only*, *Right only* or *Error* (couldn't be read). Open one to see the paths whose capabilities differ, **Show text** for both texts, and **Compare access** to see what the two policies allow on the mounts chosen on each side, secret by secret: only the secrets where they differ, or all of them.
+
+A **policy profile** lines the two Vaults up when names or paths differ between environments:
+
+- **Pair names:** `*-dev` ⇄ `*-prod` compares `payments-dev` on the left with `payments-prod` on the right. Both sides need the same number of `*`. A paired name whose partner is missing says which name it expected.
+- **Rewrite paths:** replace text in the left policies' paths before comparing, such as `/dev/` → `/prod/`, so a dev policy and its prod twin compare as equal when they grant the same thing.
+- **Leave out:** names or `*` patterns, `root` by default.
+
+**New profile…** opens the rules. Use them unsaved, or **Save to my profiles** (kept in this browser; **Export mine** and **Import…** move them as JSON). An admin can share profiles with everyone through [`LOCKSTEP_POLICY_PROFILES`](configuration.md). The format is printed by `lockstep schema policy-profile`.
+
+Comparing needs `list` on `sys/policies/acl` and `read` on each policy, on both Vaults. What your sign-ins can't see is listed under **missing rights**. On the command line: [`lockstep policy compare`](cli.md#policies).
+
+## 8. Configuration
+
+The **Configuration** tab compares the two Vaults' setup, read-only:
+- **Overview:** version, cluster name, seal and storage type, high availability and replication. What differs is highlighted, such as a cluster that's a version behind.
+- **Secrets engines** and **auth methods:**
+  - each one *Equal*, *Different*, *Left only* or *Right only*;
+  - type, plugin version, tuning (default and max lease TTL, listing visibility, audit settings, passthrough headers) and options such as the KV version;
+  - for auth methods, their configuration (for example a JWT method's issuer and discovery URL, or a Kubernetes method's host).
+
+  Open one to see the settings that differ. Fields that look sensitive (secrets, passwords, private keys) are left out even if Vault returns them, and identifiers that differ on every cluster (accessors, UUIDs) are ignored. **Built-in mounts** (`sys/`, `identity/`, `cubbyhole/`, `token/`) are hidden unless you ask.
+- **Engine roles and keys:** for secrets engines that both Vaults have at the same path with the same type, their roles and keys compared one by one:
+  - PKI roles;
+  - database connections (URL without any inline password), roles and static roles;
+  - Transit key settings (not the key versions);
+  - SSH, Kubernetes and AWS roles.
+
+  For example, `transit/keys/app-key` is *Different* when only one side allows deletion. Values that change on their own (key versions, last rotation) are ignored.
+
+It needs `read` on `sys/mounts` and `sys/auth` (and on `auth/<path>/config` for the configuration, and `list`/`read` on the engines' roles and keys). Without them, Lockstep uses the mount list your token can see and says what's missing. In CI: [`lockstep config compare`](cli.md#configuration).
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/23-config-dark.png">
+  <img alt="Two Vaults' versions side by side, and the secrets engines and auth methods that exist on only one of them" src="images/23-config-light.png">
+</picture>
+
+## 9. Tools
+
+The **Tools** tab has a **Transit playground** for building an integration with Vault's Transit secrets engine:
+- **Keys:** pick a key to see its type and versions (no key material).
+- **Operations:** encrypt, decrypt, rewrap to the latest key version, sign, verify or HMAC, using your own sign-in.
+- **Chaining:** **Decrypt it** and **Verify it** feed the result straight back in.
+
+Lockstep stores nothing; Vault's audit log records the operations. The dev stack has `transit/` with `app-key` (AES-256-GCM) and `signing-key` (Ed25519) on both Vaults.
+
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/24-transit-dark.png">
+  <img alt="A value encrypted with a Transit key" src="images/24-transit-light.png">
+</picture>
+
+### Database credentials
+
+**Tools → Database credentials** shows a database secrets engine's setup and generates credentials:
+- **Read-only:** its connections (plugin, connection URL with any inline password hidden, the account Vault uses, allowed roles), its dynamic roles (database, TTLs, creation SQL) and its static roles.
+- **Generate credentials:** for a dynamic role, with your own sign-in. The password stays masked until you choose **Show**. **Revoke now** ends them when you're done.
+
+Generating is audit-logged with the lease ID, never the password, and is refused when the server is read-only. Configuring connections and roles, and rotating root, stays in the Vault UI or Terraform. The dev stack has `database/` on Vault A, connected to a PostgreSQL container, with the roles `orders-readonly` and `orders-app`.
+
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/25-database-dark.png">
+  <img alt="Credentials generated from a database role" src="images/25-database-light.png">
+</picture>
+
+### Leases
+
+**Tools → Leases** browses the leases Vault has handed out (dynamic credentials, tokens) by path, like Vault's own lease tree:
+- **What it shows:** when each lease was issued and when it expires, and whether it's renewable.
+- **Renew:** renews a lease.
+- **Revoke:** revokes the selected leases one by one (never by prefix), after you type `revoke N leases`.
+
+Listing needs `sudo` on `sys/leases/lookup/*`. The `default` policy's exact rule on `sys/leases/lookup` hides the top level even from tokens with sudo below it, so Lockstep then lists mount by mount. Renew and revoke are audit-logged, and refused when the server is read-only.
+
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/26-leases-dark.png">
+  <img alt="Leases of userpass logins with their expiry" src="images/26-leases-light.png">
 </picture>
 

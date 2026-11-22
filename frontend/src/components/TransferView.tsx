@@ -24,7 +24,9 @@ export function TransferView(props: Props) {
   return (
     <div className="transfer">
       <ExportPanel {...props} />
-      <ImportPanel {...props} />
+      {props.config.read_only
+        ? <section className="card transfer-card" aria-label="Import"><h2>Import into a Vault</h2><p className="subtle">This Lockstep server is read-only, so importing is turned off.</p></section>
+        : <ImportPanel {...props} />}
     </div>
   );
 }

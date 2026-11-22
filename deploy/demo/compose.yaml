@@ -117,6 +117,23 @@ services:
       - ./dex.yaml:/etc/dex/config.yaml:ro   # rendered from deploy/demo/dex.yaml.tmpl
     mem_limit: 128m
 
+  # The database behind Vault A's database secrets engine (Tools -> Database credentials).
+  # Not published; only Vault connects to it. Its data is throwaway (no volume).
+  postgres:
+    <<: *common
+    # Red Hat Hardened Image, PostgreSQL 17.10 (multi-arch index digest)
+    image: registry.access.redhat.com/hi/postgresql@sha256:e58f3fc1777374194f7841c251925042b6fb979b7c7234d0ffd944c48f46e8ee
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_DB: orders
+    mem_limit: 256m
+    healthcheck:
+      # Over TCP: the init-time server only listens on the socket
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "postgres", "-d", "orders"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
   # Configures both Vaults, then restores the demo data every RESEED_INTERVAL seconds.
   seed:
     <<: *common
@@ -132,12 +149,15 @@ services:
       OIDC_WAIT_ATTEMPTS: "150"   # up to 5 min while Caddy gets its first certificates
       TOOL_PUBLIC_URL: https://${DEMO_HOST:?}
       RESEED_INTERVAL: ${RESEED_INTERVAL:-3600}
+      POSTGRES_URL: "postgresql://{{username}}:{{password}}@postgres:5432/orders?sslmode=disable"
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
     mem_limit: 256m
     depends_on:
       vault-a: {condition: service_healthy}
       vault-b: {condition: service_healthy}
       caddy: {condition: service_started}
       dex: {condition: service_started}
+      postgres: {condition: service_healthy}
 
   app:
     <<: *common

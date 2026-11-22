@@ -12,10 +12,11 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from ..config import Settings, get_settings
-from ..session import Connection, SessionData, load_session, save_session
+from ..session import Connection, PendingMfa, SessionData, load_session, save_session
 from ..vault import VaultClient, VaultError
 
 router = APIRouter(prefix="/api/connections", tags=["connections"])
@@ -216,14 +217,36 @@ async def list_connections(session: Sess, settings: Conf):
     return await asyncio.gather(*(probe(c) for c in session.connections))
 
 
-@router.post("", response_model=ConnectionOut, status_code=201)
+def mfa_constraints(auth: dict) -> list[dict] | None:
+    """The second factors a login asks for (Vault login MFA), or None if it doesn't."""
+    req = auth.get("mfa_requirement")
+    if not req or auth.get("client_token"):
+        return None
+    out = []
+    for name, c in (req.get("mfa_constraints") or {}).items():
+        out.append({"name": name, "methods": [
+            {"id": m.get("id"), "type": m.get("type"), "uses_passcode": bool(m.get("uses_passcode")),
+             "name": m.get("name") or m.get("type")} for m in (c or {}).get("any") or []]})
+    return out
+
+
+def mfa_response(session: SessionData, settings: Settings, pending: PendingMfa) -> JSONResponse:
+    """Keep the half-done login in the session and tell the browser which factors to ask for."""
+    session.pending_mfa = pending
+    r = JSONResponse({"mfa_required": True, "constraints": pending.constraints}, status_code=202)
+    save_session(r, session, settings)
+    return r
+
+
+@router.post("", response_model=ConnectionOut, status_code=201,
+             responses={202: {"description": "Vault wants a second factor: answer with POST /api/connections/mfa"}})
 async def create_connection(body: ConnectionCreate, response: Response, session: Sess, settings: Conf):
     url, namespace, name, preset_id = resolve_target(body, settings)
     auth = body.auth
     async with VaultClient(url, settings, namespace=namespace) as anon:
         try:
             if isinstance(auth, TokenAuth):
-                token, minted = auth.token.strip(), False
+                token, minted, res = auth.token.strip(), False, {}
             elif isinstance(auth, KubernetesAuth):
                 jwt = read_k8s_token(auth, settings)
                 res = await anon.login_kubernetes(auth.role, jwt, auth.mount or settings.k8s_auth_mount)
@@ -237,7 +260,16 @@ async def create_connection(body: ConnectionCreate, response: Response, session:
                 token, minted = res["client_token"], True
         except VaultError as e:
             raise vault_http_error(e, login=True) from e
+    constraints = mfa_constraints(res)
+    if constraints is not None:
+        return mfa_response(session, settings, PendingMfa(
+            request_id=res["mfa_requirement"]["mfa_request_id"], constraints=constraints, url=url, namespace=namespace,
+            name=name, preset_id=preset_id, method=auth.method))
+    return await finish_login(token, minted, url, namespace, name, preset_id, auth.method, response, session, settings)
 
+
+async def finish_login(token: str, minted: bool, url: str, namespace: str | None, name: str, preset_id: int | None,
+                       method: str, response: Response, session: SessionData, settings: Settings) -> ConnectionOut:
     async with VaultClient(url, settings, token=token, namespace=namespace) as v:
         try:
             info = await v.lookup_self()
@@ -245,10 +277,47 @@ async def create_connection(body: ConnectionCreate, response: Response, session:
             raise vault_http_error(e, login=True) from e
 
     conn = connection_from_token(token=token, info=info, url=url, namespace=namespace, name=name,
-                                 preset_id=preset_id, method=auth.method, minted=minted)
+                                 preset_id=preset_id, method=method, minted=minted)
     add_connection(session, conn)
     save_session(response, session, settings)
     return to_out(conn, "ok")
+
+
+class MfaAnswer(BaseModel):
+    # method id -> passcode ("" for push methods such as Duo, Okta or PingID: approve on your device)
+    payload: dict[str, str] = Field(max_length=10)
+
+
+@router.get("/mfa")
+def pending_mfa(session: Sess):
+    p = session.pending_mfa
+    if p is None or p.expired():
+        raise HTTPException(404, detail={"message": "No sign-in is waiting for a second factor"})
+    return {"constraints": p.constraints, "name": p.name, "side": p.side}
+
+
+@router.post("/mfa", response_model=ConnectionOut, status_code=201)
+async def answer_mfa(body: MfaAnswer, response: Response, session: Sess, settings: Conf):
+    """Send the second factor to Vault (sys/mfa/validate) and finish the sign-in."""
+    p = session.pending_mfa
+    if p is None or p.expired():
+        session.pending_mfa = None
+        save_session(response, session, settings)
+        raise HTTPException(410, detail={"message": "The sign-in waited too long for the second factor. Sign in again."})
+    known = {m["id"] for c in p.constraints for m in c["methods"]}
+    if not body.payload or not set(body.payload) <= known:
+        raise HTTPException(400, detail={"message": "Answer the methods this sign-in asked for"})
+    async with VaultClient(p.url, settings, namespace=p.namespace) as anon:
+        try:
+            res = await anon.request("POST", "sys/mfa/validate", token="", json={
+                "mfa_request_id": p.request_id,
+                "mfa_payload": {mid: ([code.strip()] if code.strip() else []) for mid, code in body.payload.items()}})
+        except VaultError as e:
+            # A wrong passcode can be tried again until the request expires
+            raise HTTPException(401, detail={"message": f"Vault didn't accept the second factor: {e.message}"}) from e
+    session.pending_mfa = None
+    return await finish_login(res["auth"]["client_token"], True, p.url, p.namespace, p.name, p.preset_id, p.method,
+                              response, session, settings)
 
 
 @router.delete("/{conn_id}", status_code=204)

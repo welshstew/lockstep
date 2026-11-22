@@ -111,6 +111,16 @@
     "allowDestroy": {
       "type": "boolean"
     },
+    "readOnly": {
+      "type": "boolean"
+    },
+    "policyApply": {
+      "type": "string",
+      "enum": ["on", "off"]
+    },
+    "allowClipboard": {
+      "type": "boolean"
+    },
     "exportMode": {
       "type": "string",
       "enum": ["any", "encrypted", "off"]
@@ -179,6 +189,39 @@
             true,
             false
           ]
+        }
+      }
+    },
+    "policyPatterns": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "required": ["layout", "policies"],
+        "properties": {
+          "name": {"type": "string"},
+          "layout": {"type": "string", "minLength": 1},
+          "values": {"type": "object"},
+          "policies": {"type": "array", "minItems": 1, "items": {"type": "object", "required": ["name", "rules"]}},
+          "compare": {"type": "object"}
+        }
+      }
+    },
+    "policyProfiles": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1, "maxLength": 128},
+          "description": {"type": "string", "maxLength": 1000},
+          "mappings": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["left", "right"],
+            "properties": {"left": {"type": "string", "minLength": 1}, "right": {"type": "string", "minLength": 1}}}},
+          "rewrites": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["find"],
+            "properties": {"find": {"type": "string", "minLength": 1}, "replace": {"type": "string"}}}},
+          "ignore": {"type": "array", "items": {"type": "string"}}
         }
       }
     },

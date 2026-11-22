@@ -28,6 +28,7 @@ from ..session import SessionData, load_session
 from ..vault import VaultError
 from .compare import Side
 from .connections import client_for, get_connection
+from .guard import require_writable
 
 router = APIRouter(prefix="/api", tags=["destroy"])
 audit = logging.getLogger("lockstep.audit")
@@ -74,6 +75,7 @@ class DestroyOut(BaseModel):
 
 @router.post("/destroy", response_model=DestroyOut)
 async def destroy(body: DestroyRequest, session: Sess, settings: Conf):
+    require_writable(settings)
     if not settings.allow_destroy:
         raise HTTPException(403, detail={"message": "Destroying secrets is turned off on this server (LOCKSTEP_ALLOW_DESTROY)."})
     if not body.confirm:

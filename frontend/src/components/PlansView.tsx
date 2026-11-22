@@ -8,6 +8,7 @@ interface Props {
   connections: Connection[];
   leftConnId: string | null;
   rightConnId: string | null;
+  readOnly?: boolean;
 }
 
 const CHECK_LABEL: Record<PlanCheckStatus, [string, string]> = {
@@ -25,7 +26,7 @@ function looksLike(c: Connection | undefined, v: SyncPlan["left"]) {
   return same && ns(c.namespace) === ns(v.namespace);
 }
 
-export function PlansView({ connections, leftConnId, rightConnId }: Props) {
+export function PlansView({ connections, leftConnId, rightConnId, readOnly }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [plan, setPlan] = useState<SyncPlan | null>(null);
   const [fileName, setFileName] = useState("");
@@ -188,7 +189,8 @@ export function PlansView({ connections, leftConnId, rightConnId }: Props) {
 
           {!applied && (
             <div className="review-foot plan-actions">
-              {checked?.status === "ready" && (
+              {readOnly && <span className="subtle">This Lockstep server is read-only: plans can be checked here, not applied.</span>}
+              {checked?.status === "ready" && !readOnly && (
                 <label className="confirm">
                   <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} />
                   Write {plan.changes.length} secret{plan.changes.length === 1 ? "" : "s"} to <strong>{targets.join(", ")}</strong>
@@ -198,9 +200,11 @@ export function PlansView({ connections, leftConnId, rightConnId }: Props) {
               <button type="button" className="btn ghost" disabled={!left || !right || busy !== null} onClick={check}>
                 {busy === "check" && <span className="spinner" />} {checked ? "Check again" : "Check plan"}
               </button>
-              <button type="button" className="btn primary" disabled={checked?.status !== "ready" || !confirmed || busy !== null} onClick={apply}>
-                {busy === "apply" && <span className="spinner" />} Apply plan
-              </button>
+              {!readOnly && (
+                <button type="button" className="btn primary" disabled={checked?.status !== "ready" || !confirmed || busy !== null} onClick={apply}>
+                  {busy === "apply" && <span className="spinner" />} Apply plan
+                </button>
+              )}
             </div>
           )}
         </>

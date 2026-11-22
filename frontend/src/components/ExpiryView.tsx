@@ -3,6 +3,7 @@ import { api, type ExpiryProgress } from "../api";
 import { absoluteTime, relativeTime } from "../time";
 import type { CertRow, ExpiryResult } from "../types";
 import type { InspectTarget } from "./Inspector";
+import { PkiIssue } from "./PkiIssue";
 
 export interface ScanTarget {
   side: "left" | "right";
@@ -36,7 +37,7 @@ function csv(rows: CertRow[], labels: Record<string, string>): string {
   return [cols.join(","), ...rows.map((r) => cols.map((c) => esc(c === "vault" ? labels[r.side] : r[c as keyof CertRow])).join(","))].join("\n");
 }
 
-export function ExpiryView({ targets, onInspect }: { targets: ScanTarget[]; onInspect: (t: InspectTarget[]) => void }) {
+export function ExpiryView({ targets, onInspect, readOnly = false }: { targets: ScanTarget[]; onInspect: (t: InspectTarget[]) => void; readOnly?: boolean }) {
   const [result, setResult] = useState<ExpiryResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -44,6 +45,7 @@ export function ExpiryView({ targets, onInspect }: { targets: ScanTarget[]; onIn
   const [win, setWin] = useState<Window>("all");
   const [side, setSide] = useState<"both" | "left" | "right">("both");
   const [hideCa, setHideCa] = useState(false);
+  const [includePki, setIncludePki] = useState(() => { try { return localStorage.getItem("lockstep.expiryPki") === "1"; } catch { return false; } });
   const [query, setQuery] = useState("");
   const labels = Object.fromEntries(targets.map((t) => [t.side, t.label]));
 
@@ -52,7 +54,7 @@ export function ExpiryView({ targets, onInspect }: { targets: ScanTarget[]; onIn
     setError(null);
     setProgress(null);
     try {
-      setResult(await api.expiryStream(targets.map(({ side, conn_id, mount, prefix }) => ({ side, conn_id, mount, prefix })), setProgress));
+      setResult(await api.expiryStream(targets.map(({ side, conn_id, mount, prefix }) => ({ side, conn_id, mount, prefix })), setProgress, includePki));
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -88,16 +90,21 @@ export function ExpiryView({ targets, onInspect }: { targets: ScanTarget[]; onIn
           value, including PEM bundles, DER, base64, PKCS#12 and Java keystores. Keystores are opened only with a password stored
           next to them in the same secret. Only certificate details come back, never secret values.
         </div>
+        <label className="inline-check" title="Also list certificates issued by PKI engines on these Vaults (not revoked), and their issuing CAs">
+          <input type="checkbox" checked={includePki} onChange={(e) => { setIncludePki(e.target.checked); try { localStorage.setItem("lockstep.expiryPki", e.target.checked ? "1" : "0"); } catch { /* ignore */ } }} />
+          Include PKI-issued certificates
+        </label>
         <button type="button" className="btn primary big" onClick={scan} disabled={busy || targets.length === 0}>
           {busy && <span className="spinner" />} {result ? "Scan again" : "Scan for certificates"}
         </button>
       </div>
       {targets.length === 0 && <div className="notice info">Choose a connection and a KV v2 mount on at least one side.</div>}
+      <PkiIssue targets={targets} readOnly={readOnly} onInspect={onInspect} />
       {error && <div className="notice error" role="alert">{error}</div>}
       {busy && progress && (
         <div className="notice info scan-progress" role="status">
           <span className="spinner" /> {labels[progress.side]}:{" "}
-          {progress.stage === "listing" ? "listing secrets…"
+          {progress.stage === "pki" ? "reading certificates issued by PKI engines…" : progress.stage === "listing" ? "listing secrets…"
             : progress.stage === "done" ? "finishing…"
             : `${progress.stage === "reading" ? "reading" : "checking"} ${progress.done.toLocaleString()} of ${progress.total.toLocaleString()} secrets`}
           {progress.certificates > 0 && ` · ${progress.certificates.toLocaleString()} certificate${progress.certificates === 1 ? "" : "s"} so far`}
@@ -167,7 +174,7 @@ export function ExpiryView({ targets, onInspect }: { targets: ScanTarget[]; onIn
                       <div><span className={`side-dot ${r.side}`} title={labels[r.side]} /> <span className="mono">{r.path}</span> · <span className="mono">{r.key}</span></div>
                       <div className="subtle">{r.container}{r.alias ? ` · alias ${r.alias}` : ""}{r.opened_with ? ` · opened with “${r.opened_with}”` : ""}</div>
                     </td>
-                    <td><button type="button" className="btn ghost small" onClick={() => inspect(r)}>Inspect</button></td>
+                    <td>{!r.container.startsWith("PKI") && <button type="button" className="btn ghost small" onClick={() => inspect(r)}>Inspect</button>}</td>
                   </tr>
                 ))}
               </tbody>

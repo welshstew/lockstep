@@ -62,6 +62,14 @@ The Vaults run in dev mode (in memory). The **seed job recreates its mounts on e
 | userpass `carol` | `lockstep-limited` | `app-config` only, no `sys/mounts`. `restricted/` is hidden; `payments/api` can be listed but not read |
 | Kubernetes (with `make up-k8s`) | per role | see [authentication](authentication.md#trying-it-locally) |
 
+**Database:** Vault A has `database/`, connected to the `postgres` container (PostgreSQL 17, database `orders`), with dynamic roles `orders-readonly` (1 h) and `orders-app` (15 min), for **Tools → Database credentials**.
+
+**Transit:** both Vaults have `transit/` with `app-key` (AES-256-GCM) and `signing-key` (Ed25519), for **Tools**.
+
+**PKI:** Vault A has `pki-dev/`, a development root CA with the role `dev-services` (subdomains of `dev.internal`, up to 72 hours, EC keys), for **Certificate expiry → Issue a development certificate**.
+
+**Policies that differ between the Vaults** (for **Policies → Compare across Vaults**): `payments-dev` and `search-app` only in A, `payments-prod` and `orders-app` only in B (pair them with `*-dev` ⇄ `*-prod`), and `ci-drift-check` in both, written differently but equal in meaning.
+
 For **JWT**, get an ID token from Dex directly: `curl -s -u vault:vault-dev-secret -d grant_type=password -d username=alice@example.com -d password=password -d 'scope=openid email' http://dex.localhost:5556/dex/token | jq -r .id_token`.
 
 **Mounts:**

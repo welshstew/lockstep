@@ -36,6 +36,16 @@ Only **Apply** in the review dialog and **Import** write, and only:
 - with KV v2 **check-and-set** against the version you compared, so concurrent edits become conflicts
 - **adding or updating keys.** Keys are removed only when you ask: a key you [**Delete**](usage.md#delete-keys) in the compare view (a new version without it; older versions keep it; removing every key soft-deletes the latest version instead), or, on an import with *Make the target match the file*, keys and secrets the file doesn't have (secrets are soft-deleted).
 
+**Browse** writes follow the same rules: check-and-set against the version you loaded, removing every key soft-deletes instead of writing an empty version, and every write is audit-logged without values.
+
+**Share once** (Browse) hands values over as a Vault response-wrapping token: Lockstep reads them and passes them straight to `sys/wrapping/wrap`, stores nothing, and logs the key names and the token's accessor, never the values or the token. A token opens once and expires after at most 24 hours.
+
+**Read-only servers:** `LOCKSTEP_READ_ONLY=true` makes Lockstep look-only, whatever Vault's policies allow: the UI hides every write and the API refuses them (403). **Copy** in Browse can be turned off with `LOCKSTEP_ALLOW_CLIPBOARD=false`.
+
+**Policies and roles** written from the Policies tab go through the same kind of review. `root` and `default` can't be touched, and each item is re-read and skipped if it changed since the review. Writes and deletes are audit-logged with hashes, never policy text. `LOCKSTEP_POLICY_APPLY=off` leaves Lockstep to building and exporting.
+
+**AppRole secret IDs** issued from Lockstep are only ever returned wrapped in a single-use token (Vault response wrapping); Lockstep never sees them unwrapped and logs only the wrapping accessor.
+
 **Destroying** is the one action that can't be undone: [**Destroy**](usage.md#destroy-secrets) permanently deletes every version and the metadata of the secrets you chose, on one side, after you type a confirmation phrase. Each is checked against the version you compared first. It needs the `delete` capability on `<mount>/metadata/…`, and `LOCKSTEP_ALLOW_DESTROY=false` turns it off for everyone.
 
 Every attempted write and destroy is [audit-logged](usage.md#audit-log), without values. Tokens the tool created (userpass, LDAP, OIDC, Kubernetes) are revoked on *Sign out*; pasted tokens are left alone.
@@ -60,6 +70,9 @@ Every attempted write and destroy is [audit-logged](usage.md#audit-log), without
 This lets users act as the **tool's** identity rather than their own. It's off by default and can be pinned to specific roles. Read [the trade-offs](authentication.md#its-the-tools-identity-not-yours) before enabling it.
 
 ## Vault policies
+
+The [Policies](usage.md#7-policies) tab is read-only. To explain policies by name it needs `list` and `read` on `sys/policies/acl` (or just `read` on the named ones). Without them, **My token's policies** still works: Vault answers through `sys/capabilities-self`, which the default policy allows.
+
 
 The tool needs only what each person or role is meant to do. Example policies, with `app-config` as the mount:
 

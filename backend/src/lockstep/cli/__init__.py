@@ -7,6 +7,8 @@
   lockstep export --vault-addr https://vault-a --mount app-config -o export.json   (prints a one-time key)
   lockstep import export.json --vault-addr https://vault-b --mount app-config --replace app-dev=app-test
 
+  lockstep policy explain my-policy --vault-addr https://vault-a --mount app-config   (read-only)
+
 Exit codes, like diff(1): compare 0 = no differences, 1 = differences, 2 = couldn't compare.
 apply/import 0 = done, 1 = some secrets were skipped (changed since the report or preview, or not
 writable), 2 = couldn't run (bad file, login failed, ...).
@@ -29,6 +31,8 @@ from ..rules import Profile, Rules
 from ..vault import VaultError
 from . import apply as apply_mod
 from . import report as report_mod
+from . import policy as policy_mod
+from . import vaultconfig as config_mod
 from . import transfer
 from .connect import (CliError, SIDES, add_side_args, add_tls_args, cli_settings, connect_both, default_name,
                       resolve_targets, revoke)
@@ -86,11 +90,13 @@ def parser() -> argparse.ArgumentParser:
     add_tls_args(a)
 
     transfer.add_parsers(sub)
+    policy_mod.add_parsers(sub)
+    config_mod.add_parsers(sub)
 
-    s = sub.add_parser("schema", help="print a JSON Schema (report, export or import rules)",
+    s = sub.add_parser("schema", help="print a JSON Schema (report, export, import rules or policy profile)",
                        description=f"Print the JSON Schema of a Lockstep file. report (the default, also at "
                                    f"{report_mod.SCHEMA_URL}): editors use it to complete and check `action:` values.")
-    s.add_argument("kind", nargs="?", choices=("report", "export", "import-rules"), default="report")
+    s.add_argument("kind", nargs="?", choices=("report", "export", "import-rules", "policy-profile", "suggest-pattern"), default="report")
     return p
 
 
@@ -276,11 +282,15 @@ def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     if args.command == "schema":
         from .. import exports
-        schema = {"report": report_mod.schema, "export": exports.schema, "import-rules": exports.rules_schema}[args.kind]()
+        from ..policy.compare import profile_schema
+        from ..policy.suggest import pattern_schema
+        schema = {"report": report_mod.schema, "export": exports.schema, "import-rules": exports.rules_schema,
+                  "policy-profile": profile_schema, "suggest-pattern": pattern_schema}[args.kind]()
         print(json.dumps(schema, indent=2, ensure_ascii=False))
         return 0
     commands = {"compare": lambda: _compare(args), "apply": lambda: _apply(args),
-                "export": lambda: transfer.run_export(args, _load_profile), "import": lambda: transfer.run_import(args)}
+                "export": lambda: transfer.run_export(args, _load_profile), "import": lambda: transfer.run_import(args),
+                "policy": lambda: policy_mod.run(args), "config": lambda: config_mod.run(args)}
     try:
         return asyncio.run(commands[args.command]())
     except CliError as e:

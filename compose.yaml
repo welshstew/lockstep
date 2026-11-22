@@ -4,6 +4,7 @@
 # Vault A:  http://localhost:8200  (root token: root-a)
 # Vault B:  http://localhost:8201  (root token: root-b)
 # Dex:      http://dex.localhost:5556/dex  (alice@example.com / password)
+# Postgres: postgres:5432 inside the network (postgres / dev-postgres), for Vault A's database engine
 name: lockstep
 
 
@@ -36,6 +37,16 @@ services:
       VAULT_DEV_ROOT_TOKEN_ID: root-b
     ports: ["8201:8200"]
 
+  # The latest Vault release, for checking that Lockstep's policy matching agrees with it as
+  # well as with vault-a/vault-b's version (tests/test_policy_acl.py). Tests only.
+  vault-latest:
+    <<: *vault
+    image: docker.io/hashicorp/vault:2.2.2
+    profiles: [test]
+    environment:
+      <<: *vault-env
+      VAULT_DEV_ROOT_TOKEN_ID: root-latest
+
   # OIDC identity provider used by both Vaults' oidc auth method.
   # The issuer hostname must resolve both from the browser (*.localhost -> 127.0.0.1)
   # and from inside the network (network alias -> dex container), on the same port.
@@ -47,6 +58,22 @@ services:
     networks:
       default:
         aliases: [dex.localhost]
+
+  # A database for Vault A's database secrets engine (Tools -> Database credentials). Dev only;
+  # the password is a fixture, like the root tokens.
+  postgres:
+    # Red Hat Hardened Image, PostgreSQL 17.10 (multi-arch index digest)
+    image: registry.access.redhat.com/hi/postgresql@sha256:e58f3fc1777374194f7841c251925042b6fb979b7c7234d0ffd944c48f46e8ee
+    environment:
+      POSTGRES_PASSWORD: dev-postgres
+      POSTGRES_DB: orders
+    healthcheck:
+      # Over TCP: during initialisation the entrypoint runs a socket-only server that would
+      # already answer a socket check
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "postgres", "-d", "orders"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
 
   # One-shot: configures mounts, policies, auth methods and test data in both Vaults.
   seed:
@@ -60,10 +87,12 @@ services:
       OIDC_CLIENT_ID: vault
       OIDC_CLIENT_SECRET: vault-dev-secret
       TOOL_PUBLIC_URL: http://localhost:8080
+      POSTGRES_URL: "postgresql://{{username}}:{{password}}@postgres:5432/orders?sslmode=disable"
     depends_on:
       vault-a: {condition: service_healthy}
       vault-b: {condition: service_healthy}
       dex: {condition: service_started}
+      postgres: {condition: service_healthy}
     restart: "no"
 
   app:
@@ -107,11 +136,13 @@ services:
     environment:
       VAULT_A_ADDR: http://vault-a:8200
       VAULT_B_ADDR: http://vault-b:8200
+      VAULT_LATEST_ADDR: http://vault-latest:8200
       LOCKSTEP_K8S_AUTH_ENABLED: "true"
     volumes:
       - k8s-sa:/var/run/secrets/kubernetes.io/serviceaccount:ro
     depends_on:
       seed: {condition: service_completed_successfully}
+      vault-latest: {condition: service_healthy}
 
   # README screenshots, generated from the running app: make screenshots
   screenshots:
