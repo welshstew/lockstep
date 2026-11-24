@@ -5,7 +5,9 @@ the image, the Helm chart and the app share one version.
 
 ## [Unreleased]
 
-## [0.10.0] - 2026-11-24
+## [0.10.1] - 2026-11-24
+
+0.10.0 was tagged but never published (its release pipeline couldn't pull Red Hat's base images); everything it held is here.
 
 ### Added
 
@@ -27,6 +29,7 @@ the image, the Helm chart and the app share one version.
 
 ### Fixed
 
+- **Release and CI on GitHub:** the workflows log in to Red Hat's registry (repository secrets `RH_REGISTRY_USER` and `RH_REGISTRY_TOKEN`, from a Red Hat registry service account) before pulling the hardened base and scanner images, which GitHub's runners couldn't pull anonymously. Without the secrets, the login is skipped and pulls stay anonymous.
 - **Configuration, auth methods:** fields in an auth method's configuration that only one server returns (OpenBao's `status` on JWT and OIDC) are listed as "not compared" instead of making the method *Different*.
 
 ## [0.9.0] - 2026-11-24
@@ -231,7 +234,7 @@ First public release.
 - **Helm chart:** hardened defaults, session key kept across upgrades, Ingress, NetworkPolicy, PodDisruptionBudget, Kubernetes auth, shared profiles; validated by a schema and tested in k3s.
 - Runs on Red Hat Hardened Images (distroless, non-root). Every change is scanned (CVEs, secrets, misconfigurations, base image signatures) and tested end to end in a browser.
 
-[0.10.0]: https://github.com/welshstew/lockstep/releases/tag/v0.10.0
+[0.10.1]: https://github.com/welshstew/lockstep/releases/tag/v0.10.1
 [0.9.0]: https://github.com/welshstew/lockstep/releases/tag/v0.9.0
 [0.8.0]: https://github.com/welshstew/lockstep/releases/tag/v0.8.0
 [0.7.0]: https://github.com/welshstew/lockstep/releases/tag/v0.7.0

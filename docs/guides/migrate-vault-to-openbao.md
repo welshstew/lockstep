@@ -16,10 +16,10 @@ Every command below was run against Vault 1.21 and OpenBao 2.7.
 ## Install Lockstep
 
 ```sh
-pipx install "git+https://github.com/welshstew/lockstep@v0.10.0#subdirectory=backend"
+pipx install "git+https://github.com/welshstew/lockstep@v0.10.1#subdirectory=backend"
 ```
 
-Or run the CLI from the image: `docker run --rm -it --entrypoint lockstep ghcr.io/welshstew/lockstep:0.10.0 --help`. See [Command line](../cli.md#install).
+Or run the CLI from the image: `docker run --rm -it --entrypoint lockstep ghcr.io/welshstew/lockstep:0.10.1 --help`. See [Command line](../cli.md#install).
 
 Lockstep's commands log in with tokens, userpass, LDAP or JWT. The examples use tokens:
 

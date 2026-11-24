@@ -26,10 +26,22 @@ jobs:
       contents: read
       issues: write
     env:
+      RH_REGISTRY_USER: ${{ secrets.RH_REGISTRY_USER }}
       COMPOSE_PROJECT_NAME: lockstep-vault-release-${{ github.run_id }}
       COMPOSE: docker compose -f compose.yaml -f compose.ci.yaml
     steps:
       - uses: actions/checkout@v7
+
+      - name: Log in to Red Hat's registry (base and scanner images)
+        # Without a login, GitHub's runners get 401s from Red Hat's registry (seen 2026-11-24).
+        # Skipped when the secrets aren't set (forks): pulls are then anonymous, as before.
+        if: env.RH_REGISTRY_USER != ''
+        env:
+          RH_REGISTRY_TOKEN: ${{ secrets.RH_REGISTRY_TOKEN }}
+        run: |
+          for r in registry.redhat.io registry.access.redhat.com; do
+            echo "$RH_REGISTRY_TOKEN" | docker login "$r" -u "$RH_REGISTRY_USER" --password-stdin
+          done
 
       - name: Which Vault
         id: v
