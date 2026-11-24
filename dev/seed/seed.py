@@ -620,6 +620,63 @@ def seed_namespaces(v: Vault) -> None:
     print(f"[{v.name}] namespaces ready: {', '.join(spaces)}")
 
 
+def seed_environments(a: Vault, b: Vault, pki: dict) -> None:
+    """The `apps` mount: Vault A plays the test environment, Vault B dev.
+
+    Since the last release, the team renamed Enterprise Logging App to ELP in dev, so its
+    secrets moved from enterprise-logging-app/ to ELP/; test still has the old name. Values
+    name their environment and the application (logs.test... vs logs.dev..., svc-enterprise-
+    logging-app vs svc-elp). The shared profile "Test ↔ dev: apps (ELP rename)" maps the folder,
+    rewrites test ⇄ dev and enterprise-logging-app ⇄ elp, and ignores what's meant to differ per
+    environment (tokens, log level, TLS material), so what's left is what changed in dev and has
+    to ship with the next release: batch_size, the new otlp_endpoint and the new ELP/alerts.
+    See docs/guides/compare-environments-after-a-rename.md."""
+    for v in (a, b):
+        v.mount_kv("apps", description="Applications (Vault A: test, Vault B: dev)")
+    a.kv_put("apps", "enterprise-logging-app/values", {
+        "log_level": "info",
+        "retention_days": 30,
+        "batch_size": "500",
+        "ingest_endpoint": "https://ingest.test.logging.example.internal",
+        "index_prefix": "enterprise-logging-app-test",
+        "service_account": "svc-enterprise-logging-app@test.example.internal",
+        "kafka_topic": "test.enterprise-logging-app.events",
+        "db_url": "postgres://pg.test.example.internal:5432/logging",
+        "api_token": "tok-test-8f2a1c90",
+    })
+    b.kv_put("apps", "ELP/values", {
+        "log_level": "debug",  # verbose in dev on purpose
+        "retention_days": 30,
+        "batch_size": "1000",  # changed in dev since the release: has to ship
+        "ingest_endpoint": "https://ingest.dev.logging.example.internal",
+        "index_prefix": "elp-dev",
+        "service_account": "svc-elp@dev.example.internal",
+        "kafka_topic": "dev.elp.events",
+        "db_url": "postgres://pg.dev.example.internal:5432/logging",
+        "api_token": "tok-dev-3b9e7741",
+        "otlp_endpoint": "https://otel.dev.example.internal:4317",  # new in dev
+    })
+    root_pem = pem(pki["root"])
+    a.kv_put("apps", "enterprise-logging-app/certs", {
+        "tls.crt": pem(pki["app"]), "tls.key": key_pem(pki["app_key"]), "ca.crt": root_pem})
+    b.kv_put("apps", "ELP/certs", {
+        "tls.crt": pem(pki["app2"]), "tls.key": key_pem(pki["app2_key"]), "ca.crt": root_pem})
+    a.kv_put("apps", "enterprise-logging-app/legacy-syslog", {
+        "syslog_host": "syslog.test.example.internal", "port": "514"})  # dropped in dev
+    b.kv_put("apps", "ELP/alerts", {
+        "pagerduty_service": "elp-dev", "errors_per_minute": "50"})  # new in dev
+
+    # Applications that weren't renamed: the same profile's rewrites cover them too.
+    a.kv_put("apps", "payments-gateway/config", {
+        "endpoint": "https://pay.test.example.internal", "timeout_ms": "3000", "currency": "GBP"})
+    b.kv_put("apps", "payments-gateway/config", {
+        "endpoint": "https://pay.dev.example.internal", "timeout_ms": "3000", "currency": "GBP"})
+    a.kv_put("apps", "search-indexer/config", {
+        "queue": "test.search.reindex", "workers": "4", "index": "products"})
+    b.kv_put("apps", "search-indexer/config", {
+        "queue": "dev.search.reindex", "workers": "2", "index": "products"})  # workers differs: drift
+
+
 def main() -> None:
     a = Vault("vault-a", os.environ["VAULT_A_ADDR"], os.environ["VAULT_A_TOKEN"])
     b = Vault("vault-b", os.environ["VAULT_B_ADDR"], os.environ["VAULT_B_TOKEN"])
@@ -639,6 +696,7 @@ def main() -> None:
             v.policy(name, text)
     pki = build_pki()
     seed_data(a, b, pki)
+    seed_environments(a, b, pki)
     seed_value_tool_fixtures(a, b, pki)
     seed_password_finder(a, b, pki)
     print("seed complete")

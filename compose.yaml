@@ -52,7 +52,8 @@ services:
   # OpenBao standing in for Vault B (make test-openbao): the same root token, so the seed and
   # tests run unchanged. VAULT_B_HOST=openbao points the app, seed and tests at it.
   openbao:
-    image: quay.io/openbao/openbao:2.7.3@sha256:ba4b133eb9586630024e71a617e66f37f29cc3534cdd46a6233e098ceded8dc9
+    # OPENBAO_IMAGE: the weekly openbao workflow tries the newest release
+    image: ${OPENBAO_IMAGE:-quay.io/openbao/openbao:2.7.3@sha256:ba4b133eb9586630024e71a617e66f37f29cc3534cdd46a6233e098ceded8dc9}
     profiles: [openbao]
     cap_add: [IPC_LOCK]
     environment:
@@ -127,14 +128,27 @@ services:
       LOCKSTEP_PRESET_CONNECTIONS: >-
         [{"name":"Vault A","url":"http://vault-a:8200","browser_url":"http://localhost:8200"},
          {"name":"Vault B","url":"http://${VAULT_B_HOST:-vault-b}:8200","browser_url":"${VAULT_B_BROWSER_URL:-http://localhost:8201}"}]
-      # A shared comparison profile, offered read-only to everyone.
+      # Shared comparison profiles, offered read-only to everyone (examples in docs/guides).
       LOCKSTEP_PROFILES: >-
         [{"name": "Prod ↔ staging services",
           "description": "services/<name>/prod in Vault A against services/<name>/staging in Vault B; hosts differ by design",
           "left_mount": "app-config", "right_mount": "app-config",
           "rules": {"mappings": [{"left": "services/*/prod/**", "right": "services/*/staging/**"}],
                     "ignore_keys": [{"key": "host", "path": "services/**"}],
-                    "ignore_paths": ["legacy/**", "retired/**"]}}]
+                    "ignore_paths": ["legacy/**", "retired/**"]}},
+         {"name": "Prod ↔ staging services (rewrites)",
+          "description": "Like Prod ↔ staging services, but reads prod in Vault A as staging instead of ignoring host: db-prod.internal matches db-staging.internal, any other host doesn't",
+          "left_mount": "app-config", "right_mount": "app-config",
+          "rules": {"mappings": [{"left": "services/*/prod/**", "right": "services/*/staging/**"}],
+                    "rewrites": [{"left": "prod", "right": "staging"}],
+                    "ignore_paths": ["legacy/**", "retired/**"]}},
+         {"name": "Test ↔ dev: apps (ELP rename)",
+          "description": "Vault A is test, Vault B is dev. enterprise-logging-app was renamed ELP in dev after its last release; values say test or dev and the app's old or new name. Tokens, log level and TLS material differ per environment by design",
+          "left_mount": "apps", "right_mount": "apps",
+          "rules": {"mappings": [{"left": "enterprise-logging-app/**", "right": "ELP/**"}],
+                    "rewrites": [{"left": "enterprise-logging-app", "right": "elp"}, {"left": "test", "right": "dev"}],
+                    "ignore_keys": [{"key": "api_token", "path": "**"}, {"key": "log_level", "path": "**"},
+                                    {"key": "tls.*", "path": "**/certs"}]}}]
       # Kubernetes auth: only usable when the token file exists, i.e. with --profile k8s.
       LOCKSTEP_K8S_AUTH_ENABLED: "true"
       # Dev Vaults: create userpass users and reset passwords from Policies › Roles

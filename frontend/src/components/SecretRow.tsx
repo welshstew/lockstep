@@ -370,6 +370,7 @@ export function SecretRow({ secret, left, right, reveal, open, onToggle, changes
         <span className="secret-meta">
           {staged > 0 && <span className="staged-count">{staged} staged</span>}
           {secret.ignored_keys > 0 && <span className="badge ignored" title="Differences in these keys are ignored by the profile">{secret.ignored_keys} ignored</span>}
+          {(secret.rewritten_keys ?? 0) > 0 && <span className="badge rewritten" title="Keys whose values differ only in words the profile rewrites">{secret.rewritten_keys} rewritten</span>}
           <span className="subtle">{summaryText(secret)}</span>
           <span className="vers">
             <Version info={secret.left} /> / <Version info={secret.right} />
@@ -444,6 +445,7 @@ export function SecretRow({ secret, left, right, reveal, open, onToggle, changes
               <div className="key-name">
                 <span className="key-label">{k.key}</span>
                 {k.ignored && <span className="badge ignored" title="The profile ignores differences in this key">ignored</span>}
+                {k.rewritten && <span className="badge rewritten" title="The values differ only in words the profile rewrites (such as test and dev), so they count as equal">equal after rewrite</span>}
                 {pick && k.status !== "equal" && (
                   <span className="ignore-tools key" role="group" aria-label={`Ignore key ${k.key}`}>
                     <button type="button" className="btn ghost small" aria-pressed={draft!.ignore_keys.some((x) => x.key === k.key && x.path === secret.path)}

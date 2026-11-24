@@ -16,6 +16,13 @@ check "charts/lockstep/Chart.yaml appVersion" "$(sed -n 's/^appVersion: *"\{0,1\
 check "charts/lockstep/Chart.yaml artifacthub.io/images" "$(sed -n 's|^ *image: ghcr.io/[^:]*/lockstep:||p' charts/lockstep/Chart.yaml)"
 check "backend/pyproject.toml" "$(sed -n 's/^version = "\(.*\)"/\1/p' backend/pyproject.toml)"
 check "frontend/package.json" "$(sed -n 's/^  "version": "\(.*\)",/\1/p' frontend/package.json)"
+# Install commands and image tags people copy from the docs and the site: every one must name
+# this release (dev/ and scripts/ use their own local tags and are left alone)
+stale=$(git grep -n -E 'lockstep@v[0-9]+\.[0-9]+\.[0-9]+|welshstew/lockstep:[0-9]+\.[0-9]+\.[0-9]+|charts/lockstep --version [0-9]+\.[0-9]+\.[0-9]+|release\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+' \
+          -- README.md charts/lockstep/README.md docs deploy/demo/site/index.html \
+        | grep -v -E "(lockstep@v|lockstep:|--version |refs/tags/v)$v([^0-9.]|\$)" || true)
+if [[ -z $stale ]]; then echo "ok  install commands and image tags in the docs name $v"
+else echo "!!  install commands or image tags in the docs name another version:" >&2; echo "$stale" >&2; fail=1; fi
 if grep -q "^## \[$v\]" CHANGELOG.md; then echo "ok  CHANGELOG.md has [$v]"; else echo "!!  CHANGELOG.md has no '## [$v]' section" >&2; fail=1; fi
 # Artifact Hub reads these annotations as YAML inside YAML: a description with ": " in it
 # unquoted becomes a mapping and the whole package is rejected

@@ -93,17 +93,32 @@ A profile tells Lockstep how the two sides relate, when they aren't laid out ide
 | **Path mapping** | `services/*/prod/**` ⇄ `services/*/staging/**` | Pairs `services/billing/prod/db` (left) with `services/billing/staging/db` (right). The row shows both paths |
 | **Ignored key** | `host` under `services/**` | `host` is still shown, marked *ignored*, but its difference doesn't make the secret **Different** |
 | **Ignored path** | `legacy/**` | Matching secrets are left out of the comparison |
+| **Value rewrite** | `test` ⇄ `dev` | Values are compared with each left word read as its right word: `logs.test.internal` matches `logs.dev.internal`, a different host still doesn't. The key is marked *equal after rewrite* |
 
 How the rules work:
 - **Patterns:** `*` matches within one path segment and `**` across any depth. Both sides of a mapping need the same wildcards in the same order, and what they match is carried across. The first matching mapping wins. Paths no mapping matches are compared as they are.
 - **Copies follow the mapping.** Copying a left-only `services/search/prod/config` to the right writes `services/search/staging/config`.
 - **Collisions are refused, not guessed.** If two left paths map onto the same right path, that pair shows as an **Error** explaining which paths collide.
 - **Mounts too:** a profile can also remember each side's mount and prefix, applied when you pick it.
-- **The summary line** says how many pairs a mapping matched, and how many key differences and paths the profile ignored.
+- **Rewrites match whole words,** case-sensitive: `test` never touches `latest`. Certificates, keys and base64 data are never rewritten. A copy writes the target side's word (a copy to the right turns `test` into `dev`, a copy to the left the other way), and the review marks each rewritten key.
+- **The summary line** says how many pairs a mapping matched, how many key differences and paths the profile ignored, and how many keys are equal only after rewrites.
 
 **Shared and personal profiles:**
 - *Shared* profiles come from the server (`LOCKSTEP_PROFILES`, see [configuration](configuration.md)), so a team sees the same rules. They're read-only: **Duplicate** makes an editable copy.
 - *Personal* profiles are saved in your browser. **New** and **Edit** open the editor; **Export** and **Import** move them between browsers or people as JSON.
+
+### Building a profile from what's in the two Vaults
+
+With a mount chosen on both sides, **＋ New** (or **Edit**) and then **Read both sides** lists every secret on each side and suggests rules, each with the reason it was made:
+- **A mapping** for a folder that's only on one side and holds secrets with the same names as a folder only on the other: a rename, such as `enterprise-logging-app/**` ⇄ `ELP/**`. When the folders differ in an environment segment under a varying parent, the mapping uses a wildcard (`services/*/prod/**` ⇄ `services/*/staging/**`).
+- **A rewrite** for a word that differs between values and makes them equal once read as its counterpart, with how many keys it fixes. Words come only from paths and common environment names (`dev`, `test`, `staging`, `prod`…), so a suggestion never reveals any other part of a value.
+
+**Add** or **Add all** puts them in the editor. The **What this profile does** panel explains each rule in plain words against the secrets actually there (which pairs a mapping makes, what's still one-sided), and **Preview the comparison** runs it before you save. Ignored keys are left to you: deciding a difference doesn't matter is a judgement, not a pattern. The guide [Comparing environments after an application is renamed](guides/compare-environments-after-a-rename.md) walks through it.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/30-profile-explained-dark.png">
+  <img alt="The profile editor with suggested rules added and the explanation panel" src="images/30-profile-explained-light.png">
+</picture>
 
 ### Building a profile from a comparison
 

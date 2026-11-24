@@ -28,7 +28,7 @@ With [pipx](https://pipx.pypa.io/), which installs the CLI into its own virtual 
 
 ```sh
 # a release (recommended); the CLI is in v0.2.0 and later
-pipx install "git+https://github.com/welshstew/lockstep@v0.6.0#subdirectory=backend"
+pipx install "git+https://github.com/welshstew/lockstep@v0.10.0#subdirectory=backend"
 
 # or the latest code on main
 pipx install "git+https://github.com/welshstew/lockstep#subdirectory=backend"
@@ -39,7 +39,7 @@ lockstep --version
 [uv](https://docs.astral.sh/uv/) works the same way:
 
 ```sh
-uv tool install "git+https://github.com/welshstew/lockstep@v0.6.0#subdirectory=backend"
+uv tool install "git+https://github.com/welshstew/lockstep@v0.10.0#subdirectory=backend"
 ```
 
 To move to another release, run the same command with the new tag and `--force` (`pipx install --force ...`, `uv tool install --force ...`). To remove the CLI, run `pipx uninstall lockstep` or `uv tool uninstall lockstep`.
@@ -48,7 +48,7 @@ If you'd rather use a plain virtual environment:
 
 ```sh
 python3 -m venv ~/.venvs/lockstep
-~/.venvs/lockstep/bin/pip install "git+https://github.com/welshstew/lockstep@v0.6.0#subdirectory=backend"
+~/.venvs/lockstep/bin/pip install "git+https://github.com/welshstew/lockstep@v0.10.0#subdirectory=backend"
 ~/.venvs/lockstep/bin/lockstep --help
 ```
 
@@ -62,7 +62,7 @@ Every release image (`ghcr.io/welshstew/lockstep`, v0.2.0 and later, for amd64 a
 docker run --rm -it --entrypoint lockstep \
   -e VAULT_ADDR -e VAULT_TOKEN \
   -v "$PWD:/work" -w /work \
-  ghcr.io/welshstew/lockstep:0.6.0 \
+  ghcr.io/welshstew/lockstep:0.10.0 \
   compare --mount app-config -o report.yaml
 ```
 
@@ -80,7 +80,7 @@ A shell alias makes the image feel like an installed command:
 
 ```sh
 alias lockstep='docker run --rm -it --entrypoint lockstep -e VAULT_ADDR -e VAULT_TOKEN -e VAULT_NAMESPACE \
-  -e LOCKSTEP_LEFT_TOKEN -e LOCKSTEP_RIGHT_TOKEN -v "$PWD:/work" -w /work ghcr.io/welshstew/lockstep:0.6.0'
+  -e LOCKSTEP_LEFT_TOKEN -e LOCKSTEP_RIGHT_TOKEN -v "$PWD:/work" -w /work ghcr.io/welshstew/lockstep:0.10.0'
 ```
 
 ## Logging in
@@ -140,7 +140,7 @@ Report written to report.yaml. Set actions in it, then run: lockstep apply repor
 |---|---|
 | `--mount`, `--left-mount`, `--right-mount` | KV v2 mount on both sides, or on each side |
 | `--prefix`, `--left-prefix`, `--right-prefix` | only compare under this path |
-| `--profile FILE\|NAME` | a [comparison profile](usage.md): a YAML or JSON file (a profile exported from the web UI, or just its `mappings` / `ignore_keys` / `ignore_paths`), or a name from `LOCKSTEP_PROFILES`. Its mounts and prefixes are used when you don't give them. |
+| `--profile FILE\|NAME` | a [comparison profile](usage.md): a YAML or JSON file (a profile exported from the web UI, or just its `mappings` / `rewrites` / `ignore_keys` / `ignore_paths`), or a name from `LOCKSTEP_PROFILES`. Its mounts and prefixes are used when you don't give them. |
 | `--profile-name NAME` | which profile to use when the file holds several (the web UI's export can) |
 | `--left-name`, `--right-name` | labels used in the report (default: the host) |
 | `--left-ui-addr`, `--right-ui-addr` | the address people open the Vault UI at, if it differs from the API address the CLI uses |
@@ -200,7 +200,7 @@ Each `keys` entry is a key that isn't equal on both sides:
 - `ignored` marks a difference that a profile rule ignores.
 - `left_holds` / `right_holds` say what the value is (a certificate, a keystore and so on) without showing it.
 
-When a profile maps paths, `left.path` and `right.path` differ, and copies follow the mapping. If a side couldn't be read, its `state` is `no_access` or `error`, and that secret can't be copied.
+When a profile maps paths, `left.path` and `right.path` differ, and copies follow the mapping. When it has rewrites (`prod` ⇄ `staging`), the report lists them under `rewrites`. Keys that are equal only once they're applied count as equal, and the summary says how many there are (`N keys equal once the profile's rewrites are applied`). If a side couldn't be read, its `state` is `no_access` or `error`, and that secret can't be copied.
 
 ### Setting actions
 
@@ -267,7 +267,7 @@ lockstep apply report.yaml --yes         # write everything the report says, wit
 The keys you confirm for a secret are written together, as one new version.
 
 **What apply checks**, for each secret:
-- It reads the source again, and writes the value it reads, so values never pass through the report.
+- It reads the source again, and writes the value it reads, so values never pass through the report. If the report has `rewrites`, they're applied to that value in the direction of the copy (`prod` becomes `staging` on the way right), and the prompt marks the key `(words rewritten by the profile)`.
 - **If the source or target changed since the report was made, the secret is skipped and reported.** The rest still go ahead. Compare again to pick up the changes.
 - The write uses check-and-set, so a change made while you are answering prompts also makes it skip.
 - The target needs write permission (`create` / `update`).

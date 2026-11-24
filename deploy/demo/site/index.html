@@ -3,11 +3,15 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Lockstep: compare and sync HashiCorp Vault KV secrets</title>
-  <meta name="description" content="Open-source tool to compare, sync, export and import KV v2 secrets across HashiCorp Vault clusters and environments. Find drift, review and copy safely, from a web UI or the CLI.">
-  <meta property="og:title" content="Lockstep: compare and sync HashiCorp Vault KV secrets">
-  <meta property="og:description" content="Compare, inspect and sync KV v2 secrets across HashiCorp Vault clusters. Open source, MIT licensed, built for Kubernetes.">
-  <meta property="og:image" content="https://getlockstep.cloud/images/02-compare-dark.png">
+  <title>Lockstep: compare and sync HashiCorp Vault and OpenBao KV secrets</title>
+  <meta name="description" content="Open-source tool to compare, sync, export and import KV v2 secrets across HashiCorp Vault and OpenBao clusters and environments. Find drift, review and copy safely, from a web UI or the CLI.">
+  <meta property="og:title" content="Lockstep: compare and sync HashiCorp Vault and OpenBao KV secrets">
+  <meta property="og:description" content="Compare, inspect and sync KV v2 secrets across HashiCorp Vault and OpenBao clusters. Open source, MIT licensed, built for Kubernetes.">
+  <meta property="og:image" content="https://getlockstep.cloud/images/social-preview.png">
+  <meta property="og:image:width" content="1280">
+  <meta property="og:image:height" content="640">
+  <meta property="og:image:alt" content="Lockstep: diff and sync secrets between Vault and OpenBao">
+  <meta name="twitter:card" content="summary_large_image">
   <meta property="og:url" content="https://getlockstep.cloud/">
   <meta property="og:type" content="website">
   <link rel="canonical" href="https://getlockstep.cloud/">
@@ -20,7 +24,7 @@
     "@context": "https://schema.org",
     "@type": "SoftwareApplication",
     "name": "Lockstep",
-    "description": "Compare and sync KV v2 secrets across HashiCorp Vault clusters, mounts and environments, with a web UI and a command line. Values stay hidden unless you ask to see them.",
+    "description": "Compare and sync KV v2 secrets across HashiCorp Vault and OpenBao clusters, mounts and environments, with a web UI and a command line. Values stay hidden unless you ask to see them.",
     "url": "https://getlockstep.cloud/",
     "applicationCategory": "DeveloperApplication",
     "applicationSubCategory": "Secrets management",
@@ -56,7 +60,7 @@
       <div class="wrap hero-grid">
         <div class="hero-copy">
           <h1>See where your Vaults disagree. Bring them back in step.</h1>
-          <p class="lede">Lockstep lines up two HashiCorp Vault KV&nbsp;v2 mounts, across clusters, environments or paths, and shows every secret and key that differs. Values are compared on the server and stay hidden until you ask. Copies go through a review and never overwrite a change you didn’t see.</p>
+          <p class="lede">Lockstep lines up two KV&nbsp;v2 mounts in HashiCorp Vault or OpenBao, across clusters, environments or paths, or from Vault to OpenBao, and shows every secret and key that differs. Values are compared on the server and stay hidden until you ask. Copies go through a review and never overwrite a change you didn’t see.</p>
           <div class="ctas">
             <a class="btn primary" href="https://demo.getlockstep.cloud">Try the live demo</a>
             <a class="btn" href="https://github.com/welshstew/lockstep">View the source</a>
@@ -93,9 +97,9 @@
               <dt>Compare anything to anything</dt>
               <dd>Two Vaults, two mounts or two path prefixes, down to a number that became a string.</dd>
               <dt>Comparison profiles</dt>
-              <dd>Pair <code>services/*/prod/**</code> with <code>services/*/staging/**</code> and ignore keys that differ by design. Build the rules by clicking Ignore in the results.</dd>
+              <dd>Pair <code>services/*/prod/**</code> with <code>services/*/staging/**</code>, or a renamed app’s old folder with its new one. Read <code>test</code> as <code>dev</code> inside values, and ignore keys that differ by design. Lockstep reads both sides, suggests the rules and explains each one.</dd>
               <dt>Configuration, too</dt>
-              <dd>Secrets engines, auth methods, their tuning, roles and keys, compared across two Vaults.</dd>
+              <dd>Secrets engines, auth methods, their tuning, roles and keys, compared across two Vaults or OpenBaos.</dd>
               <dt>Drift checks in CI</dt>
               <dd><code>lockstep compare</code> exits non-zero when environments drift, with no values in the log.</dd>
             </dl>
@@ -158,14 +162,14 @@
       </div>
       <div class="wrap row">
         <div class="copy">
-          <h2>Ignore the noise in a few clicks</h2>
-          <p>Hostnames and per-environment passwords are meant to differ. Press <strong>Pick what to ignore</strong>, click Ignore on what doesn’t matter, check the result, and save it as a profile for the next comparison and for CI.</p>
-          <p><a href="/guides/build-a-comparison-profile/">Guide: build a comparison profile</a></p>
+          <h2>Line up environments that don’t match</h2>
+          <p>Staging keeps its secrets under <code>staging/</code>, values say <code>db-prod</code> or <code>db-staging</code>, and dev renamed the app last sprint. A comparison profile maps the paths, reads <code>test</code> as <code>dev</code> inside values, and ignores what must differ, so only real drift is left. Press <strong>Read both sides</strong> and Lockstep suggests the rules, and explains each one against what’s actually there.</p>
+          <p><a href="/guides/build-a-comparison-profile/">Guide: build a comparison profile</a> · <a href="/guides/compare-environments-after-a-rename/">after an application is renamed</a></p>
         </div>
         <div class="shot">
           <picture>
-            <source media="(prefers-color-scheme: dark)" srcset="/images/15-pick-ignore-dark.png">
-            <img src="/images/15-pick-ignore-light.png" width="1440" height="900" loading="lazy" alt="Ignore mode: a secret, a folder and a key picked, listed as unsaved rules with Save as profile">
+            <source media="(prefers-color-scheme: dark)" srcset="/images/31-rename-compare-dark.png">
+            <img src="/images/31-rename-compare-light.png" width="1440" height="900" loading="lazy" alt="Test compared with dev after a rename: the old folder paired with the new one, keys equal after rewriting test to dev, and the real changes left">
           </picture>
         </div>
       </div>
@@ -239,11 +243,11 @@ open http://localhost:8080</code></pre>
           </div>
           <div class="span">
             <h3>Command line</h3>
-<pre><code>pipx install "git+https://github.com/welshstew/lockstep@v0.9.0#subdirectory=backend"
+<pre><code>pipx install "git+https://github.com/welshstew/lockstep@v0.10.0#subdirectory=backend"
 lockstep compare --help
 
 # or run it from the image
-docker run --rm -it --entrypoint lockstep ghcr.io/welshstew/lockstep:0.9.0 --help</code></pre>
+docker run --rm -it --entrypoint lockstep ghcr.io/welshstew/lockstep:0.10.0 --help</code></pre>
           </div>
         </div>
         <p class="more">Configuration, authentication, deployment and <a href="/docs/cli/">command-line</a> guides are in the <a href="/docs/">documentation</a>.</p>
@@ -264,8 +268,12 @@ docker run --rm -it --entrypoint lockstep ghcr.io/welshstew/lockstep:0.9.0 --hel
             <span>Fail a pipeline when two environments drift apart, with a read-only token.</span></li>
           <li><a href="/guides/export-import-vault-secrets/">Exporting, importing and migrating Vault secrets</a>
             <span>Encrypted exports, comparing against a backup, and promoting dev to test.</span></li>
+          <li><a href="/guides/migrate-vault-to-openbao/">Migrating from Vault to OpenBao, verified</a>
+            <span>Check what OpenBao lacks, copy each mount, prove every secret arrived, then compare policies.</span></li>
           <li><a href="/guides/build-a-comparison-profile/">Building a comparison profile</a>
-            <span>Pick what to ignore, map paths between layouts, and reuse the profile in CI.</span></li>
+            <span>Let Lockstep read both sides and suggest the rules, pick what to ignore, and reuse the profile in CI.</span></li>
+          <li><a href="/guides/compare-environments-after-a-rename/">Comparing environments after an application is renamed</a>
+            <span>Map the old folder to the new, rewrite environment words in values, and see only what has to ship.</span></li>
           <li><a href="/guides/vault-jwt-login-from-ci/">Logging in with JWT from CI</a>
             <span>Use a pipeline’s OIDC identity token: no stored secrets, short-lived tokens.</span></li>
         </ul>
@@ -276,7 +284,7 @@ docker run --rm -it --entrypoint lockstep ghcr.io/welshstew/lockstep:0.9.0 --hel
       <div class="wrap demo-box">
         <div>
           <h2>Try it now</h2>
-          <p>The demo has two Vaults and two OpenBaos with the same sample data, including certificates and keystores. Compare Vault with OpenBao to see what a migration check looks like, or sign in to an OpenBao namespace (<code>team-a</code>, <code>team-a/apps</code>) and compare two of them. Sign in as <code>alice</code> (can write), <code>bob</code> (read-only) or <code>carol</code> (limited access); every password is <code>password</code>. The data resets every hour.</p>
+          <p>The demo has two Vaults and two OpenBaos with the same sample data, including certificates and keystores. Compare Vault with OpenBao to see what a migration check looks like, or sign in to an OpenBao namespace (<code>team-a</code>, <code>team-a/apps</code>) and compare two of them. To see environments that don’t line up, connect Vault A and Vault B and choose the profile <strong>Test ↔ dev: apps (ELP rename)</strong>: Vault A plays test and Vault B dev, after an application was renamed in dev. Sign in as <code>alice</code> (can write), <code>bob</code> (read-only) or <code>carol</code> (limited access); every password is <code>password</code>. The data resets every hour.</p>
         </div>
         <a class="btn primary big" href="https://demo.getlockstep.cloud">Open the demo</a>
       </div>
@@ -287,7 +295,7 @@ docker run --rm -it --entrypoint lockstep ghcr.io/welshstew/lockstep:0.9.0 --hel
     <div class="wrap">
       <p><a class="brand small" href="/"><span class="mark" aria-hidden="true"><i></i><i></i></span>Lockstep</a> is open source under the <a href="https://github.com/welshstew/lockstep/blob/main/LICENSE">MIT licence</a>.
         <a href="https://github.com/welshstew/lockstep">GitHub</a>, <a href="https://github.com/welshstew/lockstep/releases">releases</a>, <a href="/docs/">docs</a>, <a href="https://github.com/welshstew/lockstep/blob/main/SECURITY.md">security</a>.</p>
-      <p class="fine">Lockstep is an independent project. It is not affiliated with, endorsed by or sponsored by HashiCorp. HashiCorp and Vault are trademarks of HashiCorp, Inc.</p>
+      <p class="fine">Lockstep is an independent project. It is not affiliated with, endorsed by or sponsored by HashiCorp or the OpenBao project. HashiCorp and Vault are trademarks of HashiCorp, Inc.</p>
       <p class="fine">Privacy: this site sets no cookies for tracking and loads no third-party scripts or fonts. The server keeps access logs (including IP addresses) for 30 days to keep the site secure and to count visits; visit statistics are produced with anonymised IP addresses. The demo’s sign-in cookie only holds your demo session.</p>
     </div>
   </footer>

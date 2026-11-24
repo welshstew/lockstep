@@ -67,7 +67,8 @@ def _shown(v: Any, exact: bool = False) -> str:
 
 def _describe_key(k: KeyPlan, show_values: bool) -> list[str]:
     verb = {"add": "add   ", "update": "update"}[k.action]
-    lines = [f"    {verb} {k.key}" + ("  (type changes)" if k.type_change else "")]
+    lines = [f"    {verb} {k.key}" + ("  (type changes)" if k.type_change else "")
+             + ("  (words rewritten by the profile)" if k.rewritten else "")]
     if show_values:
         if k.action == "update":
             lines.append(f"             now: {_shown(k.target_value, k.type_change)}")
@@ -88,7 +89,7 @@ async def run(report: Report, changes: list[tuple[ReportSecret, Change]], lconn:
         for line in lines:
             print(line, file=out)
 
-    async with _Ctx.direct(lconn, rconn, left, right, settings) as ctx:
+    async with _Ctx.direct(lconn, rconn, left, right, settings, report.rewrites) as ctx:
         for secret, change in changes:
             ev, _, _ = await evaluate(ctx, change, reveal=show_values)
             where = f"{ev.target.name} · {ev.target.mount}/{ev.target.path}"

@@ -5,7 +5,7 @@ import re
 
 from playwright.sync_api import expect
 
-from conftest import compare, expand, key_row, row, side, sign_in_userpass
+from conftest import choose_mount, compare, expand, key_row, row, side, sign_in_userpass
 
 SHARED = "Prod ↔ staging services"
 
@@ -154,3 +154,54 @@ def test_build_a_profile_by_picking_what_to_ignore(page):
     compare(page)
     expect(page.locator(".profile-effect")).to_contain_text("Profile Picked rules")
     expect(row(page, "legacy/old-service")).to_have_count(0)
+
+
+RENAME = "Test ↔ dev: apps (ELP rename)"
+
+
+def test_rename_profile_leaves_what_changed_in_dev(page):
+    """enterprise-logging-app (test, Vault A) against ELP (dev, Vault B): the shared profile pairs
+    them, reads test/dev and the old/new name as the same, and leaves the real changes."""
+    connect_both(page)
+    bar = page.locator("section.profile-bar")
+    bar.get_by_role("combobox").select_option(label=RENAME)
+    expect(bar).to_contain_text("2 rewrites")
+    compare(page)
+    expect(page.locator(".profile-effect")).to_contain_text("equal once enterprise-logging-app → elp, test → dev are applied")
+    page.locator(".chip", has_text="Everything").click()
+    values = mapped_row(page, "enterprise-logging-app/values")
+    expect(values.locator(".map-r")).to_have_text("ELP/values")
+    expect(values.locator(".secret-head .badge.rewritten")).to_have_text("5 rewritten")
+    values.locator(".secret-head").click()
+    expect(key_row(values, "ingest_endpoint").locator(".badge.rewritten")).to_have_text("equal after rewrite")
+    expect(key_row(values, "batch_size").locator(".badge.ignored")).to_have_count(0)
+    expect(key_row(values, "api_token").locator(".badge.ignored")).to_be_visible()
+    expect(mapped_row(page, "enterprise-logging-app/certs").locator(".badge").last).to_have_text("Equal")
+    expect(mapped_row(page, "enterprise-logging-app/alerts").locator(".badge").last).to_have_text("Right only")
+
+
+def test_builder_reads_both_sides_and_explains(page):
+    connect_both(page)
+    for which in ("left", "right"):
+        choose_mount(page, which, "apps")
+    page.locator("section.profile-bar").get_by_role("button", name="＋ New").click()
+    ed = page.locator("dialog.profile-editor")
+    explain = ed.locator("aside.explain")
+    expect(explain).to_contain_text("No rules yet")
+    ed.get_by_role("button", name="Read both sides").click()
+    found = ed.locator(".builder-found")
+    expect(found.locator(".suggestions li").first).to_contain_text("enterprise-logging-app/**")
+    expect(found).to_contain_text("looks like a rename")
+    expect(found.locator(".suggestions li", has_text="Rewrite").filter(has_text="test")).to_have_count(1)
+    found.get_by_role("button", name="Add all").click()
+    expect(ed.get_by_label("Mapping 1 left pattern")).to_have_value("enterprise-logging-app/**")
+    expect(ed.get_by_label("Rewrite 1 left word")).not_to_have_value("")
+    expect(explain).to_contain_text("Pairs secrets under enterprise-logging-app/** on the left")
+    expect(explain).to_contain_text("enterprise-logging-app/values ⇄ ELP/values")
+    expect(explain).to_contain_text("Only on the right: ELP/alerts")
+    expect(explain.locator("li", has_text="Reads")).to_have_count(2)
+    explain.get_by_role("button", name="Preview the comparison").click()
+    expect(explain.locator(".explain-preview p")).to_contain_text("equal after rewrites")
+    ed.get_by_label("Name").fill("My test ↔ dev")
+    ed.get_by_role("button", name="Save profile").click()
+    expect(page.locator("section.profile-bar")).to_contain_text("1 mapping · 2 rewrites")

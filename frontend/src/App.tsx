@@ -14,7 +14,7 @@ import { ProfileBar } from "./components/ProfileBar";
 import { ProfileEditor } from "./components/ProfileEditor";
 import { ReviewDialog } from "./components/ReviewDialog";
 import {
-  emptyRules, exportProfiles, loadActive, loadPersonal, mergeRules, type ProfileRef, ruleCount, saveActive, savePersonal,
+  emptyRules, exportProfiles, loadActive, loadPersonal, mergeRules, type ProfileRef, rewritesOf, ruleCount, saveActive, savePersonal,
 } from "./profiles";
 import { type Changeset, changesetSize } from "./staging";
 import { SideCard } from "./components/SideCard";
@@ -115,6 +115,7 @@ export function App() {
   const [personal, setPersonal] = useState<Profile[]>(loadPersonal);
   const [activeRef, setActiveRef] = useState<ProfileRef | null>(loadActive);
   const [editing, setEditing] = useState<{ initial: Profile | null; fromDraft?: boolean } | null>(null);
+  const [resultRules, setResultRules] = useState<ProfileRules | null>(null); // the rules the result was compared with
   // Ignore mode: rules picked from the results, not saved yet ("draft"), used by Compare again
   const [ignoreMode, setIgnoreMode] = useState(false);
   const [draft, setDraft] = useState<ProfileRules>(emptyRules);
@@ -223,8 +224,9 @@ export function App() {
     setError(null);
     setChangeset({});
     try {
-      setResult(await api.compare(sideRef(l), sideRef(r),
-        draftRules ? mergeRules(activeProfile?.rules, draft) : activeProfile?.rules ?? null, withMetadata));
+      const rules = draftRules ? mergeRules(activeProfile?.rules, draft) : activeProfile?.rules ?? null;
+      setResult(await api.compare(sideRef(l), sideRef(r), rules, withMetadata));
+      setResultRules(rules);
     } catch (e) {
       setError((e as Error).message);
       setResult(null);
@@ -371,6 +373,7 @@ export function App() {
           initial={editing.initial}
           takenNames={personal.map((p) => p.name)}
           current={{ left_mount: sides[0].mount, left_prefix: sides[0].prefix, right_mount: sides[1].mount, right_prefix: sides[1].prefix }}
+          sides={ready ? { left: sideRef(sides[0]), right: sideRef(sides[1]), leftLabel: label(sides[0]), rightLabel: label(sides[1]) } : null}
           onClose={() => setEditing(null)}
           onSave={(p) => {
             const replacing = editing.initial && personal.some((x) => x.name === editing.initial!.name);
@@ -464,6 +467,8 @@ export function App() {
           {activeProfile ? <>Profile <strong>{activeProfile.name}</strong>{draftRules > 0 && " plus unsaved rules"}</> : "Unsaved rules"}: {result.summary.mapped ?? 0} pair{result.summary.mapped === 1 ? "" : "s"} matched by a mapping
           · {result.summary.ignored_keys ?? 0} key difference{result.summary.ignored_keys === 1 ? "" : "s"} ignored
           · {result.summary.ignored_paths ?? 0} path{result.summary.ignored_paths === 1 ? "" : "s"} left out
+          {rewritesOf(resultRules).length > 0 && <> · {result.summary.rewritten_keys ?? 0} key{result.summary.rewritten_keys === 1 ? "" : "s"} equal
+            once {rewritesOf(resultRules).map((w) => `${w.left} → ${w.right}`).join(", ")} {rewritesOf(resultRules).length === 1 ? "is" : "are"} applied</>}
         </div>
       )}
       {result && <Results result={result} reveal={reveal} leftLabel={label(sides[0])} rightLabel={label(sides[1])}
@@ -489,6 +494,7 @@ export function App() {
 
       {reviewing && result && hasStaged && (
         <ReviewDialog result={result} changeset={changeset} onChangeset={setChangeset} reveal={reveal} profile={activeProfile?.name ?? null}
+                      rewrites={rewritesOf(resultRules)}
                       sides={{ left: sideRef(sides[0]), right: sideRef(sides[1]) }}
                       onClose={(applied) => {
                         setReviewing(false);

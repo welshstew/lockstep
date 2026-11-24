@@ -336,6 +336,31 @@
                   "minLength": 1,
                   "maxLength": 512
                 }
+              },
+              "rewrites": {
+                "description": "Words read as their counterpart in values before comparing, and when copying (left: test, right: dev). Whole words, case-sensitive.",
+                "type": "array",
+                "maxItems": 50,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "left",
+                    "right"
+                  ],
+                  "properties": {
+                    "left": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200
+                    },
+                    "right": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200
+                    }
+                  }
+                }
               }
             }
           }

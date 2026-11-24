@@ -9,6 +9,8 @@ both, in one write to the target secret.
 
 Safety rules, applied the same way by preview and apply:
   * Copied values always come from a fresh read of the SOURCE Vault, never from the browser.
+    A comparison profile's rewrites (`test` ⇄ `dev`) are applied to them on the way, in the
+    direction of the copy, so what's written is what the comparison counted as equal.
     Override values are the only values the browser sends, and only to be written.
   * Each target write uses KV v2 check-and-set (CAS) against the target version the user
     saw when comparing. If the target changed since, the item is a conflict and isn't written.
@@ -34,6 +36,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, model_validator
 
 from ..config import Settings, get_settings
+from ..rules import Rewrite, Rules
 from ..session import Connection, SessionData, load_session
 from ..vault import VaultClient, VaultError
 from .compare import AnySide, Side, side_client, side_connection
@@ -101,6 +104,7 @@ class SyncRequest(BaseModel):
     right: AnySide
     changes: list[Change] = Field(min_length=1, max_length=MAX_CHANGES)
     reveal: bool = False  # preview only: include values
+    rewrites: list[Rewrite] = Field(default=[], max_length=50)  # the comparison profile's, applied to copied values
 
     @model_validator(mode="after")
     def _unique(self):
@@ -133,6 +137,7 @@ class KeyPlan(BaseModel):
     action: Literal["add", "update", "unchanged", "remove"]
     type_change: bool = False
     override: bool = False  # a value the user typed, not copied from the source
+    rewritten: bool = False  # the profile's rewrites changed the copied value (e.g. test → dev)
     source_value: Any = None  # only when reveal=true (for an override: the new value)
     target_value: Any = None
 
@@ -178,17 +183,19 @@ class _Ctx:
 
     def __init__(self, req: SyncRequest, session: SessionData, settings: Settings):
         self._setup(side_connection(req.left, session), side_connection(req.right, session),
-                    req.left, req.right, settings)
+                    req.left, req.right, settings, req.rewrites)
 
     @classmethod
     def direct(cls, lconn: Connection, rconn: Connection, left: Side, right: Side,
-               settings: Settings) -> "_Ctx":
+               settings: Settings, rewrites: list[Rewrite] | None = None) -> "_Ctx":
         """A context from two connections, without a web session (the CLI)."""
         ctx = cls.__new__(cls)
-        ctx._setup(lconn, rconn, left, right, settings)
+        ctx._setup(lconn, rconn, left, right, settings, rewrites)
         return ctx
 
-    def _setup(self, lconn: Connection, rconn: Connection, left: AnySide, right: AnySide, settings: Settings):
+    def _setup(self, lconn: Connection, rconn: Connection, left: AnySide, right: AnySide, settings: Settings,
+               rewrites: list[Rewrite] | None = None):
+        self.rules = Rules(rewrites=list(rewrites or []))
         self.lconn, self.rconn = lconn, rconn
         self.left, self.right = left, right
         self.lmount, self.lprefix = left.norm()
@@ -291,7 +298,10 @@ async def evaluate(ctx: _Ctx, change: Change, reveal: bool,
                         f"v{src.version}). The current source value will be copied.")
 
     target_data = dict(tgt.data or {}) if tgt.state == "present" else {}
-    new_values = {k: source_data[k] for k in keys} | overrides
+    to = "right" if change.direction == "left_to_right" else "left"
+    copied = {k: ctx.rules.rewrite(source_data[k], to) for k in keys}
+    rewritten = {k for k in keys if json.dumps(copied[k], sort_keys=True) != json.dumps(source_data[k], sort_keys=True)}
+    new_values = copied | overrides
     key_plans = []
     for k in sorted(new_values):
         new = new_values[k]
@@ -302,7 +312,7 @@ async def evaluate(ctx: _Ctx, change: Change, reveal: bool,
         else:
             action = "update"
         key_plans.append(KeyPlan(
-            key=k, action=action, override=k in overrides,
+            key=k, action=action, override=k in overrides, rewritten=k in rewritten and k not in overrides,
             type_change=action == "update" and _type(target_data[k]) != _type(new),
             source_value=new if reveal else None,
             target_value=target_data.get(k) if reveal else None))

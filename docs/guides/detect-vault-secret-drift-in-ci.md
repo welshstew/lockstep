@@ -37,7 +37,7 @@ jobs:
     permissions: {id-token: write, contents: read}
     steps:
       - name: Install the Lockstep CLI
-        run: pipx install "git+https://github.com/welshstew/lockstep@v0.6.0#subdirectory=backend"
+        run: pipx install "git+https://github.com/welshstew/lockstep@v0.10.0#subdirectory=backend"
 
       - name: Get an ID token for Vault (JWT auth)
         run: |
@@ -66,12 +66,17 @@ Any runner with Python 3.13 or newer works the same way: install with `pipx`, ge
 
 ## Ignore what's meant to differ
 
-Environments differ on purpose: hostnames, URLs, per-environment credentials. A **comparison profile** keeps those from failing the build.
-- **Ignore keys:** such as `host` or `*_url` under `services/**`. They're still listed, marked *ignored*, but they don't make a secret *Different*.
-- **Ignore whole paths:** such as `legacy/**`.
-- **Map paths:** when the layouts differ, for example `services/*/prod/**` ⇄ `services/*/staging/**`.
+Environments differ on purpose: different layouts, hostnames that name their environment, per-environment credentials. A **comparison profile** keeps those from failing the build, without hiding real drift:
+- **Map paths** when the layouts differ, for example `services/*/prod/**` ⇄ `services/*/staging/**`.
+- **Rewrite words** that name the environment inside values, for example `prod` ⇄ `staging`. `db-prod.internal` then matches `db-staging.internal`, but a staging host pointed at production still fails the build. That's why a rewrite is better than ignoring `host`.
+- **Ignore keys** that must differ, such as passwords and tokens under `services/**`. They're still listed, marked *ignored*, but they don't make a secret *Different*.
+- **Ignore whole paths,** such as `legacy/**`.
 
-Build the profile in the web UI, most quickly by pressing **Pick what to ignore…** and clicking *Ignore* on the noise ([guide](build-a-comparison-profile.md)). Then export it as JSON and commit it next to the workflow. `--profile` accepts the export directly; use `--profile-name` if the file holds several profiles.
+Build the profile in the web UI ([guide](build-a-comparison-profile.md)):
+1. In the profile editor, **Read both sides** suggests the mappings and rewrites.
+2. **Pick what to ignore…** in the results takes care of the rest.
+
+Then export the profile as JSON and commit it next to the workflow. `--profile` accepts the export directly; use `--profile-name` if the file holds several profiles. The report records the profile's rewrites, so `lockstep apply` uses them when it copies.
 
 ## Fixing the drift
 

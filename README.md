@@ -1,6 +1,6 @@
 # Lockstep
 
-**Compare, inspect and sync KV secrets across HashiCorp Vault clusters.**
+**Compare, inspect and sync KV secrets across HashiCorp Vault and OpenBao clusters.**
 
 [![security-scan](https://github.com/welshstew/lockstep/actions/workflows/security.yml/badge.svg)](https://github.com/welshstew/lockstep/actions/workflows/security.yml)
 [![e2e](https://github.com/welshstew/lockstep/actions/workflows/e2e.yml/badge.svg)](https://github.com/welshstew/lockstep/actions/workflows/e2e.yml)
@@ -23,7 +23,7 @@ Compare **KV v2 secrets engines** across HashiCorp Vault clusters, or across two
 - **Compare anything to anything.** Two Vaults, two mounts, or two path prefixes. Each side has its own connection, mount and prefix.
 - **Values are compared on the server and never shown unless you ask.** The browser receives only a status per key (equal / different / left only / right only / no access). **Show values** reveals them, only for the secrets you open.
 - **Only values count.** Versions, timestamps and the order of keys inside JSON are ignored. `5432` vs `"5432"` is flagged as a *type* difference.
-- **Comparison profiles.** Pair paths that differ between environments (`services/*/prod/**` ⇄ `services/*/staging/**`), and ignore keys or paths that are meant to differ. Copies follow the mapping. Profiles can be shared by the team (server) or personal (browser, export/import).
+- **Comparison profiles.** Pair paths that differ between environments (`services/*/prod/**` ⇄ `services/*/staging/**`, or a renamed application's old and new folder), read environment words in values as their counterpart (`test` ⇄ `dev`), and ignore keys or paths that are meant to differ. Copies follow the mapping and the rewrites. **Read both sides** suggests the rules from what's in the two Vaults and explains each one. Profiles can be shared by the team (server) or personal (browser, export/import).
 - **Honest about permissions.** Secrets you can't list or read show as **No access**, never as "only on the other side", so nobody overwrites what they couldn't see.
 - **Copy with ← / →** per key or per secret. A review shows exactly what each target gets. Writes use KV v2 **check-and-set**: a target changed by someone else since you compared becomes a conflict, not an overwrite. Nothing is deleted unless you ask (**Delete** on a key). Every write is **audit-logged** (without values).
 - **Clean up for good.** **Destroy** a secret on one side, or every secret shown with **Destroy all on left / right**: every version and its metadata, after typing a confirmation phrase. Checked against the version you compared and audit-logged; can be turned off server-wide.
@@ -49,7 +49,7 @@ Compare **KV v2 secrets engines** across HashiCorp Vault clusters, or across two
 |---|---|
 | **Connect.** Each side discovers the login methods its Vault offers (OIDC preselected).<br><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/01-connect-dark.png"><img alt="Connect screen" src="docs/images/01-connect-light.png"></picture> | **Key detail and copying.** Values shown on request, per-key last change, a staged copy (→) with the target value outlined.<br><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/03-detail-and-copy-dark.png"><img alt="Expanded secret with a staged copy" src="docs/images/03-detail-and-copy-light.png"></picture> |
 | **Review before writing.** Per target secret: keys added or updated, version change, permission and conflict checks.<br><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/04-review-dark.png"><img alt="Review dialog" src="docs/images/04-review-light.png"></picture> | **What each value is**, even while masked: keystores, certificates, expiry.<br><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/05-badges-dark.png"><img alt="Value type badges" src="docs/images/05-badges-light.png"></picture> |
-| **Comparison profiles.** Map `prod` paths to `staging` paths, ignore keys meant to differ (here `host`); copies follow the mapping.<br><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/09-profile-dark.png"><img alt="A profile pairing prod and staging paths, with an ignored key" src="docs/images/09-profile-light.png"></picture> | **Profile editor.** Mappings with wildcards, ignored keys and paths. Shared profiles come from the server; personal ones live in your browser and export as JSON.<br><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/10-profile-editor-dark.png"><img alt="Profile editor" src="docs/images/10-profile-editor-light.png"></picture> |
+| **Comparison profiles.** Map `prod` paths to `staging` paths, ignore keys meant to differ (here `host`); copies follow the mapping.<br><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/09-profile-dark.png"><img alt="A profile pairing prod and staging paths, with an ignored key" src="docs/images/09-profile-light.png"></picture> | **Profile builder.** Reads both sides and suggests mappings for renamed folders and rewrites for environment words, then explains the profile against what's there.<br><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/30-profile-explained-dark.png"><img alt="Profile editor with suggested rules and an explanation of what the profile does" src="docs/images/30-profile-explained-light.png"></picture> |
 | **Inspect both sides.** A PKCS#12 opened with its sibling password key; certificates compared field by field.<br><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/06-inspect-pkcs12-dark.png"><img alt="PKCS#12 inspector, both sides" src="docs/images/06-inspect-pkcs12-light.png"></picture> | **Certificate chains**, validated link by link against the trust anchors you choose.<br><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/07-certificate-chain-dark.png"><img alt="Certificate chain validation" src="docs/images/07-certificate-chain-light.png"></picture> |
 | **Certificate expiry dashboard.** Every certificate in both mounts, including inside keystores, by time to expiry; filter, inspect, export CSV.<br><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/11-expiry-dark.png"><img alt="Certificate expiry dashboard" src="docs/images/11-expiry-light.png"></picture> | **Sync plans.** A saved plan, opened and checked against both Vaults before anyone applies it.<br><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/12-sync-plan-dark.png"><img alt="A sync plan checked in the Sync plans tab" src="docs/images/12-sync-plan-light.png"></picture> |
 | **Export and import.** An encrypted export with its one-time key, shown once.<br><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/16-export-dark.png"><img alt="Encrypted export with its one-time key" src="docs/images/16-export-light.png"></picture> | **Import with rules.** Rewrite paths and values (prod → staging), preview, then write with check-and-set.<br><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/17-import-dark.png"><img alt="Import preview with transforms" src="docs/images/17-import-light.png"></picture> |
@@ -77,16 +77,16 @@ This starts two dev-mode Vaults filled with demo data, Dex as an OIDC provider, 
 ## Deploy
 
 ```sh
-helm upgrade --install lockstep oci://ghcr.io/welshstew/charts/lockstep --version 0.6.0 \
+helm upgrade --install lockstep oci://ghcr.io/welshstew/charts/lockstep --version 0.10.0 \
   -n lockstep --create-namespace -f my-values.yaml
 ```
 
-Or run the container anywhere: `ghcr.io/welshstew/lockstep:0.6.0` (amd64 and arm64, signed with cosign, with an SBOM and build provenance; see [releases](https://github.com/welshstew/lockstep/releases)).
+Or run the container anywhere: `ghcr.io/welshstew/lockstep:0.10.0` (amd64 and arm64, signed with cosign, with an SBOM and build provenance; see [releases](https://github.com/welshstew/lockstep/releases)).
 
 For the command line, install from GitHub (it isn't on PyPI yet) or use the same image with `--entrypoint lockstep`. See [Command line: install](docs/cli.md#install):
 
 ```sh
-pipx install "git+https://github.com/welshstew/lockstep@v0.6.0#subdirectory=backend"
+pipx install "git+https://github.com/welshstew/lockstep@v0.10.0#subdirectory=backend"
 ```
 
 A hardened chart: non-root, read-only filesystem, a session key kept across upgrades, optional Ingress, NetworkPolicy and Kubernetes auth. See [Deploying on Kubernetes](docs/kubernetes.md) and the [chart README](charts/lockstep/README.md).
@@ -107,7 +107,7 @@ A hardened chart: non-root, read-only filesystem, a session key kept across upgr
 
 ## Status and roadmap
 
-**Working:** comparison, copying, a command-line interface (reports and apply), value tools, last-updated metadata, comparison profiles (path mapping and ignore rules), a certificate expiry dashboard, all sign-in methods (token, userpass/LDAP, OIDC redirect, Kubernetes), a Helm chart tested in a real cluster, and in CI security scanning, chart checks and browser end-to-end tests.
+**Working:** comparison, copying, a command-line interface (reports and apply), value tools, last-updated metadata, comparison profiles (path mapping, value rewrites and ignore rules, suggested from both sides), a certificate expiry dashboard, all sign-in methods (token, userpass/LDAP, OIDC redirect, Kubernetes), a Helm chart tested in a real cluster, and in CI security scanning, chart checks and browser end-to-end tests.
 
 **Possible next steps:**
 1. **Four-eyes rule for sync plans:** optionally require the person applying a plan to be someone other than its creator (plans already record who made them)
@@ -120,4 +120,4 @@ Contributions are welcome ([CONTRIBUTING.md](CONTRIBUTING.md)). Please report se
 
 ---
 
-*Lockstep is an independent project. It is not affiliated with, endorsed by or sponsored by HashiCorp. HashiCorp and Vault are trademarks of HashiCorp, Inc.*
+*Lockstep is an independent project. It is not affiliated with, endorsed by or sponsored by HashiCorp or the OpenBao project. HashiCorp and Vault are trademarks of HashiCorp, Inc.*

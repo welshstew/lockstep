@@ -110,3 +110,69 @@ def test_bad_profile_config_fails_at_startup(monkeypatch):
     monkeypatch.setenv("LOCKSTEP_PROFILES", json.dumps([{"name": "x", "rules": {"mappings": [{"left": "a/*", "right": "b"}]}}]))
     with pytest.raises(Exception, match="same wildcards"):
         Settings()
+
+
+# ---- the apps mount: test (Vault A) against dev (Vault B), after ELP was renamed in dev
+
+ELP = {"mappings": [{"left": "enterprise-logging-app/**", "right": "ELP/**"}],
+       "rewrites": [{"left": "enterprise-logging-app", "right": "elp"}, {"left": "test", "right": "dev"}],
+       "ignore_keys": [{"key": "api_token", "path": "**"}, {"key": "log_level", "path": "**"},
+                       {"key": "tls.*", "path": "**/certs"}]}
+
+
+def apps(a, b):
+    return {"left": {"conn_id": a, "mount": "apps"}, "right": {"conn_id": b, "mount": "apps"}}
+
+
+def test_rename_profile_leaves_only_what_changed_in_dev(client, ab):
+    r = client.post("/api/compare", json=apps(*ab) | {"rules": ELP})
+    assert r.status_code == 200, r.text
+    s = {x["path"]: x for x in r.json()["secrets"]}
+    values = s["ELP/values"]
+    assert values["left_path"] == "enterprise-logging-app/values"
+    keys = {k["key"]: k for k in values["keys"]}
+    assert {k for k, v in keys.items() if v["rewritten"]} == {
+        "ingest_endpoint", "index_prefix", "service_account", "kafka_topic", "db_url"}
+    assert keys["batch_size"]["status"] == "different" and not keys["batch_size"]["ignored"]
+    assert keys["otlp_endpoint"]["status"] == "right_only"
+    assert keys["api_token"]["ignored"] and keys["log_level"]["ignored"]
+    assert values["status"] == "different" and values["rewritten_keys"] == 5
+    assert s["ELP/certs"]["status"] == "equal"
+    assert s["ELP/alerts"]["status"] == "right_only"
+    assert s["ELP/legacy-syslog"]["status"] == "left_only"
+    assert s["payments-gateway/config"]["status"] == "equal"
+    assert s["search-indexer/config"]["status"] == "different"
+    assert r.json()["summary"]["rewritten_keys"] >= 7
+
+
+def test_suggest_builds_the_rename_profile(client, ab):
+    r = client.post("/api/compare/suggest", json=apps(*ab))
+    assert r.status_code == 200, r.text
+    out = r.json()
+    assert [(m["left"], m["right"]) for m in out["mappings"]] == [("enterprise-logging-app/**", "ELP/**")]
+    assert {(w["left"], w["right"]) for w in out["rewrites"]} >= {("test", "dev"), ("enterprise-logging-app", "elp")}
+    assert "ELP/values" in out["right_paths"] and "enterprise-logging-app/values" in out["left_paths"]
+    assert out["before"]["left_only"] > out["after"]["left_only"]
+    assert out["after"]["equal"] > out["before"]["equal"]
+    assert "hunter" not in r.text and "tok-" not in r.text and "8f2a" not in r.text  # no values
+
+
+def test_copy_applies_rewrites_in_the_copy_direction(client, ab, vaults):
+    """Releasing ELP/alerts to test writes it at the old path, with dev words read back as test."""
+    raw_a = httpx.Client(base_url=f"{vaults[0]}/v1/", headers={"X-Vault-Token": "root-a"})
+    change = {"path": "enterprise-logging-app/alerts", "right_path": "ELP/alerts", "direction": "right_to_left",
+              "keys": None, "expected_target_version": None}
+    body = apps(*ab) | {"changes": [change], "rewrites": ELP["rewrites"]}
+    try:
+        plan = client.post("/api/sync/preview", json=body | {"reveal": True}).json()[0]
+        assert plan["target"]["path"] == "enterprise-logging-app/alerts" and plan["status"] == "ready"
+        svc = next(k for k in plan["keys"] if k["key"] == "pagerduty_service")
+        assert svc["rewritten"] and svc["source_value"] == "enterprise-logging-app-test"
+        res = client.post("/api/sync/apply", json=body | {"confirm": True}).json()
+        assert res["results"][0]["status"] == "applied"
+        got = raw_a.get("apps/data/enterprise-logging-app/alerts").json()["data"]["data"]
+        assert got == {"pagerduty_service": "enterprise-logging-app-test", "errors_per_minute": "50"}
+        after = client.post("/api/compare", json=apps(*ab) | {"rules": ELP}).json()
+        assert next(x for x in after["secrets"] if x["path"] == "ELP/alerts")["status"] == "equal"
+    finally:
+        raw_a.delete("apps/metadata/enterprise-logging-app/alerts")

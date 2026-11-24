@@ -38,8 +38,8 @@ REPO = "https://github.com/welshstew/lockstep"
 DOCS = ["usage", "cli", "authentication", "configuration", "kubernetes", "security"]
 # docs/guides/<name>.md published at /guides/<name>/: these first, in this order, then any others
 GUIDES = ["vault-secrets-in-development-environments", "compare-hashicorp-vault-clusters", "sync-vault-secrets-between-environments",
-          "detect-vault-secret-drift-in-ci", "export-import-vault-secrets",
-          "build-a-comparison-profile", "vault-jwt-login-from-ci"]
+          "detect-vault-secret-drift-in-ci", "export-import-vault-secrets", "migrate-vault-to-openbao",
+          "build-a-comparison-profile", "compare-environments-after-a-rename", "vault-jwt-login-from-ci"]
 
 
 class Page:
@@ -135,7 +135,10 @@ HEAD = """<!doctype html>
   <meta property="og:title" content="{title}">
   <meta property="og:description" content="{description}">
   <meta property="og:url" content="{canonical}">
-  <meta property="og:image" content="{base}/images/02-compare-dark.png">
+  <meta property="og:image" content="{base}/images/social-preview.png">
+  <meta property="og:image:width" content="1280">
+  <meta property="og:image:height" content="640">
+  <meta name="twitter:card" content="summary_large_image">
   <meta name="color-scheme" content="light dark">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect x='1' y='3' width='6' height='10' rx='1' fill='%234f6bed'/><rect x='9' y='3' width='6' height='10' rx='1' fill='%23e0864a'/></svg>">
   <link rel="stylesheet" href="/site.css">
@@ -159,7 +162,7 @@ FOOT = """
   <footer class="foot">
     <div class="wrap">
       <p><a class="brand small" href="/"><span class="mark" aria-hidden="true"><i></i><i></i></span>Lockstep</a> is open source under the <a href="{repo}/blob/main/LICENSE">MIT licence</a>. <a href="{repo}">GitHub</a> · <a href="{repo}/releases">Releases</a> · <a href="/docs/">Docs</a> · <a href="{repo}/blob/main/SECURITY.md">Security</a></p>
-      <p class="fine">Lockstep is an independent project. It is not affiliated with, endorsed by or sponsored by HashiCorp. HashiCorp and Vault are trademarks of HashiCorp, Inc.</p>
+      <p class="fine">Lockstep is an independent project. It is not affiliated with, endorsed by or sponsored by HashiCorp or the OpenBao project. HashiCorp and Vault are trademarks of HashiCorp, Inc.</p>
     </div>
   </footer>
 </body>
@@ -207,7 +210,7 @@ def render_index(pages: list[Page]) -> str:
     def cards(section: str) -> str:
         return "\n".join(f"""        <article><h3><a href="{p.url}">{html.escape(p.title)}</a></h3>
           <p>{html.escape(p.description)}</p></article>""" for p in pages if p.section == section)
-    desc = "Guides and documentation for Lockstep: compare and sync KV v2 secrets across HashiCorp Vault clusters."
+    desc = "Guides and documentation for Lockstep: compare and sync KV v2 secrets across HashiCorp Vault and OpenBao clusters."
     return (HEAD.format(title="Lockstep documentation and guides", description=desc, canonical=BASE + "/docs/",
                         base=BASE, repo=REPO)
             + f"""  <main id="main" class="wrap doc-index">

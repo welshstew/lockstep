@@ -5,5 +5,6 @@
 services:
   vault-a: {ports: !reset []}
   vault-b: {ports: !reset []}
+  openbao: {ports: !reset []}
   dex: {ports: !reset []}
   app: {ports: !reset []}

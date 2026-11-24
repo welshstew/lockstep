@@ -139,12 +139,36 @@ def scenes(page: Page, theme: str) -> None:
     scroll_to(page.locator(".profile-bar"))
     shot(page, "09-profile", theme)
 
-    # 10. The profile editor (a copy of the shared profile).
-    page.locator("section.profile-bar").get_by_role("button", name="Duplicate").click()
+    page.locator("section.profile-bar").get_by_role("combobox").select_option("")
+
+    # 29. The profile builder on the apps mount (Vault A is test, Vault B dev): both sides read,
+    #     a renamed folder and two rewrites suggested, each with its reason.
+    sign_in(page, "apps")
+    page.locator("section.profile-bar").get_by_role("button", name="＋ New").click()
     ed = page.locator("dialog.profile-editor")
-    expect(ed).to_be_visible()
-    shot(page, "10-profile-editor", theme)
+    ed.get_by_label("Name").fill("Test ↔ dev: apps")
+    ed.get_by_role("button", name="Read both sides").click()
+    expect(ed.locator(".suggestions li").first).to_be_visible()
+    shot(page, "29-profile-builder", theme, ed)
+
+    # 30. The suggestions added, and the profile explained against what's in the Vaults.
+    ed.locator(".builder-found").get_by_role("button", name="Add all").click()
+    ed.locator("aside.explain").get_by_role("button", name="Preview the comparison").click()
+    expect(ed.locator(".explain-preview p")).to_be_visible()
+    ed.locator(".editor-h", has_text="Path mappings").evaluate(
+        "el => el.closest('.review-body').scrollTo(0, el.offsetTop - 12)")
+    shot(page, "30-profile-explained", theme, ed)
     ed.get_by_role("button", name="Cancel").click()
+
+    # 31. Test against dev with the shared rename profile: ELP/values opened, rewritten keys
+    #     equal, the real changes (batch_size, otlp_endpoint) left.
+    page.locator("section.profile-bar").get_by_role("combobox").select_option(label="Test ↔ dev: apps (ELP rename)")
+    compare(page, everything=True)
+    v = page.locator(".secret").filter(has=page.locator(".map-l", has_text="enterprise-logging-app/values"))
+    v.locator(".secret-head").click()
+    expect(v.locator(".key-row .badge.rewritten").first).to_be_visible()
+    scroll_to(page.locator(".profile-effect"), 12)
+    shot(page, "31-rename-compare", theme)
     page.locator("section.profile-bar").get_by_role("combobox").select_option("")
 
     # 5. Certificates mount: value-type badges, including an expired certificate.

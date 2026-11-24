@@ -506,7 +506,33 @@ pre.preview { margin: 8px 0; }
 .profile-error { grid-column: 1 / -1; margin: 0; }
 @media (max-width: 860px) { .profile-bar { grid-template-columns: 1fr; } }
 .profile-effect { margin-top: 0; }
-dialog.profile-editor { width: min(820px, calc(100vw - 32px)); }
+dialog.profile-editor { width: min(1120px, calc(100vw - 32px)); }
+.editor-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 340px); gap: 24px; align-items: start; }
+@media (max-width: 900px) { .editor-grid { grid-template-columns: 1fr; } }
+.editor-main { min-width: 0; }
+.builder { margin-top: 14px; padding: 12px 14px; border: 1px dashed var(--border-strong); border-radius: var(--radius); }
+.builder-head { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; }
+.builder-head .editor-h { margin-top: 0; }
+.builder-head p { margin: 2px 0 0; max-width: 62ch; }
+.builder-head .btn { flex: none; }
+.suggestions { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 8px; }
+.suggestions li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; padding: 8px 10px;
+  background: var(--surface-2); border-radius: var(--radius-sm); }
+.suggestions li p { margin: 0; font-size: 13px; color: var(--text-2); grid-column: 1; max-width: 70ch; }
+.suggestions li .btn { grid-column: 2; grid-row: 1 / span 2; align-self: center; }
+.suggestion-rule { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.suggestion-rule .kind { font-size: 12px; font-weight: 600; color: var(--text-2); min-width: 56px; }
+.builder-foot { margin-top: 8px; align-items: center; }
+.explain { position: sticky; top: 0; padding: 12px 14px; background: var(--surface-2); border-radius: var(--radius); font-size: 13px; line-height: 1.5; }
+.explain .editor-h { margin-top: 0; }
+.explain-list { margin: 6px 0 0; padding-left: 18px; display: grid; gap: 8px; }
+.explain code { overflow-wrap: anywhere; }
+.explain-rest { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--border); }
+.explain-rest p { margin: 4px 0; overflow-wrap: anywhere; }
+.explain-preview { margin-top: 10px; }
+.explain-preview p { margin: 6px 0 0; }
+.warn-text { color: var(--diff); }
+.badge.rewritten { background: var(--equal-soft); color: var(--equal); font-weight: 600; }
 .editor-h { font-size: 14px; margin: 16px 0 2px; }
 .rule-row { margin-bottom: 6px; }
 .rule-row input { height: 32px; }

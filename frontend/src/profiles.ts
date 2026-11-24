@@ -7,7 +7,10 @@ const ACTIVE = "lockstep.activeProfile";
 
 export type ProfileRef = { source: "shared" | "personal"; name: string };
 
-export const emptyRules = (): ProfileRules => ({ mappings: [], ignore_paths: [], ignore_keys: [] });
+export const emptyRules = (): ProfileRules => ({ mappings: [], ignore_paths: [], ignore_keys: [], rewrites: [] });
+
+/** Profiles saved before rewrites existed have none. */
+export const rewritesOf = (r: ProfileRules | null | undefined) => r?.rewrites ?? [];
 
 export function loadPersonal(): Profile[] {
   try {
@@ -33,7 +36,8 @@ export function saveActive(ref: ProfileRef | null): void {
 function isProfile(p: unknown): p is Profile {
   const x = p as Profile;
   return !!x && typeof x.name === "string" && !!x.rules && Array.isArray(x.rules.mappings)
-    && Array.isArray(x.rules.ignore_paths) && Array.isArray(x.rules.ignore_keys);
+    && Array.isArray(x.rules.ignore_paths) && Array.isArray(x.rules.ignore_keys)
+    && (x.rules.rewrites === undefined || Array.isArray(x.rules.rewrites));
 }
 
 const wildcards = (p: string) => p.match(/\*\*|\*/g) ?? [];
@@ -45,6 +49,16 @@ export function validateRules(r: ProfileRules): string | null {
     if (wildcards(m.left).join() !== wildcards(m.right).join())
       return `Mapping "${m.left}" ⇄ "${m.right}": both sides need the same wildcards in the same order.`;
   }
+  const rw = rewritesOf(r);
+  for (const w of rw) {
+    if (!w.left.trim() || !w.right.trim()) return "Each rewrite needs a word on each side.";
+    if (w.left.trim() === w.right.trim()) return `Rewrite "${w.left}" ⇄ "${w.right}": the two words are the same.`;
+  }
+  for (const side of ["left", "right"] as const) {
+    const words = rw.map((w) => w[side].trim());
+    const dup = words.find((w, i) => words.indexOf(w) !== i);
+    if (dup) return `"${dup}" is on the ${side} of more than one rewrite.`;
+  }
   if (r.ignore_keys.some((k) => !k.key.trim())) return "Each ignored key needs a key pattern.";
   return null;
 }
@@ -55,6 +69,7 @@ export function describe(p: Profile): string {
     r.mappings.length && `${r.mappings.length} mapping${r.mappings.length === 1 ? "" : "s"}`,
     r.ignore_keys.length && `${r.ignore_keys.length} ignored key rule${r.ignore_keys.length === 1 ? "" : "s"}`,
     r.ignore_paths.length && `${r.ignore_paths.length} ignored path${r.ignore_paths.length === 1 ? "" : "s"}`,
+    rewritesOf(r).length && `${rewritesOf(r).length} rewrite${rewritesOf(r).length === 1 ? "" : "s"}`,
   ].filter(Boolean);
   return parts.join(" · ") || "no rules";
 }
@@ -115,11 +130,12 @@ export function mergeRules(a: ProfileRules | null | undefined, b: ProfileRules):
   const same = (x: { key: string; path: string }, y: { key: string; path: string }) => x.key === y.key && (x.path || "**") === (y.path || "**");
   const keys = [...base.ignore_keys, ...b.ignore_keys.filter((k) => !base.ignore_keys.some((x) => same(x, k)))];
   const maps = [...base.mappings, ...b.mappings.filter((m) => !base.mappings.some((x) => x.left === m.left && x.right === m.right))];
-  return { mappings: maps, ignore_paths: paths, ignore_keys: keys };
+  const rws = [...rewritesOf(base), ...rewritesOf(b).filter((w) => !rewritesOf(base).some((x) => x.left === w.left || x.right === w.right))];
+  return { mappings: maps, ignore_paths: paths, ignore_keys: keys, rewrites: rws };
 }
 
 export function ruleCount(r: ProfileRules): number {
-  return r.mappings.length + r.ignore_paths.length + r.ignore_keys.length;
+  return r.mappings.length + r.ignore_paths.length + r.ignore_keys.length + rewritesOf(r).length;
 }
 
 /** Add or remove one ignored path in a draft. */
@@ -139,3 +155,55 @@ export function toggleIgnoreKey(r: ProfileRules, key: string, path: string): Pro
 
 /** Glob characters in a literal path would be read as wildcards; such paths can't be picked. */
 export const literalSafe = (path: string) => !path.includes("*");
+
+// ---- Explaining a profile against what's in the two Vaults (the profile builder)
+
+/** Where a left path lands on the right under the mappings (first match wins), like rules.py. */
+export function mapToRight(r: ProfileRules, path: string): string {
+  for (const m of r.mappings) {
+    const left = m.left.trim().replace(/^\/+|\/+$/g, "");
+    if (!left) continue;
+    let rx: RegExp;
+    try { rx = globRegex(left); } catch { continue; }
+    const hit = rx.exec(path);
+    if (!hit) continue;
+    const caps = hit.slice(1);
+    let i = 0;
+    return m.right.trim().replace(/^\/+|\/+$/g, "").replace(/\*\*|\*/g, () => caps[i++] ?? "").replace(/\/{2,}/g, "/").replace(/^\/|\/$/g, "");
+  }
+  return path;
+}
+
+export interface RuleEffect {
+  /** Per mapping: the pairs it makes, and the left paths it matches that have no partner */
+  mappings: { pairs: [string, string][]; unmatched: string[] }[];
+  /** Per ignored path pattern: how many secrets it leaves out on each side */
+  ignoredPaths: { left: number; right: number }[];
+  /** Per ignored key: how many secrets its path pattern covers */
+  ignoredKeys: number[];
+  /** What no rule pairs up, once the rules are applied */
+  leftOnly: string[];
+  rightOnly: string[];
+  paired: number;
+}
+
+/** What the rules do to these two lists of secret paths. Pure: no values involved. */
+export function ruleEffect(r: ProfileRules, left: string[], right: string[]): RuleEffect {
+  const rightSet = new Set(right);
+  const safe = (g: string) => { try { return globRegex(g); } catch { return /$^/; } };
+  const mappings = r.mappings.map((m, i) => {
+    const rx = safe(m.left);
+    const earlier = r.mappings.slice(0, i).map((x) => safe(x.left));
+    const hits = left.filter((p) => rx.test(p) && !earlier.some((e) => e.test(p)));
+    const pairs = hits.map((p) => [p, mapToRight(r, p)] as [string, string]).filter(([, q]) => rightSet.has(q));
+    return { pairs, unmatched: hits.filter((p) => !rightSet.has(mapToRight(r, p))) };
+  });
+  const ignoredPaths = r.ignore_paths.map((g) => ({ left: left.filter((p) => safe(g).test(p)).length, right: right.filter((p) => safe(g).test(p)).length }));
+  const all = [...new Set([...left, ...right])];
+  const ignoredKeys = r.ignore_keys.map((k) => all.filter((p) => safe(k.path || "**").test(p)).length);
+  const kept = (p: string) => !r.ignore_paths.some((g) => safe(g).test(p));
+  const mapped = new Set(left.filter(kept).map((p) => mapToRight(r, p)));
+  const leftOnly = left.filter(kept).filter((p) => !rightSet.has(mapToRight(r, p)));
+  const rightOnly = right.filter(kept).filter((p) => !mapped.has(p));
+  return { mappings, ignoredPaths, ignoredKeys, leftOnly, rightOnly, paired: [...mapped].filter((p) => rightSet.has(p)).length };
+}

@@ -2,8 +2,8 @@ apiVersion: v2
 name: lockstep
 description: Compare, inspect and sync KV secrets across HashiCorp Vault and OpenBao clusters.
 type: application
-version: 0.9.0
-appVersion: "0.9.0"
+version: 0.10.0
+appVersion: "0.10.0"
 kubeVersion: ">=1.27.0-0"
 keywords: [vault, hashicorp-vault, openbao, secrets, kv, compare, sync, certificates]
 icon: https://getlockstep.cloud/icon.svg
@@ -17,22 +17,18 @@ annotations:
   # The image this chart version runs: update with every release (scripts/check-version.sh checks it)
   artifacthub.io/images: |
     - name: lockstep
-      image: ghcr.io/welshstew/lockstep:0.9.0
+      image: ghcr.io/welshstew/lockstep:0.10.0
       platforms: [linux/amd64, linux/arm64]
   # What changed in this chart version, shown on Artifact Hub: rewrite for every release
   artifacthub.io/changes: |
     - kind: added
-      description: "Tested against OpenBao 2.7, alone or with Vault on the other side"
+      description: "Comparison profiles: value rewrites read a word on one side as another (test as dev) before comparing, and copies write the target side's word"
     - kind: added
-      description: "Configuration overview names the product: Vault, Vault Enterprise or OpenBao"
+      description: "Profile builder: Read both sides suggests mappings for renamed folders and rewrites for environment words, each with its reason, and explains the profile"
     - kind: added
-      description: "Namespaces tested on OpenBao, including comparisons across namespaces"
-    - kind: changed
-      description: "Choose a role's, group's or user's policies from those on the Vault instead of typing them"
-    - kind: changed
-      description: "Configuration: built-in plugin versions and fields only one server returns no longer count as differences"
-    - kind: security
-      description: "Image rebuilt on the latest hardened Python base (CVE-2026-102010)"
+      description: "Shared profiles (the profiles value) accept rewrites"
+    - kind: fixed
+      description: "Configuration: auth method fields only one server returns (OpenBao's status on JWT and OIDC) are no longer counted as differences"
   artifacthub.io/links: |
     - name: Website
       url: https://getlockstep.cloud

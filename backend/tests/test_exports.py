@@ -341,7 +341,7 @@ def test_import_delete_missing_makes_the_target_match_except_keeps(env, client):
     assert {p: (x["action"], x["status"]) for p, x in plans.items()} == {
         "test/app": ("write", "ready"), "test/stale": ("delete", "ready"), "test/deep/er": ("delete", "ready")}
     assert {k["key"]: k["action"] for k in plans["test/app"]["keys"]} == {"env": "update", "only_b": "remove"}
-    assert plans["test/stale"]["keys"] == [{"key": "x", "action": "remove", "type_change": False, "override": False,
+    assert plans["test/stale"]["keys"] == [{"key": "x", "action": "remove", "type_change": False, "override": False, "rewritten": False,
                                             "source_value": None, "target_value": "1"}]
 
     # Apply refuses to delete what the file keeps (or what the preview didn't list as a delete)

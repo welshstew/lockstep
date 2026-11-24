@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 from typing import Literal
 
-from .. import engine
+from .. import engine, profile_suggest
 from ..config import Settings, get_settings
 from ..diff import SecretDiff
 from ..exports import ExportDoc, FileVault
@@ -121,6 +121,72 @@ async def compare(body: CompareRequest, session: Sess, settings: Conf):
         secrets=result.secrets,
         summary=result.summary,
     )
+
+
+class SuggestedMapping(BaseModel):
+    left: str
+    right: str
+    pairs: list[tuple[str, str]]
+    reason: str
+
+
+class SuggestedRewrite(BaseModel):
+    left: str
+    right: str
+    keys: int
+    secrets: list[str]
+    reason: str
+
+
+class SuggestOut(BaseModel):
+    left_paths: list[str]  # every secret path on each side, relative to the prefix (for explaining rules)
+    right_paths: list[str]
+    truncated: bool
+    mappings: list[SuggestedMapping]
+    rewrites: list[SuggestedRewrite]
+    before: dict[str, int]  # the comparison's counts with the rules as they are
+    after: dict[str, int]  # ... and with every suggestion added
+
+
+@router.post("/compare/suggest", response_model=SuggestOut)
+async def suggest(body: CompareRequest, session: Sess, settings: Conf):
+    """Read both sides and suggest profile rules: path mappings from the folder trees, and value
+    rewrites for words that differ between environments. Returns paths, words that appear in
+    paths or are environment names, and counts; never values."""
+    lconn = side_connection(body.left, session)
+    rconn = side_connection(body.right, session)
+    lmount, lprefix = body.left.norm()
+    rmount, rprefix = body.right.norm()
+    rules = body.rules or Rules()
+    run = lambda lv, rv, r, observe=None: engine.compare(  # noqa: E731
+        lv, lmount, lprefix, rv, rmount, rprefix, r, max_secrets=settings.max_tree_secrets, observe=observe)
+
+    async with side_client(body.left, lconn, settings) as lv, side_client(body.right, rconn, settings) as rv:
+        try:
+            first = await run(lv, rv, rules)
+            lpaths = {s[len(lprefix):] for s in first.left_tree.secrets}
+            rpaths = {s[len(rprefix):] for s in first.right_tree.secrets}
+            maps = profile_suggest.suggest_mappings(lpaths, rpaths, rules)
+            mapped = rules.model_copy(update={"mappings": [*rules.mappings, *(
+                profile_suggest.Mapping(left=m.left, right=m.right) for m in maps)]})
+            mapped = Rules.model_validate(mapped.model_dump())  # fresh cached patterns
+            values = profile_suggest.ValuePairs()
+            second = await run(lv, rv, mapped, values.observe)
+            rws = profile_suggest.suggest_rewrites(values, mapped, lpaths | rpaths)
+            values.items.clear()  # drop the values now
+            after = second
+            if rws:
+                full = Rules.model_validate({**mapped.model_dump(), "rewrites": [
+                    *mapped.model_dump()["rewrites"], *({"left": r.left, "right": r.right} for r in rws)]})
+                after = await run(lv, rv, full)
+        except VaultError as e:
+            raise vault_http_error(e) from e
+
+    return SuggestOut(left_paths=sorted(lpaths), right_paths=sorted(rpaths),
+                      truncated=first.left_tree.truncated or first.right_tree.truncated,
+                      mappings=[SuggestedMapping(**m.__dict__) for m in maps],
+                      rewrites=[SuggestedRewrite(**r.__dict__) for r in rws],
+                      before=first.summary, after=after.summary)
 
 
 MAX_HISTORY_VERSIONS = 25

@@ -33,7 +33,8 @@ The web UI uses this API, and you can script against it too. Interactive documen
 
 | Method & path | Purpose |
 |---|---|
-| `POST /api/compare` | `{"left": {"conn_id","mount","prefix"?}, "right": {…}, "rules"?: {mappings, ignore_keys, ignore_paths}}` returns a status per secret and key (`ignored` flags, each side's `left_path`/`right_path`), versions, timestamps and value-type badges. **No values** |
+| `POST /api/compare` | `{"left": {"conn_id","mount","prefix"?}, "right": {…}, "rules"?: {mappings, ignore_keys, ignore_paths, rewrites}}` returns a status per secret and key (`ignored` and `rewritten` flags, each side's `left_path`/`right_path`), versions, timestamps and value-type badges. **No values** |
+| `POST /api/compare/suggest` | Same body as `/api/compare`. Reads both sides and suggests profile rules on top of `rules`: `mappings` (renamed folders, each with the `pairs` it makes and a `reason`) and `rewrites` (words, the number of differing `keys` each makes equal, where, and a `reason`). Also returns both sides' secret paths and the counts `before` and `after` the suggestions. Rewrite words come only from paths and common environment names. **No values** |
 | `GET /api/profiles` | Shared comparison profiles configured on the server |
 | `GET /api/connections/{id}/secret?mount=&path=` | One secret's values (what *Show values* uses) |
 | `GET /api/connections/{id}/history?mount=&path=` | For each key, the version and time it last changed. No values |
@@ -50,7 +51,7 @@ The web UI uses this API, and you can script against it too. Interactive documen
 
 | Method & path | Purpose |
 |---|---|
-| `POST /api/sync/preview` | `{"left","right","changes":[{"path","right_path"?,"direction":"left_to_right"\|"right_to_left","keys": [...]\|null,"set"?: {key: value},"remove"?: [...],"expected_target_version","expected_source_version"}],"reveal"?}` returns a plan per secret. `set` writes typed values; `remove` drops keys from the target's new version |
+| `POST /api/sync/preview` | `{"left","right","changes":[{"path","right_path"?,"direction":"left_to_right"\|"right_to_left","keys": [...]\|null,"set"?: {key: value},"remove"?: [...],"expected_target_version","expected_source_version"}],"reveal"?,"rewrites"?: [{"left","right"}]}` returns a plan per secret. `set` writes typed values; `remove` drops keys from the target's new version; `rewrites` (the comparison profile's) are applied to copied values in the copy's direction, and each key plan says whether they changed it (`rewritten`) |
 | `POST /api/sync/apply` | The same body plus `"confirm": true`; returns a result per secret and a summary. A change that removes every key soft-deletes the latest version (`"action": "delete"`) |
 | `GET /api/browse/list?conn_id=&mount=&folder=&offset=` | One folder's entries (folders first), 200 at a time, each with what the token may do (`list`, or `read`/`write`/`history`). `denied: true` when the folder can't be listed |
 | `GET /api/browse/secret?conn_id=&mount=&path=&version=` | A secret's (or version's) state, key names, versions (created, deleted, destroyed), metadata and capabilities. Never values |

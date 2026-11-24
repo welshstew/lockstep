@@ -3,7 +3,7 @@
 Deploys [Lockstep](../../README.md): compare, inspect and sync KV secrets across HashiCorp Vault clusters.
 
 ```sh
-helm upgrade --install lockstep oci://ghcr.io/welshstew/charts/lockstep --version 0.6.0 \
+helm upgrade --install lockstep oci://ghcr.io/welshstew/charts/lockstep --version 0.10.0 \
   -n lockstep --create-namespace -f my-values.yaml
 helm test lockstep -n lockstep
 ```
@@ -65,7 +65,7 @@ vaults:
 | `serviceAccount.name` | release full name | |
 | `serviceAccount.annotations` | `{}` | |
 | `serviceAccount.automountToken` | `auto` | `auto` = only with Kubernetes auth; or `true`/`false` |
-| `profiles` | `[]` | Shared [comparison profiles](../../docs/usage.md#comparison-profiles), read-only for users: `name`, optional `description`, `leftMount`/`leftPrefix`/`rightMount`/`rightPrefix`, and `rules` (`mappings[].left/right`, `ignoreKeys[].key/path`, `ignorePaths[]`). See the example below |
+| `profiles` | `[]` | Shared [comparison profiles](../../docs/usage.md#comparison-profiles), read-only for users: `name`, optional `description`, `leftMount`/`leftPrefix`/`rightMount`/`rightPrefix`, and `rules` (`mappings[].left/right`, `ignoreKeys[].key/path`, `ignorePaths[]`, `rewrites[].left/right`). See the example below |
 | `extraEnv` | `[]` | Extra container env vars |
 | `podAnnotations`, `podLabels` | `{}` | |
 | `podSecurityContext`, `securityContext` | hardened | See `values.yaml` |

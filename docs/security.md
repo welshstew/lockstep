@@ -15,6 +15,7 @@ There is no database and no server-side session store. The browser can't read or
 ## What the browser receives
 
 - **Compare** returns statuses, versions, timestamps and value *types*, never values.
+- **Profile suggestions** (**Read both sides**) return paths, counts, and words that already appear in a path or are common environment names (`dev`, `prod`…), never any other part of a value.
 - **Values** are returned only by explicit reads: *Show values* for a secret you expand, value-tool previews and downloads. Every `/api` response has `Cache-Control: no-store`.
 - **Keystore private keys** are never downloadable.
 
@@ -31,7 +32,7 @@ A [secret-engine export](usage.md#6-export-and-import) is the one thing Lockstep
 
 Only **Apply** in the review dialog and **Import** write, and only:
 
-- values **read again from the source Vault** at that moment, never copied values from the browser
+- values **read again from the source Vault** at that moment, never copied values from the browser. A comparison profile's rewrites (`prod` ⇄ `staging`) are applied on the way, and the review marks each rewritten key
 - or values you typed as an [override](usage.md#override-values), or from an export file you [import](usage.md#6-export-and-import) or copy from
 - with KV v2 **check-and-set** against the version you compared, so concurrent edits become conflicts
 - **adding or updating keys.** Keys are removed only when you ask: a key you [**Delete**](usage.md#delete-keys) in the compare view (a new version without it; older versions keep it; removing every key soft-deletes the latest version instead), or, on an import with *Make the target match the file*, keys and secrets the file doesn't have (secrets are soft-deleted).

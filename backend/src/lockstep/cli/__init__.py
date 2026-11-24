@@ -149,6 +149,8 @@ def _print_summary(rep: report_mod.Report, out) -> None:
     print(f"Right: {where(rep.right)}", file=out)
     if rep.profile:
         print(f"Profile: {rep.profile}", file=out)
+    if rep.rewrites:
+        print("Rewrites: " + ", ".join(f"{r.left} ⇄ {r.right}" for r in rep.rewrites), file=out)
     rows = [s for s in rep.secrets if s.status != "equal"]
     if rows:
         width = max(len(s.path) for s in rows)
@@ -169,6 +171,9 @@ def _print_summary(rep: report_mod.Report, out) -> None:
     counts = ", ".join(f"{sm[k]} {LABEL[k]}" for k in ("equal", "different", "left_only", "right_only",
                                                            "no_access", "error") if sm.get(k))
     print(f"\n{sm.get('total', 0)} secrets: {counts or 'none found'}.", file=out)
+    if sm.get("rewritten_keys"):
+        print(f"{sm['rewritten_keys']} key{'s' if sm['rewritten_keys'] != 1 else ''} equal once the profile's rewrites "
+              f"are applied.", file=out)
 
 
 async def _compare(args) -> int:
@@ -214,7 +219,7 @@ async def _compare(args) -> int:
         await asyncio.gather(revoke(lconn, settings), revoke(rconn, settings))
 
     rep = report_mod.build(result, sides["left"], sides["right"], profile.name if profile else None,
-                           include_equal=args.include_equal)
+                           include_equal=args.include_equal, rewrites=rules.rewrites if rules else None)
     to_stdout = args.output == "-"
     if not args.quiet:
         _print_summary(rep, sys.stderr if to_stdout else sys.stdout)

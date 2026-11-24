@@ -1,0 +1,110 @@
+# Weekly: does Lockstep still work with OpenBao?
+#
+# Runs every backend and browser test with OpenBao standing in for Vault B, like
+# `make test-openbao`: Vault against OpenBao, and OpenBao's namespaces. Twice, once with the
+# OpenBao pinned in compose.yaml and once with the newest release (from GitHub), so a new
+# release that breaks something shows up before users find it. A failure fails the run (the GitHub
+# copy of this workflow also opens an issue); when a newer release passes, the summary says to
+# bump the pin in compose.yaml.
+name: openbao
+
+on:
+  schedule:
+    - cron: "41 5 * * 1"   # Mondays, 05:41 UTC
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "OpenBao version to check (default: the latest release)"
+        required: false
+
+jobs:
+  openbao:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        which: [pinned, latest]
+    env:
+      COMPOSE_PROJECT_NAME: lockstep-openbao-${{ github.run_id }}-${{ matrix.which }}
+      COMPOSE: docker compose -f compose.yaml -f compose.ci.yaml
+      VAULT_B_HOST: openbao
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Which OpenBao
+        id: v
+        env:
+          WHICH: ${{ matrix.which }}
+          WANTED: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          pinned=$(sed -n 's|.*OPENBAO_IMAGE:-quay.io/openbao/openbao:\([0-9.]*\)@.*|\1|p' compose.yaml)
+          echo "pinned=$pinned" >> "$GITHUB_OUTPUT"
+          if [[ $WHICH == pinned ]]; then
+            echo "version=$pinned" >> "$GITHUB_OUTPUT"; echo "image=" >> "$GITHUB_OUTPUT"; echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if [[ -n ${WANTED:-} ]]; then v=$WANTED
+          else v=$(curl -fsS https://api.github.com/repos/openbao/openbao/releases/latest | jq -r .tag_name); fi
+          v=${v#v}
+          [[ $v =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::unexpected version '$v'"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "image=quay.io/openbao/openbao:$v" >> "$GITHUB_OUTPUT"
+          if [[ $v == "$pinned" && -z ${WANTED:-} ]]; then
+            echo "::notice::The latest OpenBao ($v) is the pinned one; the pinned job covers it."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          elif ! docker pull -q "quay.io/openbao/openbao:$v" >/dev/null; then
+            echo "::notice::OpenBao $v isn't on quay.io yet; nothing checked."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Start the stack with OpenBao as Vault B
+        if: steps.v.outputs.run == 'true'
+        env:
+          OPENBAO_IMAGE: ${{ steps.v.outputs.image }}
+        run: |
+          $COMPOSE --profile openbao up -d --wait openbao
+          $COMPOSE up --build -d
+
+      - name: Backend tests
+        id: backend
+        if: steps.v.outputs.run == 'true'
+        run: |
+          $COMPOSE --profile test build tests
+          $COMPOSE --profile test run --rm --no-deps tests \
+            python -m pytest -q -p no:cacheprovider -rs --deselect tests/test_k8s_auth.py 2>&1 | tee /tmp/backend.log
+          test "${PIPESTATUS[0]}" -eq 0
+
+      - name: Browser tests
+        id: e2e
+        if: always() && steps.v.outputs.run == 'true'
+        run: |
+          $COMPOSE --profile e2e build e2e
+          $COMPOSE --profile e2e run --name "$COMPOSE_PROJECT_NAME-e2e" --no-deps e2e \
+            pytest -q -p no:cacheprovider tests -k "not kubernetes" 2>&1 | tee /tmp/e2e.log
+          test "${PIPESTATUS[0]}" -eq 0
+
+      - name: Summary
+        if: always() && steps.v.outputs.run == 'true'
+        env:
+          V: ${{ steps.v.outputs.version }}
+          PINNED: ${{ steps.v.outputs.pinned }}
+          BACKEND: ${{ steps.backend.outcome }}
+          E2E: ${{ steps.e2e.outcome }}
+        run: |
+          {
+            echo "## Lockstep against OpenBao $V"
+            echo
+            echo "Backend tests: $BACKEND · browser tests: $E2E"
+            if [[ $BACKEND == success && $E2E == success && $V != "$PINNED" ]]; then
+              echo; echo "Newer than the pinned $PINNED and passes: bump \`openbao\` in compose.yaml (and deploy/demo/compose.yaml)."
+            fi
+            for f in backend e2e; do echo; echo "### $f"; echo '```'; tail -n 40 /tmp/$f.log 2>/dev/null || true; echo '```'; done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Tear down
+        if: always()
+        run: |
+          docker rm -f "$COMPOSE_PROJECT_NAME-e2e" >/dev/null 2>&1 || true
+          $COMPOSE --profile openbao --profile test --profile e2e down -v --remove-orphans

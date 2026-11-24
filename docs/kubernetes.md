@@ -11,7 +11,7 @@ Lockstep is one stateless container, so any number of replicas can serve any req
 ## With Helm (recommended)
 
 ```sh
-helm upgrade --install lockstep oci://ghcr.io/welshstew/charts/lockstep --version 0.6.0 \
+helm upgrade --install lockstep oci://ghcr.io/welshstew/charts/lockstep --version 0.10.0 \
   -n lockstep --create-namespace -f my-values.yaml
 helm test lockstep -n lockstep
 ```
@@ -35,8 +35,8 @@ The [chart README](../charts/lockstep/README.md) has every value and more exampl
 
 1. **Image:** by default the chart runs the release image `ghcr.io/welshstew/lockstep:<appVersion>`. Pin `image.digest` for an immutable deployment, or set `image.repository` to a mirror or your own build. Verify a release image before you trust it:
    ```sh
-   cosign verify ghcr.io/welshstew/lockstep:0.6.0 \
-     --certificate-identity https://github.com/welshstew/lockstep/.github/workflows/release.yml@refs/tags/v0.6.0 \
+   cosign verify ghcr.io/welshstew/lockstep:0.10.0 \
+     --certificate-identity https://github.com/welshstew/lockstep/.github/workflows/release.yml@refs/tags/v0.10.0 \
      --certificate-oidc-issuer https://token.actions.githubusercontent.com
    ```
 2. **Vaults:** list them in `vaults`. `allowCustomConnections` is **off** in the chart, so the pods only call Vaults you list.
@@ -44,7 +44,7 @@ The [chart README](../charts/lockstep/README.md) has every value and more exampl
 4. **Private CA:** if your Vaults use one, put the bundle in a ConfigMap or Secret and set `vaultTls.caBundle`.
 5. **OIDC (optional):** set `publicUrl` and add `<publicUrl>/api/auth/oidc/callback` to the Vault role's `allowed_redirect_uris` ([details](authentication.md#oidc-redirect)).
 6. **Kubernetes auth (optional):** decide whether users may act as the release's service account. If so, set `kubernetesAuth.enabled: true`, pin `kubernetesAuth.roles`, and bind the roles in Vault to `<namespace>/<release name>` ([details](authentication.md#kubernetes-service-account)). Without it, the service account token isn't mounted at all.
-7. **Shared comparison profiles (optional):** list the team's path mappings and ignore rules in `profiles`, so everyone compares environments the same way.
+7. **Shared comparison profiles (optional):** list the team's path mappings, value rewrites and ignore rules in `profiles`, so everyone compares environments the same way.
 8. **Restrict access** to the UI (ingress authentication, `networkPolicy`). That matters most with Kubernetes auth on, since reaching the UI is enough to use the service account.
 9. **Session key:** the chart generates one and keeps it across upgrades. To manage it yourself (e.g. from an external secret store), set `session.existingSecret`. Every replica must use the same key; changing it signs everyone out.
 

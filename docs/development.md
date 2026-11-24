@@ -81,6 +81,7 @@ For **JWT**, get an ID token from Dex directly: `curl -s -u vault:vault-dev-secr
 | `certs` | A and B | root and intermediate CA; valid, renewed (differs A vs B), expired, not-yet-valid, self-signed, untrusted and missing-intermediate leaves; DER in base64; a base64 PEM chain; PKCS#12 with and without a password; **JKS and JCEKS keystores made by `keytool`** (password `changeit`); `some-secrets/`: a PKCS#12 whose password (random per seed) is in `strings/KEYSTORE_PASSWORD`, among decoys (password finder) |
 | `team-a-only` | A | one-sided mount |
 | `app-config-staging` | B | for comparing two mounts in the same Vault |
+| `apps` | A and B | environments that don't line up: Vault A plays test and Vault B dev, after `enterprise-logging-app` was renamed `ELP` in dev. Values name their environment and the app, credentials and the log level differ by design, and a few real changes remain. Shared profile **Test ↔ dev: apps (ELP rename)**; [guide](guides/compare-environments-after-a-rename.md) |
 | `legacy-kv` | A and B | KV v1; must be ignored |
 
 ## Tests

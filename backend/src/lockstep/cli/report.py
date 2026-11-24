@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from ..diff import SecretDiff
 from ..engine import Comparison
 from ..api.sync import Change, Direction
+from ..rules import Rewrite
 from .connect import CliError
 
 FORMAT = 1
@@ -146,6 +147,8 @@ class Report(BaseModel):
     left: ReportSide
     right: ReportSide
     profile: str | None = Field(default=None, description="Comparison profile used, if any.")
+    rewrites: list[Rewrite] = Field(default=[], description="The profile's value rewrites (left word ⇄ right word). "
+                                    "`lockstep apply` applies them to copied values, in the direction of the copy.")
     summary: dict[str, int] = Field(default={}, description="Counts per status.")
     warnings: list[str] = Field(default=[], description="Folders that couldn't be listed, truncation.")
     secrets: list[ReportSecret] = Field(default=[], description="Secrets that differ.")
@@ -196,7 +199,7 @@ def _prefix(p: str) -> str:
 
 
 def build(result: Comparison, left: ReportSide, right: ReportSide, profile: str | None,
-          include_equal: bool = False) -> Report:
+          include_equal: bool = False, rewrites: list[Rewrite] | None = None) -> Report:
     def side(s: ReportSide, rel: str, info) -> SecretSide:
         full = _prefix(s.prefix) + rel
         visible = info.state in ("present", "deleted")
@@ -224,7 +227,8 @@ def build(result: Comparison, left: ReportSide, right: ReportSide, profile: str 
             warnings.append(f"The {which} side has more secrets than the limit (LOCKSTEP_MAX_TREE_SECRETS); "
                             f"compare a narrower prefix.")
     return Report(lockstep_report=FORMAT, created=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                  left=left, right=right, profile=profile, summary=result.summary, warnings=warnings,
+                  left=left, right=right, profile=profile, rewrites=list(rewrites or []),
+                  summary=result.summary, warnings=warnings,
                   secrets=[secret(d) for d in result.secrets if include_equal or d.status != "equal"])
 
 
@@ -235,6 +239,8 @@ def dump(report: Report, filename: str) -> str:
     data = report.model_dump(exclude_none=True, exclude_defaults=False)
     if not data["warnings"]:
         del data["warnings"]
+    if not data["rewrites"]:
+        del data["rewrites"]
     for s in data["secrets"]:  # keep the file short: drop empty/false noise per key
         for k in s["keys"]:
             for f in ("type_differs", "ignored"):

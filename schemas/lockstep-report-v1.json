@@ -285,6 +285,28 @@
       "title": "ReportSide",
       "type": "object"
     },
+    "Rewrite": {
+      "properties": {
+        "left": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Left",
+          "type": "string"
+        },
+        "right": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Right",
+          "type": "string"
+        }
+      },
+      "required": [
+        "left",
+        "right"
+      ],
+      "title": "Rewrite",
+      "type": "object"
+    },
     "SecretSide": {
       "description": "One side of a secret, as it was when the report was made.",
       "properties": {
@@ -390,6 +412,15 @@
       "default": null,
       "description": "Comparison profile used, if any.",
       "title": "Profile"
+    },
+    "rewrites": {
+      "default": [],
+      "description": "The profile's value rewrites (left word ⇄ right word). `lockstep apply` applies them to copied values, in the direction of the copy.",
+      "items": {
+        "$ref": "#/$defs/Rewrite"
+      },
+      "title": "Rewrites",
+      "type": "array"
     },
     "summary": {
       "additionalProperties": {

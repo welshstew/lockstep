@@ -5,6 +5,30 @@ the image, the Helm chart and the app share one version.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-24
+
+### Added
+
+- **Comparison profiles, value rewrites:** a profile can pair words between the sides, such as `test` ⇄ `dev` or an application's old and new name. Values are compared with each left word read as its right word, so `logs.test.internal` matches `logs.dev.internal` while a wrong host still shows as different. Whole words only, case-sensitive; certificates, keys and base64 data are never rewritten. Copies apply the rewrites in the copy's direction, and so do sync plans and `lockstep apply`. Keys that are equal only after a rewrite are marked **equal after rewrite**.
+- **Profile builder:** **Read both sides** in the profile editor lists both sides' secrets and suggests rules, each with the reason: mappings for folders that look renamed (with a wildcard when an environment segment varies, such as `services/*/prod/**`), and rewrites for environment or folder words that make differing values equal. Suggestions only ever name words visible in paths or common environment names, never other parts of values. A **What this profile does** panel explains every rule against the secrets that are actually there, and **Preview the comparison** runs it before saving. API: `POST /api/compare/suggest`.
+- **Demo data:** an `apps` mount where Vault A plays test and Vault B dev, after `enterprise-logging-app` was renamed `ELP` in dev, with two new shared profiles: **Test ↔ dev: apps (ELP rename)** and **Prod ↔ staging services (rewrites)**.
+- **Guide:** [Comparing environments after an application is renamed](docs/guides/compare-environments-after-a-rename.md). [Building a comparison profile](docs/guides/build-a-comparison-profile.md) now starts from **Read both sides**, explains rewrites, and says when to map, rewrite or ignore.
+- **Guide:** [Migrating from HashiCorp Vault to OpenBao, verified](docs/guides/migrate-vault-to-openbao.md). It covers checking what OpenBao lacks, copying each mount, proving every secret arrived, and comparing policies and configuration.
+- **CI:** a weekly workflow runs every backend and browser test against OpenBao, both the pinned version and the newest release, and opens an issue when they fail.
+
+### Changed
+
+- **Docs and site:**
+  - The landing page leads its profiles section with mappings, rewrites and **Read both sides**, and points to the rename example on the demo.
+  - The CI, cluster-comparison, development and sync guides recommend rewrites over ignoring hostnames.
+  - The CLI, security and Kubernetes docs cover rewrites and profile suggestions.
+  - Link previews use a 1280×640 social image.
+  - Install commands, image tags and the `cosign verify` example point at the current release, and `scripts/check-version.sh` now fails on a stale one.
+
+### Fixed
+
+- **Configuration, auth methods:** fields in an auth method's configuration that only one server returns (OpenBao's `status` on JWT and OIDC) are listed as "not compared" instead of making the method *Different*.
+
 ## [0.9.0] - 2026-11-24
 
 ### Added
@@ -207,6 +231,7 @@ First public release.
 - **Helm chart:** hardened defaults, session key kept across upgrades, Ingress, NetworkPolicy, PodDisruptionBudget, Kubernetes auth, shared profiles; validated by a schema and tested in k3s.
 - Runs on Red Hat Hardened Images (distroless, non-root). Every change is scanned (CVEs, secrets, misconfigurations, base image signatures) and tested end to end in a browser.
 
+[0.10.0]: https://github.com/welshstew/lockstep/releases/tag/v0.10.0
 [0.9.0]: https://github.com/welshstew/lockstep/releases/tag/v0.9.0
 [0.8.0]: https://github.com/welshstew/lockstep/releases/tag/v0.8.0
 [0.7.0]: https://github.com/welshstew/lockstep/releases/tag/v0.7.0

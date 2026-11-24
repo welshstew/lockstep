@@ -18,7 +18,7 @@ Who does what:
 |---|---|---|---|
 | 1 | Test Lockstep against **OpenBao**: `make test-openbao` runs every backend and browser test with OpenBao 2.7 as Vault B. Built-in plugin versions no longer count as configuration drift. | Claude | ✅ Done (all pass) |
 | 2 | Configuration compare: Vault and OpenBao return different default fields for engine roles. Fields only one server returns (and PKI `signature_bits` left automatic) are set aside and listed as "not compared". | Claude | ✅ Done |
-| 3 | Run the OpenBao suite in CI: weekly, like the `vault-release` workflow, so OpenBao support stays true. | Claude | To do |
+| 3 | Run the OpenBao suite in CI: weekly, like the `vault-release` workflow, so OpenBao support stays true. | Claude | ✅ Done: `openbao.yml`, against the pinned and the newest OpenBao |
 | 4 | **Pitch:** the landing page and README lead with the three jobs above. Add "Works with HashiCorp Vault and OpenBao" to the landing page. (The README now says it.) | Claude drafts, Stuart reviews | To do |
 | 5 | **GitHub repo:** <ul><li>topics: `vault`, `hashicorp-vault`, `openbao`, `secrets-management`, `devops`, `kubernetes`, `helm`, `gitops`</li><li>a one-line description</li><li>a social preview image (1280×640)</li></ul> | Claude makes the image, Stuart sets them | To do |
 | 6 | A 20–30 second **GIF** at the top of the README: compare, show a difference, copy, review. Recorded with Playwright from the dev stack. | Claude | To do |
@@ -34,7 +34,7 @@ Guides on getlockstep.cloud, cross-posted to dev.to or Hashnode with the canonic
 | 9 | How to diff two Vault clusters (and what "different" should mean) | To do |
 | 10 | Copy secrets between Vault clusters without scripts: reviewed, check-and-set, audit-logged | To do |
 | 11 | Catch Vault configuration drift in CI: `lockstep config compare` and the GitHub Action (after #7) | To do |
-| 12 | Vault → OpenBao migration, verified: export, import, compare every secret and policy | To do |
+| 12 | Vault → OpenBao migration, verified: export, import, compare every secret and policy | ✅ Written: [guide](../guides/migrate-vault-to-openbao.md) |
 
 Claude drafts, Stuart reviews and publishes.
 

@@ -13,7 +13,7 @@ A service starts in dev and fails in test. The code is the same, so the differen
 2. Press **Compare**. Each secret shows as *Equal*, *Different*, *Left only* or *Right only*. Values stay hidden: you see that `db/password` differs without anyone's password on screen.
 3. Open a secret to see which keys differ and when each one last changed on each side. **Show values** reveals them for the secrets you open, if you need to.
 
-If your environments use different layouts (`services/*/dev/**` and `services/*/test/**`), a [comparison profile](build-a-comparison-profile.md) pairs the paths up and ignores the keys that are *meant* to differ, such as hostnames. Then only real drift is left.
+If your environments use different layouts (`services/*/dev/**` and `services/*/test/**`), or values name their environment (`logs.dev.internal` and `logs.test.internal`), a [comparison profile](build-a-comparison-profile.md) pairs the paths, reads `dev` as `test` inside values, and ignores what *must* differ, such as per-environment passwords. Then only real drift is left. **Read both sides** in the profile editor suggests the rules for you. If an application was renamed in one environment, see [Comparing environments after an application is renamed](compare-environments-after-a-rename.md).
 
 ## Bring an environment back in step
 

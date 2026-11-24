@@ -120,13 +120,19 @@ AUTOMATIC = {"signature_bits"}
 def set_aside(fields: list[dict], a: dict, b: dict) -> tuple[list[dict], list[dict]]:
     """Split differences into real ones and fields only one server knows about. Engine objects
     carry `_returned` (the field names the server sent): Vault and OpenBao, or two versions of
-    either, return fields the other doesn't have, which say nothing about drift."""
+    either, return fields the other doesn't have, which say nothing about drift. Auth methods
+    carry dotted names for their configuration (`configuration.status`)."""
     la, lb = set(a.get("_returned") or ()), set(b.get("_returned") or ())
     if not (la and lb):
         return fields, []
+    nested = {r.split(".")[0] for r in la | lb if "." in r}
     keep, aside = [], []
     for f in fields:
-        top = f["field"].split(".")[0]
+        parts = f["field"].split(".")
+        top = ".".join(parts[:2]) if parts[0] in nested and len(parts) > 1 else parts[0]
+        if parts[0] in nested and len(parts) == 1:  # the whole configuration on one side only
+            keep.append(f)
+            continue
         if (top in la) != (top in lb):
             aside.append({**f, "reason": f"only {'the left' if top in la else 'the right'} server has this field"})
         elif top in AUTOMATIC and (f["left"] is None or f["right"] is None):
@@ -227,6 +233,7 @@ async def read_config(v: VaultClient) -> dict:
             c = await get(f"auth/{path.rstrip('/')}/config")
         if c:
             auth[path]["configuration"] = _clean(c)
+            auth[path]["_returned"] = sorted(f"configuration.{k}" for k in c)
     await asyncio.gather(*(conf(p) for p in auth))
     return {"mounts": mounts, "auth": auth, "missing": missing}
 

@@ -24,6 +24,7 @@ profiles:
       mappings: [{left: "services/*/prod/**", right: "services/*/staging/**"}]
       ignoreKeys: [{key: host, path: "services/**"}, {key: "*_url"}]
       ignorePaths: ["legacy/**"]
+      rewrites: [{left: prod, right: staging}]
   - name: Whole mount, nothing ignored
 extraEnv:
   - {name: TZ, value: UTC}

@@ -231,7 +231,20 @@ services:
           "left_mount": "app-config", "right_mount": "app-config",
           "rules": {"mappings": [{"left": "services/*/prod/**", "right": "services/*/staging/**"}],
                     "ignore_keys": [{"key": "host", "path": "services/**"}],
-                    "ignore_paths": ["legacy/**", "retired/**"]}}]
+                    "ignore_paths": ["legacy/**", "retired/**"]}},
+         {"name": "Prod ↔ staging services (rewrites)",
+          "description": "Like Prod ↔ staging services, but reads prod in Vault A as staging instead of ignoring host: db-prod.internal matches db-staging.internal, any other host doesn't",
+          "left_mount": "app-config", "right_mount": "app-config",
+          "rules": {"mappings": [{"left": "services/*/prod/**", "right": "services/*/staging/**"}],
+                    "rewrites": [{"left": "prod", "right": "staging"}],
+                    "ignore_paths": ["legacy/**", "retired/**"]}},
+         {"name": "Test ↔ dev: apps (ELP rename)",
+          "description": "Vault A is test, Vault B is dev. enterprise-logging-app was renamed ELP in dev after its last release; values say test or dev and the app's old or new name. Tokens, log level and TLS material differ per environment by design",
+          "left_mount": "apps", "right_mount": "apps",
+          "rules": {"mappings": [{"left": "enterprise-logging-app/**", "right": "ELP/**"}],
+                    "rewrites": [{"left": "enterprise-logging-app", "right": "elp"}, {"left": "test", "right": "dev"}],
+                    "ignore_keys": [{"key": "api_token", "path": "**"}, {"key": "log_level", "path": "**"},
+                                    {"key": "tls.*", "path": "**/certs"}]}}]
       LOCKSTEP_DEMO_BANNER: ${DEMO_BANNER:-Public demo with throwaway data, reset every hour. Two Vaults and two OpenBaos. Sign in with userpass alice / bob / carol (password "password"), or OIDC as alice@example.com.}
     mem_limit: 384m
     depends_on:

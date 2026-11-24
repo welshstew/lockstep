@@ -23,6 +23,7 @@ class KeyDiff(BaseModel):
     status: KeyStatus
     type_differs: bool = False
     ignored: bool = False  # matched an ignore rule: shown, but doesn't make the secret differ
+    rewritten: bool = False  # equal only once the profile's rewrites are applied (e.g. test → dev)
 
 
 class MetaDiff(BaseModel):
@@ -62,6 +63,7 @@ class SecretDiff(BaseModel):
     left_path: str = ""  # actual path on each side (differs from `path` only under a mapping)
     right_path: str = ""
     ignored_keys: int = 0
+    rewritten_keys: int = 0
     note: str = ""
     # What each side's value is (e.g. PKCS#12, certificate expiring in 12 days). No values.
     badges: dict[str, dict[str, dict | None]] = {}
@@ -78,7 +80,8 @@ def _type(v: Any) -> str:
     return type(v).__name__
 
 
-def diff_keys(left: dict, right: dict, ignored=None) -> list[KeyDiff]:
+def diff_keys(left: dict, right: dict, ignored=None, rewrite=None) -> list[KeyDiff]:
+    """`rewrite(value)`: the left value as the right side would write it (a profile's rewrites)."""
     out: list[KeyDiff] = []
     for k in sorted(left.keys() | right.keys()):
         if k not in right:
@@ -87,6 +90,8 @@ def diff_keys(left: dict, right: dict, ignored=None) -> list[KeyDiff]:
             out.append(KeyDiff(key=k, status="right_only"))
         elif _canon(left[k]) == _canon(right[k]):
             out.append(KeyDiff(key=k, status="equal"))
+        elif rewrite and _canon(rewrite(left[k])) == _canon(right[k]):
+            out.append(KeyDiff(key=k, status="equal", rewritten=True))
         else:
             out.append(KeyDiff(key=k, status="different", type_differs=_type(left[k]) != _type(right[k])))
     if ignored:
@@ -97,17 +102,19 @@ def diff_keys(left: dict, right: dict, ignored=None) -> list[KeyDiff]:
 
 def diff_secret(path: str, left: SideInfo, left_data: dict | None,
                 right: SideInfo, right_data: dict | None, ignored=None,
-                left_path: str | None = None, right_path: str | None = None) -> SecretDiff:
+                left_path: str | None = None, right_path: str | None = None, rewrite=None) -> SecretDiff:
     """Compare one secret. `*_data` is only used when that side's state is "present".
-    `ignored(key)` says whether a key's difference should be disregarded."""
-    d = _diff_secret(path, left, left_data, right, right_data, ignored)
+    `ignored(key)` says whether a key's difference should be disregarded; `rewrite(value)`
+    turns a left value into the right side's words before comparing."""
+    d = _diff_secret(path, left, left_data, right, right_data, ignored, rewrite)
     d.left_path = left_path if left_path is not None else path
     d.right_path = right_path if right_path is not None else path
     d.ignored_keys = sum(k.ignored for k in d.keys)
+    d.rewritten_keys = sum(k.rewritten for k in d.keys)
     return d
 
 
-def _diff_secret(path, left, left_data, right, right_data, ignored) -> SecretDiff:
+def _diff_secret(path, left, left_data, right, right_data, ignored, rewrite=None) -> SecretDiff:
     states = {left.state, right.state}
 
     if "error" in states or "no_access" in states:
@@ -121,7 +128,7 @@ def _diff_secret(path, left, left_data, right, right_data, ignored) -> SecretDif
     lp = left.state == "present"
     rp = right.state == "present"
     l, r = (left_data or {}) if lp else {}, (right_data or {}) if rp else {}
-    keys = diff_keys(l, r, ignored)
+    keys = diff_keys(l, r, ignored, rewrite if lp and rp else None)
     if lp and not rp:
         status = "left_only"
     elif rp and not lp:

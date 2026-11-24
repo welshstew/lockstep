@@ -8,6 +8,12 @@ A mapping pairs a left and a right pattern with the same wildcards in the same o
 `services/*/prod/**` <-> `services/*/staging/**` maps `services/billing/prod/db/main`
 to `services/billing/staging/db/main` and back. The first matching mapping wins; paths no
 mapping matches are compared as they are.
+
+A rewrite pairs a word on the left with a word on the right, for values that name the
+environment or the application (`logs.test.internal` vs `logs.dev.internal`). Before values
+are compared, each left word is read as its right word; a copy to the right writes the right
+word, a copy to the left the left one. Words match whole: `test` matches `logs.test.internal`
+and `app-test`, never `latest`. Certificates, keys and base64 data are never rewritten.
 """
 
 from __future__ import annotations
@@ -67,12 +73,81 @@ class IgnoreKey(BaseModel):
     path: str = Field(default="**", max_length=512)  # only under these paths (default: everywhere)
 
 
+class Rewrite(BaseModel):
+    left: str = Field(min_length=1, max_length=200)  # a word as the left side writes it, e.g. "test"
+    right: str = Field(min_length=1, max_length=200)  # the same word on the right, e.g. "dev"
+
+    @field_validator("left", "right")
+    @classmethod
+    def _clean(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("a rewrite needs a word on each side")
+        return v
+
+    @model_validator(mode="after")
+    def _differ(self):
+        if self.left == self.right:
+            raise ValueError(f"rewrite '{self.left}' ⇄ '{self.right}': the two words are the same")
+        return self
+
+
+_WORD = "A-Za-z0-9"
+# PEM blocks and long base64 runs (certificates, keys, keystores): never rewritten
+_OPAQUE = re.compile(r"-----BEGIN |^[A-Za-z0-9+/=\r\n]{64,}$")
+
+
+def _rewriter(pairs: list[tuple[str, str]]):
+    if not pairs:
+        return None
+    table = dict(pairs)
+    words = sorted(table, key=len, reverse=True)  # longest first: "app-test" before "test"
+    rx = re.compile(rf"(?<![{_WORD}])(?:{'|'.join(map(re.escape, words))})(?![{_WORD}])")
+
+    def text(s: str) -> str:
+        return s if _OPAQUE.search(s) else rx.sub(lambda m: table[m.group()], s)
+
+    def value(v):
+        if isinstance(v, str):
+            return text(v)
+        if isinstance(v, list):
+            return [value(x) for x in v]
+        if isinstance(v, dict):
+            return {k: value(x) for k, x in v.items()}
+        return v  # numbers, booleans, null keep their type and value
+    return value
+
+
 class Rules(BaseModel):
     mappings: list[Mapping] = Field(default_factory=list, max_length=100)
     ignore_paths: list[str] = Field(default_factory=list, max_length=200)
     ignore_keys: list[IgnoreKey] = Field(default_factory=list, max_length=200)
+    rewrites: list[Rewrite] = Field(default_factory=list, max_length=50)
 
     model_config = {"frozen": True}
+
+    @model_validator(mode="after")
+    def _unique_words(self):
+        for side in ("left", "right"):
+            words = [getattr(r, side) for r in self.rewrites]
+            dup = {w for w in words if words.count(w) > 1}
+            if dup:
+                raise ValueError(f"rewrites: '{sorted(dup)[0]}' is on the {side} of more than one rewrite")
+        return self
+
+    @cached_property
+    def _to_right(self):
+        return _rewriter([(r.left, r.right) for r in self.rewrites])
+
+    @cached_property
+    def _to_left(self):
+        return _rewriter([(r.right, r.left) for r in self.rewrites])
+
+    def rewrite(self, value, to: str = "right"):
+        """A left value as the right side would write it (to="right"), or a right value as the
+        left side would (to="left"). Unchanged without rewrites."""
+        fn = self._to_right if to == "right" else self._to_left
+        return fn(value) if fn else value
 
     @cached_property
     def _maps(self) -> list[tuple[re.Pattern, str, re.Pattern, str]]:
@@ -88,7 +163,7 @@ class Rules(BaseModel):
 
     @property
     def empty(self) -> bool:
-        return not (self.mappings or self.ignore_paths or self.ignore_keys)
+        return not (self.mappings or self.ignore_paths or self.ignore_keys or self.rewrites)
 
     def to_right(self, left_path: str) -> str:
         for lrx, rtpl, _, _ in self._maps:

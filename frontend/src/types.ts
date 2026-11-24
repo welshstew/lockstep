@@ -59,6 +59,8 @@ export interface KeyDiff {
   status: KeyStatus;
   type_differs: boolean;
   ignored: boolean;
+  /** Equal only once the profile's rewrites are applied (test → dev) */
+  rewritten?: boolean;
 }
 
 export interface SideInfo {
@@ -85,6 +87,7 @@ export interface SecretDiff {
   left_path: string;
   right_path: string;
   ignored_keys: number;
+  rewritten_keys?: number;
   note: string;
   metadata?: { key: string; status: "different" | "left_only" | "right_only"; left: string | null; right: string | null }[];
   metadata_note?: string;
@@ -104,7 +107,7 @@ export interface CompareResult {
   left: SideSummary;
   right: SideSummary;
   secrets: SecretDiff[];
-  summary: Record<SecretStatus | "total" | "ignored_paths" | "ignored_keys" | "mapped", number>;
+  summary: Record<SecretStatus | "total" | "ignored_paths" | "ignored_keys" | "mapped", number> & { rewritten_keys?: number };
 }
 
 export interface SecretValues {
@@ -150,6 +153,8 @@ export interface KeyPlan {
   action: "add" | "update" | "unchanged" | "remove";
   type_change: boolean;
   override: boolean;
+  /** The profile's rewrites changed the copied value */
+  rewritten?: boolean;
   source_value: unknown;
   target_value: unknown;
 }
@@ -362,10 +367,25 @@ export interface ExpiryResult {
            denied: string[]; truncated: boolean; unreadable: number }[];
 }
 
+export interface Rewrite { left: string; right: string }
+
 export interface ProfileRules {
   mappings: { left: string; right: string }[];
   ignore_paths: string[];
   ignore_keys: { key: string; path: string }[];
+  /** Words read as their counterpart before values are compared, and when copying */
+  rewrites?: Rewrite[];
+}
+
+/** What the profile builder found by reading both sides (paths, words and counts; no values) */
+export interface ProfileSuggestions {
+  left_paths: string[];
+  right_paths: string[];
+  truncated: boolean;
+  mappings: { left: string; right: string; pairs: [string, string][]; reason: string }[];
+  rewrites: { left: string; right: string; keys: number; secrets: string[]; reason: string }[];
+  before: Record<string, number>;
+  after: Record<string, number>;
 }
 
 export interface Profile {

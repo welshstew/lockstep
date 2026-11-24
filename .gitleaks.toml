@@ -11,4 +11,7 @@ regexes = [
   '''ak_live_1234567890''',
   # Dex's dev client secret (dev/dex/config.yaml, compose.yaml), e.g. in the docs' curl for a test ID token
   '''vault-dev-secret''',
+  # The apps mount's per-environment tokens (dev/seed/seed.py: the ELP rename example)
+  '''tok-test-8f2a1c90''',
+  '''tok-dev-3b9e7741''',
 ]

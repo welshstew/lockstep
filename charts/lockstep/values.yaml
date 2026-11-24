@@ -113,6 +113,8 @@ profiles: []
 #      ignoreKeys:                   # key globs, optionally only under a path glob
 #        - {key: host, path: "services/**"}
 #      ignorePaths: ["legacy/**"]
+#      rewrites:                     # words in values read as their counterpart (whole words)
+#        - {left: prod, right: staging}
 
 extraEnv: []                        # additional env vars (name/value or valueFrom)
 

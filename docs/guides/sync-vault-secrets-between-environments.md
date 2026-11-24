@@ -62,6 +62,8 @@ Apply asks before writing each key. Any secret whose source or target changed si
 
 When production keeps `services/billing/prod/db` and staging keeps `services/billing/staging/db`, a **comparison profile** pairs them with a mapping like `services/*/prod/**` ⇄ `services/*/staging/**`. Copies follow the mapping, so copying a production-only secret to staging writes it under the staging path. If two paths would map onto the same target, Lockstep refuses rather than guessing.
 
+Copies follow the profile's **rewrites** too. With `prod` ⇄ `staging`, a value copied to staging has `prod` written as `staging` (`db-prod.internal` arrives as `db-staging.internal`), and the other way when copying to production. The review marks each rewritten key, and **Show values** shows exactly what will be written. Certificates, keys and base64 data are never rewritten. See [Building a comparison profile](build-a-comparison-profile.md#how-the-rules-work).
+
 ## Permissions
 
 The person or role applying a sync needs `create` and `update` on the target's data path, and read access on the source. Lockstep checks this (`sys/capabilities-self`) before it writes, and the review shows when a target can't be written. Example policies are in the [security guide](../security.md#vault-policies).

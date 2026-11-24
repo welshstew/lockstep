@@ -36,6 +36,7 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field, ValidationError
 
 from ..config import Settings, get_settings
+from ..rules import Rewrite
 from ..session import Connection, SessionData, load_session
 from .compare import FileSide, Side
 from .connections import get_connection
@@ -92,6 +93,7 @@ class Plan(BaseModel):
     created_at: str
     note: str = ""
     profile: str | None = None
+    rewrites: list[Rewrite] = []  # the profile's value rewrites, applied again when the plan is applied
     left: PlanVault
     right: PlanVault
     changes: list[PlanChange] = Field(min_length=1, max_length=MAX_CHANGES)
@@ -214,7 +216,7 @@ def _request(plan: Plan, left_conn_id: str, right_conn_id: str) -> SyncRequest:
                for c in plan.changes]
     return SyncRequest(left=Side(conn_id=left_conn_id, mount=plan.left.mount, prefix=plan.left.prefix),
                        right=Side(conn_id=right_conn_id, mount=plan.right.mount, prefix=plan.right.prefix),
-                       changes=changes)
+                       changes=changes, rewrites=plan.rewrites)
 
 
 def _ends(plan: Plan, c: PlanChange) -> tuple[PlanVault, PlanVault]:
@@ -320,7 +322,7 @@ async def create(body: CreateRequest, session: Sess, settings: Conf):
         raise HTTPException(400, detail={"message": "Nothing to plan: the targets already have these values."})
 
     plan = Plan(id=str(uuid.uuid4()), created_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                note=body.note.strip(), profile=body.profile or None,
+                note=body.note.strip(), profile=body.profile or None, rewrites=body.rewrites,
                 left=_plan_vault(lconn, body.left, settings), right=_plan_vault(rconn, body.right, settings),
                 changes=changes, holds_values=any(c.set for c in changes))
     return sign(plan, settings)

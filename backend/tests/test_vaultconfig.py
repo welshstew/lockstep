@@ -45,6 +45,14 @@ def test_fields_only_one_server_has_are_set_aside():
         "not_before_bound": "only the right server has this field", "serial_number_source": "only the left server has this field",
         "signature_bits": "automatic on one side"}
     assert "_returned" not in p["left"] and "_returned" not in p["right"]
+    # auth methods: configuration fields only one server returns (OpenBao's JWT/OIDC `status`)
+    v_jwt = {"type": "jwt", "description": "ci", "configuration": {"bound_issuer": "x"},
+             "_returned": ["configuration.bound_issuer", "configuration.oidc_discovery_url"]}
+    b_jwt = {"type": "jwt", "description": "CI", "configuration": {"bound_issuer": "x", "status": "valid"},
+             "_returned": ["configuration.bound_issuer", "configuration.oidc_discovery_url", "configuration.status"]}
+    [j] = pair({"jwt/": v_jwt}, {"jwt/": b_jwt})
+    assert j["fields"] == [{"field": "description", "left": "ci", "right": "CI"}]
+    assert [f["field"] for f in j["set_aside"]] == ["configuration.status"]
     # without field lists (mounts), nothing is set aside
     [m] = pair({"kv/": {"type": "kv", "x": 1}}, {"kv/": {"type": "kv"}})
     assert m["status"] == "different" and "set_aside" not in m

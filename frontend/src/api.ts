@@ -1,4 +1,5 @@
 import type {
+  ProfileSuggestions, Rewrite,
   AuthUserMount, AuthUsersCompare, AuthUsersList,
   AnalyzeOptions, AnalyzeResult, ApiChange, PasswordSearch, ExportDoc, ExportResult, ImportPreview, ImportRules, AppConfig, ApplyResult, ChangePlan, CompareResult, Connection, AccessChanges, AccessCompareResult, ConfigCompare, MfaChallenge, MfaConstraint, AccessItem, AccessPlanInfo, AuthMount, BrowseDiff, BrowseEdit, BrowseEditResult, BrowseList, BrowseSecret, DestroyOut, ExpiryResult, ExplainResult, PolicyBuildRule, PolicyCompareResult, PolicyProfile, RoleDraft, RoleFinding, RoleKind, RolePair, RolesList, RoleTemplate, SuggestResult, TerraformOptions, KeyHistory, Locator, Mount, MountsResponse, PlanApplyResult, PlanCheck, Profile, ProfileRules, SecretValues, SyncPlan,
 } from "./types";
@@ -144,10 +145,12 @@ export const api = {
   compare: (left: SideRef, right: SideRef, rules?: ProfileRules | null, customMetadata = false) =>
     call<CompareResult>("POST", "/api/compare", { left, right, ...(rules ? { rules } : {}), ...(customMetadata ? { custom_metadata: true } : {}) }),
   profiles: () => call<Profile[]>("GET", "/api/profiles"),
-  syncPreview: (left: SideRef, right: SideRef, changes: ApiChange[], reveal: boolean) =>
-    call<ChangePlan[]>("POST", "/api/sync/preview", { left, right, changes, reveal }),
-  syncApply: (left: SideRef, right: SideRef, changes: ApiChange[]) =>
-    call<ApplyResult>("POST", "/api/sync/apply", { left, right, changes, confirm: true }),
+  suggestRules: (left: SideRef, right: SideRef, rules: ProfileRules | null) =>
+    call<ProfileSuggestions>("POST", "/api/compare/suggest", { left, right, ...(rules ? { rules } : {}) }),
+  syncPreview: (left: SideRef, right: SideRef, changes: ApiChange[], reveal: boolean, rewrites: Rewrite[] = []) =>
+    call<ChangePlan[]>("POST", "/api/sync/preview", { left, right, changes, reveal, rewrites }),
+  syncApply: (left: SideRef, right: SideRef, changes: ApiChange[], rewrites: Rewrite[] = []) =>
+    call<ApplyResult>("POST", "/api/sync/apply", { left, right, changes, confirm: true, rewrites }),
   policyNames: (connId: string) => call<{ names: string[] }>("GET", `/api/policies?conn_id=${encodeURIComponent(connId)}`),
   policyText: (connId: string, name: string) =>
     call<{ name: string; text: string }>("GET", `/api/policies/${encodeURIComponent(name)}?conn_id=${encodeURIComponent(connId)}`),
@@ -285,8 +288,8 @@ export const api = {
     call<AccessCompareResult>("POST", "/api/policies/compare-access", { left, right }),
   destroy: (side: VaultSide, secrets: { path: string; expected_version: number | null }[]) =>
     call<DestroyOut>("POST", "/api/destroy", { side, secrets, confirm: true }),
-  planCreate: (left: VaultSide, right: VaultSide, changes: ApiChange[], note: string, profile: string | null) =>
-    call<SyncPlan>("POST", "/api/plans", { left, right, changes, note, profile }),
+  planCreate: (left: VaultSide, right: VaultSide, changes: ApiChange[], note: string, profile: string | null, rewrites: Rewrite[] = []) =>
+    call<SyncPlan>("POST", "/api/plans", { left, right, changes, note, profile, rewrites }),
   planVerify: (plan: unknown) => call<{ plan: SyncPlan }>("POST", "/api/plans/verify", { plan }),
   planReport: async (plan: SyncPlan) => {
     const res = await fetch("/api/plans/report", {

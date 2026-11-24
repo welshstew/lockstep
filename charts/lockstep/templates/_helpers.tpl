@@ -84,7 +84,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- $r := .rules | default dict }}
 {{- $keys := list }}
 {{- range $r.ignoreKeys }}{{ $keys = append $keys (dict "key" .key "path" (.path | default "**")) }}{{ end }}
-{{- $_ := set $p "rules" (dict "mappings" ($r.mappings | default list) "ignore_keys" $keys "ignore_paths" ($r.ignorePaths | default list)) }}
+{{- $_ := set $p "rules" (dict "mappings" ($r.mappings | default list) "ignore_keys" $keys "ignore_paths" ($r.ignorePaths | default list) "rewrites" ($r.rewrites | default list)) }}
 {{- $out = append $out $p }}
 {{- end }}
 {{- toJson $out }}

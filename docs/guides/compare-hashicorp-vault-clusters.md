@@ -51,7 +51,7 @@ Values stay hidden until you turn on **Show values**, and then only for the secr
 The same comparison runs from a terminal with the [`lockstep` CLI](../cli.md), which logs in the way the `vault` CLI does:
 
 ```sh
-pipx install "git+https://github.com/welshstew/lockstep@v0.6.0#subdirectory=backend"
+pipx install "git+https://github.com/welshstew/lockstep@v0.10.0#subdirectory=backend"
 
 lockstep compare \
   --left-addr https://vault-prod.example.com --left-name prod \
@@ -63,7 +63,12 @@ It prints a summary of what differs and writes a YAML report. The report has no 
 
 ### When the two sides aren't laid out the same
 
-A **comparison profile** maps paths between environments, for example `services/*/prod/**` ⇄ `services/*/staging/**`. It can also ignore keys that are meant to differ, such as a `host` that's different in each environment. Ignored differences still show, marked *ignored*, but they don't make a secret *Different*. Profiles work in the web UI and with `lockstep compare --profile`. See [Comparison profiles](../usage.md#comparison-profiles).
+A **comparison profile** lines the two sides up:
+- **Mappings** pair paths between environments, for example `services/*/prod/**` ⇄ `services/*/staging/**`.
+- **Rewrites** read a word that names the environment inside values as its counterpart, for example `prod` ⇄ `staging`. So `db-prod.internal` matches `db-staging.internal`, while any other host still differs.
+- **Ignored keys** cover values that must differ, such as per-environment passwords. They still show, marked *ignored*, but don't make a secret *Different*.
+
+In the web UI, **Read both sides** in the profile editor suggests the mappings and rewrites from what's in the two Vaults. Profiles also work with `lockstep compare --profile`. See [Building a comparison profile](build-a-comparison-profile.md).
 
 ## Permissions
 

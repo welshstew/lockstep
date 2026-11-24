@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api, type SideRef } from "../api";
 import { downloadPlan, downloadReport, planFileName } from "../plans";
 import { type Changeset, hasOverrides, secretFor, toApiChanges, unstageChange, unstageKey } from "../staging";
-import type { ApplyResult, ChangePlan, CompareResult, PlanStatus, ResultStatus, SyncPlan } from "../types";
+import type { ApplyResult, ChangePlan, CompareResult, PlanStatus, ResultStatus, Rewrite, SyncPlan } from "../types";
 import { formatValue } from "./ValueCell";
 
 interface Props {
@@ -12,6 +12,8 @@ interface Props {
   onChangeset: (cs: Changeset) => void;
   reveal: boolean;
   profile: string | null;
+  /** The profile's rewrites the comparison used: copies apply them too, in the copy's direction */
+  rewrites?: Rewrite[];
   /** The two sides as compared (a Vault location or an opened export file) */
   sides: { left: SideRef; right: SideRef };
   onClose: (applied: boolean) => void;
@@ -28,7 +30,7 @@ const RESULT_LABEL: Record<ResultStatus, string> = {
 const tone = (s: string) =>
   s === "ready" || s === "applied" ? "equal" : s === "noop" ? "unknown" : s === "conflict" ? "different" : "error";
 
-export function ReviewDialog({ result, changeset, onChangeset, reveal, profile, sides, onClose }: Props) {
+export function ReviewDialog({ result, changeset, onChangeset, reveal, profile, rewrites = [], sides, onClose }: Props) {
   // Plans name Vaults on both sides, so they can't involve an export file
   const vaultSide = (s: SideRef) => ("conn_id" in s ? s : null);
   const fileSide = !vaultSide(sides.left) || !vaultSide(sides.right);
@@ -48,7 +50,7 @@ export function ReviewDialog({ result, changeset, onChangeset, reveal, profile, 
     let live = true;
     setPlans(null);
     setConfirmed(false); // what's confirmed changed
-    api.syncPreview(sides.left, sides.right, changes, reveal)
+    api.syncPreview(sides.left, sides.right, changes, reveal, rewrites)
       .then((p) => { if (live) setPlans(p); })
       .catch((e) => { if (live) setError(e.message); });
     return () => { live = false; };
@@ -80,7 +82,7 @@ export function ReviewDialog({ result, changeset, onChangeset, reveal, profile, 
     setPlanning(true);
     setError(null);
     try {
-      const plan = await api.planCreate(vaultSide(sides.left)!, vaultSide(sides.right)!, changes, note, profile);
+      const plan = await api.planCreate(vaultSide(sides.left)!, vaultSide(sides.right)!, changes, note, profile, rewrites);
       downloadPlan(plan);
       setSaved(plan);
     } catch (e) {
@@ -95,7 +97,7 @@ export function ReviewDialog({ result, changeset, onChangeset, reveal, profile, 
     setError(null);
     try {
       const readyChanges = changes.filter((c) => ready.some((p) => p.path === c.path && p.direction === c.direction));
-      setApplied(await api.syncApply(sides.left, sides.right, readyChanges));
+      setApplied(await api.syncApply(sides.left, sides.right, readyChanges, rewrites));
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -174,7 +176,8 @@ export function ReviewDialog({ result, changeset, onChangeset, reveal, profile, 
                           <td className="mono">{k.key}</td>
                           <td><span className={`action ${k.action}`}>{k.action === "unchanged" ? "same" : k.action}</span>
                             {k.type_change && <span className="type-tag">type changes</span>}
-                            {k.override && <span className="type-tag" title="A value you typed, not copied from the other side">typed</span>}</td>
+                            {k.override && <span className="type-tag" title="A value you typed, not copied from the other side">typed</span>}
+                            {k.rewritten && <span className="type-tag" title={`The profile's rewrites change the copied value: ${rewrites.map((w) => p.direction === "left_to_right" ? `${w.left} → ${w.right}` : `${w.right} → ${w.left}`).join(", ")}`}>rewritten</span>}</td>
                           {reveal && (
                             <td className="mono vals">
                               {k.action === "remove" ? <s>{formatValue(k.target_value)}</s> : <>

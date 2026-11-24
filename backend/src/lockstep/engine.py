@@ -69,11 +69,14 @@ async def _compare_metadata(d: SecretDiff, lv, lsem, lmount: str, lpath: str, rv
 
 async def compare(lv: VaultClient, lmount: str, lprefix: str,
                   rv: VaultClient, rmount: str, rprefix: str,
-                  rules: Rules | None = None, max_secrets: int = 5000, custom_metadata: bool = False) -> Comparison:
+                  rules: Rules | None = None, max_secrets: int = 5000, custom_metadata: bool = False,
+                  observe=None) -> Comparison:
     """Compare lmount/lprefix on one Vault with rmount/rprefix on another (or the same).
     Prefixes are "" or end in "/". Listing errors other than "permission denied" raise
     VaultError; unreadable folders and secrets are reported per secret instead.
-    `custom_metadata`: also compare each pair's custom metadata (a difference makes it Different)."""
+    `custom_metadata`: also compare each pair's custom metadata (a difference makes it Different).
+    `observe(diff, left_data, right_data)`: called for each pair while its values are still held
+    (the rewrite suggestions use it); it must not keep the values."""
     ltree, rtree = await asyncio.gather(lv.kv_tree(lmount, lprefix, max_secrets=max_secrets),
                                         rv.kv_tree(rmount, rprefix, max_secrets=max_secrets))
     lrel = {s[len(lprefix):] for s in ltree.secrets}
@@ -94,7 +97,9 @@ async def compare(lv: VaultClient, lmount: str, lprefix: str,
             _read_side(lv, lsem, lmount, lprefix + lp, lp in lrel, ltree),
             _read_side(rv, rsem, rmount, rprefix + rp, rp in rrel, rtree))
         d = diff_secret(key, li, ld, ri, rd, ignored=lambda k: rules.key_ignored(k, lp, rp),
-                        left_path=lp, right_path=rp)
+                        left_path=lp, right_path=rp, rewrite=rules.rewrite if rules.rewrites else None)
+        if observe:
+            observe(d, ld if li.state == "present" else None, rd if ri.state == "present" else None)
         for name in (kd.key for kd in d.keys):
             lb = badge(ld[name]) if ld and name in ld else None
             rb = badge(rd[name]) if rd and name in rd else None
@@ -108,6 +113,7 @@ async def compare(lv: VaultClient, lmount: str, lprefix: str,
     totals = summarize(diffs)
     totals["ignored_paths"] = ignored_paths
     totals["ignored_keys"] = sum(d.ignored_keys for d in diffs)
+    totals["rewritten_keys"] = sum(d.rewritten_keys for d in diffs)
     totals["mapped"] = sum(d.left_path != d.right_path for d in diffs)
     totals["metadata_different"] = sum(bool(d.metadata) for d in diffs)
     return Comparison(secrets=diffs, left_tree=ltree, right_tree=rtree, summary=totals)
