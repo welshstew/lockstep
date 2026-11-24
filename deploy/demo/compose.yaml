@@ -1,4 +1,4 @@
-# Public demo of Lockstep: two throwaway dev-mode Vaults, Dex for OIDC sign-in, and the app,
+# Public demo of Lockstep: two throwaway dev-mode Vaults and two OpenBaos, Dex for OIDC sign-in, and the app,
 # behind Caddy (automatic HTTPS), plus the landing page and visit statistics (GoAccess, from
 # Caddy's access log). Only Caddy publishes ports (80, 443).
 #
@@ -25,11 +25,22 @@ x-vault: &vault
     timeout: 3s
     retries: 20
 
+x-openbao: &openbao
+  <<: *common
+  image: quay.io/openbao/openbao:2.7.3@sha256:ba4b133eb9586630024e71a617e66f37f29cc3534cdd46a6233e098ceded8dc9
+  cap_add: [IPC_LOCK]
+  mem_limit: 256m
+  healthcheck:
+    test: ["CMD", "bao", "status", "-address=http://127.0.0.1:8200"]
+    interval: 5s
+    timeout: 3s
+    retries: 20
+
 services:
   caddy:
     <<: *common
     # Red Hat Hardened Image, Caddy v2.11 (multi-arch digest)
-    image: registry.access.redhat.com/hi/caddy:2@sha256:a6e3943eadee8926586733bb5646c2ea57189b4d0a88ac0a1d7c8d86d8f5c00b
+    image: registry.access.redhat.com/hi/caddy:2@sha256:cdda0b6b135826ddbe666a62661499ca36c6207b60793a5313d0045b53197d10
     environment:
       DEMO_HOST: ${DEMO_HOST:?}
       LOGIN_HOST: ${LOGIN_HOST:?}
@@ -108,9 +119,23 @@ services:
       VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
       VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_B_TOKEN:?}
 
+  # The same demo on OpenBao: a pair of its own, seeded with the same data, so visitors can
+  # compare OpenBao with OpenBao, or with Vault (a migration check).
+  openbao-a:
+    <<: *openbao
+    environment:
+      BAO_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+      BAO_DEV_ROOT_TOKEN_ID: ${BAO_A_TOKEN:?}
+
+  openbao-b:
+    <<: *openbao
+    environment:
+      BAO_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+      BAO_DEV_ROOT_TOKEN_ID: ${BAO_B_TOKEN:?}
+
   dex:
     <<: *common
-    image: registry.access.redhat.com/hi/dex@sha256:30e0fa914666c5044f7cae8a3e1128f358be499a69c4638ef1ad717b369c2c11
+    image: registry.access.redhat.com/hi/dex@sha256:f7093894e9a19324cef296c8e9c3886351ce65fc02d1e37fc5e1727224c3a5b5
     user: "65532"
     command: ["serve", "/etc/dex/config.yaml"]
     volumes:
@@ -122,7 +147,7 @@ services:
   postgres:
     <<: *common
     # Red Hat Hardened Image, PostgreSQL 17.10 (multi-arch index digest)
-    image: registry.access.redhat.com/hi/postgresql@sha256:e58f3fc1777374194f7841c251925042b6fb979b7c7234d0ffd944c48f46e8ee
+    image: registry.access.redhat.com/hi/postgresql:17@sha256:15c059088a4610479c834988fac91ecf8ef38c848604de52f55346401d74f0a4
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
       POSTGRES_DB: orders
@@ -159,6 +184,31 @@ services:
       dex: {condition: service_started}
       postgres: {condition: service_healthy}
 
+  # The OpenBao pair's seed: the same data and drift as the Vaults (no LDAP: OpenBao doesn't ship it)
+  seed-openbao:
+    <<: *common
+    build: ./dev/seed
+    environment:
+      VAULT_A_ADDR: http://openbao-a:8200
+      VAULT_A_TOKEN: ${BAO_A_TOKEN:?}
+      VAULT_B_ADDR: http://openbao-b:8200
+      VAULT_B_TOKEN: ${BAO_B_TOKEN:?}
+      OIDC_DISCOVERY_URL: https://${LOGIN_HOST:?}/dex
+      OIDC_CLIENT_ID: vault
+      OIDC_CLIENT_SECRET: ${DEX_CLIENT_SECRET:?}
+      OIDC_WAIT_ATTEMPTS: "150"
+      TOOL_PUBLIC_URL: https://${DEMO_HOST:?}
+      RESEED_INTERVAL: ${RESEED_INTERVAL:-3600}
+      POSTGRES_URL: "postgresql://{{username}}:{{password}}@postgres:5432/orders?sslmode=disable"
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+    mem_limit: 256m
+    depends_on:
+      openbao-a: {condition: service_healthy}
+      openbao-b: {condition: service_healthy}
+      caddy: {condition: service_started}
+      dex: {condition: service_started}
+      postgres: {condition: service_healthy}
+
   app:
     <<: *common
     build: .
@@ -168,11 +218,13 @@ services:
       LOCKSTEP_PUBLIC_URL: https://${DEMO_HOST:?}
       LOCKSTEP_SESSION_KEY: ${LOCKSTEP_SESSION_KEY:?}
       LOCKSTEP_COOKIE_SECURE: "true"
-      # Visitors can only use the two demo Vaults, never point the server at other hosts.
+      # Visitors can only use the demo's Vaults and OpenBaos, never point the server at other hosts.
       LOCKSTEP_ALLOW_CUSTOM_CONNECTIONS: "false"
       LOCKSTEP_PRESET_CONNECTIONS: >-
         [{"name":"Vault A","url":"http://vault-a:8200"},
-         {"name":"Vault B","url":"http://vault-b:8200"}]
+         {"name":"Vault B","url":"http://vault-b:8200"},
+         {"name":"OpenBao A","url":"http://openbao-a:8200"},
+         {"name":"OpenBao B","url":"http://openbao-b:8200"}]
       LOCKSTEP_PROFILES: >-
         [{"name": "Prod ↔ staging services",
           "description": "services/<name>/prod in Vault A against services/<name>/staging in Vault B; hosts differ by design",
@@ -180,11 +232,13 @@ services:
           "rules": {"mappings": [{"left": "services/*/prod/**", "right": "services/*/staging/**"}],
                     "ignore_keys": [{"key": "host", "path": "services/**"}],
                     "ignore_paths": ["legacy/**", "retired/**"]}}]
-      LOCKSTEP_DEMO_BANNER: ${DEMO_BANNER:-Public demo with throwaway data, reset every hour. Sign in with userpass alice / bob / carol (password "password"), or OIDC as alice@example.com.}
+      LOCKSTEP_DEMO_BANNER: ${DEMO_BANNER:-Public demo with throwaway data, reset every hour. Two Vaults and two OpenBaos. Sign in with userpass alice / bob / carol (password "password"), or OIDC as alice@example.com.}
     mem_limit: 384m
     depends_on:
       vault-a: {condition: service_healthy}
       vault-b: {condition: service_healthy}
+      openbao-a: {condition: service_healthy}
+      openbao-b: {condition: service_healthy}
 
 volumes:
   caddy-data:

@@ -366,7 +366,7 @@ Explain and Suggest use the same tree listing as Compare: `LOCKSTEP_MAX_TREE_SEC
 4. **Kubernetes and JWT/OIDC roles:** list, explain, build (with issuer templates), compare, export, and "who gets this policy".
 5. **Apply from Lockstep:** staging, review with diffs, the hash re-check, audit, saved plans, `LOCKSTEP_POLICY_APPLY`.
 6. **More identities:** LDAP groups, identity groups and aliases, AppRole, userpass users, and parameter constraints.
-7. **Namespaces (Vault Enterprise), last:** policies and roles per namespace, a namespace picker on each side, and comparing across namespaces (`team-a` in one cluster against `team-a` in another, or two namespaces in one). Wanted, but left until the rest is solid, because it touches every view.
+7. **Namespaces (Vault Enterprise), last:** policies and roles per namespace, a namespace picker on each side, and comparing across namespaces (`team-a` in one cluster against `team-a` in another, or two namespaces in one). Wanted, but left until the rest is solid, because it touches every view. Planned in [vault-enterprise.md](vault-enterprise.md), which avoids touching every view by giving each namespace its own linked connection.
 
 Phases 1 and 2 are useful on their own, and settle the hardest part, the matching, before anything can write.
 

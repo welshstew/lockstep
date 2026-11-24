@@ -6,9 +6,9 @@
 [![e2e](https://github.com/welshstew/lockstep/actions/workflows/e2e.yml/badge.svg)](https://github.com/welshstew/lockstep/actions/workflows/e2e.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**Website:** [getlockstep.cloud](https://getlockstep.cloud) · **Try it:** [demo.getlockstep.cloud](https://demo.getlockstep.cloud), a public demo with two throwaway Vaults (sign in as `alice` / `password`; data resets every hour).
+**Website:** [getlockstep.cloud](https://getlockstep.cloud) · **Try it:** [demo.getlockstep.cloud](https://demo.getlockstep.cloud), a public demo with two throwaway Vaults and two OpenBaos (sign in as `alice` / `password`; data resets every hour).
 
-Compare **KV v2 secrets engines** across HashiCorp Vault clusters, or across two mounts in the same Vault. See exactly which values differ, without displaying them. Copy selected keys between the two sides safely, with a reviewed changeset.
+Compare **KV v2 secrets engines** across HashiCorp Vault clusters, or across two mounts in the same Vault. Works with **OpenBao** too, including Vault on one side and OpenBao on the other, for checking a migration. See exactly which values differ, without displaying them. Copy selected keys between the two sides safely, with a reviewed changeset.
 
 **Made for development environments.** Lockstep's main job is keeping dev, test, integration and preview environments in step: finding the missing key or stale URL behind "works in dev, fails in test", copying or editing values to fix it, standing up a new environment from an existing one with export and import, and cleaning up afterwards. Production can be compared read-only, with changes sent through sync plans. See [Lockstep for development environments](docs/guides/vault-secrets-in-development-environments.md).
 

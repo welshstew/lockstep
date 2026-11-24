@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useState } from "react";
+import { PolicySelect } from "./PolicySelect";
 import { api } from "../api";
 import type { AuthUserMount, AuthUserPair, AuthUsersCompare, AuthUsersList } from "../types";
 
@@ -143,7 +144,7 @@ function CompareUsers({ result, left, right, onClose }: { result: AuthUsersCompa
 function UserWrite({ connId, mount, initial, onClose }: { connId: string; mount: string; initial: { action: "create" | "reset"; username: string };
                                                          onClose: (done: boolean) => void }) {
   const [username, setUsername] = useState(initial.username);
-  const [policies, setPolicies] = useState("");
+  const [policies, setPolicies] = useState<string[]>([]);
   const [ttl, setTtl] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -157,7 +158,7 @@ function UserWrite({ connId, mount, initial, onClose }: { connId: string; mount:
     try {
       setDone(await api.writeAuthUser({ conn_id: connId, mount, username: username.trim(), action: initial.action,
         ...(password ? { password } : {}),
-        ...(create ? { policies: policies.split(",").map((x) => x.trim()).filter(Boolean), ...(ttl.trim() ? { token_ttl: ttl.trim() } : {}) } : {}) }));
+        ...(create ? { policies, ...(ttl.trim() ? { token_ttl: ttl.trim() } : {}) } : {}) }));
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -181,7 +182,7 @@ function UserWrite({ connId, mount, initial, onClose }: { connId: string; mount:
           {create && (
             <>
               <label className="field"><span>Username</span><input type="text" className="mono" value={username} onChange={(e) => setUsername(e.target.value)} /></label>
-              <label className="field"><span>Policies <span className="subtle">(comma separated)</span></span><input type="text" className="mono" value={policies} onChange={(e) => setPolicies(e.target.value)} /></label>
+              <div className="field"><span>Policies</span><PolicySelect connId={connId} value={policies} onChange={setPolicies} label="User policies" /></div>
               <label className="field"><span>Token TTL <span className="subtle">(optional, e.g. 1h)</span></span><input type="text" className="mono" value={ttl} onChange={(e) => setTtl(e.target.value)} /></label>
             </>
           )}

@@ -1,11 +1,11 @@
 apiVersion: v2
 name: lockstep
-description: Compare, inspect and sync KV secrets across HashiCorp Vault clusters.
+description: Compare, inspect and sync KV secrets across HashiCorp Vault and OpenBao clusters.
 type: application
-version: 0.8.0
-appVersion: "0.8.0"
+version: 0.9.0
+appVersion: "0.9.0"
 kubeVersion: ">=1.27.0-0"
-keywords: [vault, hashicorp-vault, secrets, kv, compare, sync, certificates]
+keywords: [vault, hashicorp-vault, openbao, secrets, kv, compare, sync, certificates]
 icon: https://getlockstep.cloud/icon.svg
 home: https://getlockstep.cloud
 maintainers:
@@ -17,30 +17,22 @@ annotations:
   # The image this chart version runs: update with every release (scripts/check-version.sh checks it)
   artifacthub.io/images: |
     - name: lockstep
-      image: ghcr.io/welshstew/lockstep:0.8.0
+      image: ghcr.io/welshstew/lockstep:0.9.0
       platforms: [linux/amd64, linux/arm64]
   # What changed in this chart version, shown on Artifact Hub: rewrite for every release
   artifacthub.io/changes: |
     - kind: added
-      description: "Try a draft policy for real with a short-lived token, and start a policy from a Browse folder"
+      description: "Tested against OpenBao 2.7, alone or with Vault on the other side"
     - kind: added
-      description: "Edit identity groups' policies; userpass users and LDAP group mappings read and compared"
+      description: "Configuration overview names the product: Vault, Vault Enterprise or OpenBao"
     - kind: added
-      description: "New value userWrite (off by default): create userpass users and reset passwords on development Vaults"
-    - kind: added
-      description: "Configuration: Azure, GCP and LDAP engine roles; profiles that pair mounts with different paths (value configProfiles)"
-    - kind: added
-      description: "Configuration: copy a mount's tuning or an engine role to the other Vault through the access review"
-    - kind: added
-      description: "Compare: custom metadata as an option, and a one-click way back to the whole mount from a path prefix"
-    - kind: added
-      description: "Renew a connection's token"
+      description: "Namespaces tested on OpenBao, including comparisons across namespaces"
     - kind: changed
-      description: "A new look: navigation in a sticky top bar, new fonts and colours"
-    - kind: fixed
-      description: "Artifact Hub can read the chart's change log again (0.7.0's annotation was rejected)"
-    - kind: fixed
-      description: "Browse: a key's actions sit on one line again"
+      description: "Choose a role's, group's or user's policies from those on the Vault instead of typing them"
+    - kind: changed
+      description: "Configuration: built-in plugin versions and fields only one server returns no longer count as differences"
+    - kind: security
+      description: "Image rebuilt on the latest hardened Python base (CVE-2026-102010)"
   artifacthub.io/links: |
     - name: Website
       url: https://getlockstep.cloud

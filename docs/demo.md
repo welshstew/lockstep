@@ -1,7 +1,7 @@
 # Public demo deployment
 
 `deploy/demo/compose.yaml` runs a self-contained public demo on any Docker host: two
-throwaway dev-mode Vaults, Dex for OIDC sign-in, the seed job and Lockstep, behind Caddy
+throwaway dev-mode Vaults and two OpenBaos, Dex for OIDC sign-in, the seed jobs and Lockstep, behind Caddy
 with automatic HTTPS (Let's Encrypt), plus a landing page and visit statistics. Only Caddy
 publishes ports (80 and 443).
 
@@ -24,15 +24,23 @@ scripts/deploy-demo.sh root@<server> <domain>
 
 The script copies the repository to `/opt/lockstep` with rsync (install `rsync` on the server
 first), and on the first run writes `/opt/lockstep/.env` with random secrets: the session
-key, both Vault root tokens and the Dex client secret. Later runs keep that file. It renders
+key, the Vault and OpenBao root tokens and the Dex client secret. Later runs keep that file,
+adding any secret a newer version needs (the OpenBao tokens, `BAO_A_TOKEN` and `BAO_B_TOKEN`). It renders
 the Dex config from `deploy/demo/dex.yaml.tmpl` (Dex doesn't expand environment variables),
 then builds and starts the stack. Run it again to deploy a new version. It also adds a
 password for the statistics page to `.env` the first time (`STATS_PASSWORD`, user `stats`).
 
 ## What visitors get
 
-- Only the two demo Vaults (`LOCKSTEP_ALLOW_CUSTOM_CONNECTIONS=false`), so the server can't
-  be pointed at other hosts. The Vaults themselves aren't published.
+- Only the demo's servers (`LOCKSTEP_ALLOW_CUSTOM_CONNECTIONS=false`), so the server can't
+  be pointed at other hosts: Vault A and B, and OpenBao A and B. The OpenBaos are seeded
+  with the same data by their own seed job (`seed-openbao`), without the LDAP mounts, which
+  OpenBao doesn't ship. Vault against OpenBao shows what a migration check looks like. The
+  OpenBaos also have namespaces (`team-a`, `team-a/apps`, and `team-b` on A or `team-c` on B):
+  type one in the connect form's **Namespace** field and sign in as `alice`.
+  None of them is published.
+- Memory: each Vault is limited to 384 MB and each OpenBao to 256 MB; the whole stack
+  stays under about 3 GB.
 - Userpass sign-in as `alice` (admin), `bob` (read-only) or `carol` (limited), password
   `password`, or OIDC as `alice@example.com` / `password`.
 - A banner (`LOCKSTEP_DEMO_BANNER`) saying the data is temporary. The seed job restores the

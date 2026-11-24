@@ -6,6 +6,8 @@ import uuid
 import httpx
 import pytest
 
+from conftest import has_plugin_b
+
 pytestmark = pytest.mark.usefixtures("vaults")
 
 
@@ -38,6 +40,8 @@ def test_ldap_mappings_without_bind_password(client):
 
 
 def test_compare_two_vaults(client):
+    if not has_plugin_b("auth", "ldap"):
+        pytest.skip("Vault B has no LDAP auth method (OpenBao)")
     a, b = connect(client, 0, token="root-a"), connect(client, 1, token="root-b")
     out = client.post("/api/authusers/compare", json={"left": {"conn_id": a, "mount": "ldap"},
                                                       "right": {"conn_id": b, "mount": "ldap"}}).json()

@@ -53,6 +53,10 @@ if ! grep -q '^POSTGRES_PASSWORD=' .env; then
   echo "POSTGRES_PASSWORD=$(rand)" >> .env
   echo "added a password for the demo Postgres to $DIR/.env"
 fi
+if ! grep -q '^BAO_A_TOKEN=' .env; then
+  { echo "BAO_A_TOKEN=$(rand)"; echo "BAO_B_TOKEN=$(rand)"; } >> .env
+  echo "added root tokens for the demo OpenBaos to $DIR/.env"
+fi
 set -a; . ./.env; set +a
 # Dex doesn't expand environment variables in its config, so render it here.
 sed -e "s|\${LOGIN_HOST}|$LOGIN_HOST|g" -e "s|\${DEMO_HOST}|$DEMO_HOST|g" \

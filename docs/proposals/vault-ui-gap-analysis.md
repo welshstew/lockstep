@@ -307,4 +307,4 @@ Lockstep's policy matcher was verified against Vault 1.21.4, so on 2.2.2 its ans
   - a scheduled CI job that checks the matcher against each new Vault release: built (#89);
   - moving the dev stack to Vault 2.x: planned in [vault-2-dev-stack.md](vault-2-dev-stack.md) (#90), not implemented yet.
 - **Links into the Vault UI:** dropped. Browse now covers what the links were for.
-- **Namespaces (policy builder phase 7) and licence expiry in the overview (Enterprise):** wanted, but blocked. The `hashicorp/vault-enterprise` image won't start without a licence, even in dev mode ("license check failed: no autoloaded license provided"). This needs a trial licence in `.env` as `VAULT_LICENSE` for a dev Enterprise service.
+- **Namespaces (policy builder phase 7) and licence expiry in the overview (Enterprise):** wanted, but blocked. The `hashicorp/vault-enterprise` image won't start without a licence, even in dev mode ("license check failed: no autoloaded license provided"). This needs a trial licence in `.env` as `VAULT_LICENSE` for a dev Enterprise service. The plan is in [vault-enterprise.md](vault-enterprise.md).

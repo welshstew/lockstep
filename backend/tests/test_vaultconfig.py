@@ -5,7 +5,8 @@ import uuid
 import httpx
 import pytest
 
-from lockstep.api.vaultconfig import diff, normalise_mount
+from conftest import has_plugin_b, is_openbao_b
+from lockstep.api.vaultconfig import diff, normalise_mount, pair, product
 
 pytestmark = pytest.mark.usefixtures("vaults")
 
@@ -15,10 +16,38 @@ def test_normalise_and_diff():
          "config": {"default_lease_ttl": 0, "max_lease_ttl": 3600, "listing_visibility": ""},
          "plugin_version": "", "running_plugin_version": "v0.25.0+builtin", "description": ""}
     assert normalise_mount(m) == {"type": "kv", "options": {"version": "2"}, "config": {"max_lease_ttl": 3600},
-                                  "plugin_version": "v0.25.0+builtin"}
+                                  "plugin_version": "builtin"}
+    # built-in plugins differ only with the server's version (or Vault against OpenBao): not drift
+    assert normalise_mount({**m, "running_plugin_version": "v2.7.3+builtin.bao"}) == normalise_mount(m)
+    assert normalise_mount({**m, "plugin_version": "v0.3.1"})["plugin_version"] == "v0.3.1"  # a pinned external plugin
     assert diff({"config": {"a": 1, "b": 2}}, {"config": {"a": 1, "b": 3}, "x": True}) == [
         {"field": "config.b", "left": 2, "right": 3}, {"field": "x", "left": None, "right": True}]
     assert "bindpass" not in normalise_mount({"type": "ldap", "bindpass": "x", "client_secret": "y", "url": "ldap://h"})
+
+
+def test_product():
+    bao = {"data": {"secret": {"kv/": {"running_plugin_version": "v2.7.3+builtin.bao"}}}}
+    vault = {"data": {"secret": {"kv/": {"running_plugin_version": "v0.25.0+builtin"}}}}
+    assert product({"version": "2.7.3"}, bao) == "OpenBao"
+    assert product({"version": "1.21.4"}, vault) == "Vault"
+    assert product({"version": "1.21.4+ent"}, vault) == "Vault Enterprise"
+    assert product({"version": "1.21.4"}, {"_error": "denied"}) == "Vault"
+
+
+def test_fields_only_one_server_has_are_set_aside():
+    vault = {"max_ttl": 3600, "signature_bits": 256, "serial_number_source": "json-csr",
+             "_returned": ["max_ttl", "serial_number_source", "signature_bits"]}
+    bao = {"max_ttl": 7200, "not_before_bound": "permit",  # signature_bits 0 (automatic) was cleaned away
+           "_returned": ["max_ttl", "not_before_bound", "signature_bits"]}
+    [p] = pair({"pki/roles/web": vault}, {"pki/roles/web": bao})
+    assert p["fields"] == [{"field": "max_ttl", "left": 3600, "right": 7200}] and p["status"] == "different"
+    assert {f["field"]: f["reason"] for f in p["set_aside"]} == {
+        "not_before_bound": "only the right server has this field", "serial_number_source": "only the left server has this field",
+        "signature_bits": "automatic on one side"}
+    assert "_returned" not in p["left"] and "_returned" not in p["right"]
+    # without field lists (mounts), nothing is set aside
+    [m] = pair({"kv/": {"type": "kv", "x": 1}}, {"kv/": {"type": "kv"}})
+    assert m["status"] == "different" and "set_aside" not in m
 
 
 @pytest.fixture
@@ -94,6 +123,8 @@ def test_engine_roles_and_keys(client):
     assert app["status"] == "different" and app["type"] == "transit"
     assert {f["field"] for f in app["fields"]} == {"auto_rotate_period", "deletion_allowed"}
     assert not any(p.startswith("pki-dev/") or p.startswith("database/") for p in eng)  # only on Vault A
+    if not has_plugin_b("secret", "ldap"):
+        return  # OpenBao as Vault B: no LDAP secrets engine
     ldap = eng["directory/role/dev-users"]
     assert ldap["status"] == "different" and ldap["type"] == "ldap"
     assert [f["field"] for f in ldap["fields"]] == ["max_ttl"]
@@ -165,6 +196,9 @@ def test_profile_pairs_mounts_rewrites_and_ignores(client, vaults):
         eng = {p["path"]: p for p in out["engines"]}
         role = eng[f"certs-dev-{tag}/roles/web"]
         assert role["right_path"] == f"certs-prod-{tag}/roles/web" and role["status"] == "equal", role["fields"]
+        if is_openbao_b():  # each product returns PKI role fields the other doesn't have: set aside, not drift
+            assert {"not_before_bound", "serial_number_source", "signature_bits"} <= {f["field"] for f in role["set_aside"]}
+        assert "_returned" not in (role["left"] or {}) and "_returned" not in (role["right"] or {})
     finally:
         for c, env in ((a, "dev"), (b, "prod")):
             c.delete(f"sys/mounts/certs-{env}-{tag}")

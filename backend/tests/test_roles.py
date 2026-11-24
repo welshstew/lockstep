@@ -8,9 +8,12 @@ import zipfile
 import httpx
 import pytest
 
+from conftest import ca_pem
 from lockstep.policy.roles import compare_roles, lint, normalise, policies_of, seconds
 
 pytestmark = pytest.mark.usefixtures("vaults")
+
+CA = ca_pem()
 
 
 def test_normalise_defaults_durations_and_lists():
@@ -72,8 +75,8 @@ def k8s(client, vaults):
 def _k8s_mounts(client, mount, vs):
     for v in vs:
         v.post(f"sys/auth/{mount}", json={"type": "kubernetes"}).raise_for_status()
-        v.post(f"auth/{mount}/config", json={"kubernetes_host": "https://kubernetes.example:443",
-                                             "disable_local_ca_jwt": True}).raise_for_status()
+        v.post(f"auth/{mount}/config", json={"kubernetes_host": "https://kubernetes.example:443", "kubernetes_ca_cert": CA,
+                                             "disable_local_ca_jwt": True}).raise_for_status()  # OpenBao requires the CA
     a, b = vs
     a.post(f"auth/{mount}/role/payments-dev", json={"bound_service_account_names": ["payments"],
                                                      "bound_service_account_namespaces": ["payments-dev"],

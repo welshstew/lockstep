@@ -23,13 +23,14 @@ function Overview({ o, label, side, other }: { o: VaultOverview; label: string; 
     <div className={`card overview ${side}`}>
       <div className={`scope ${side}`}>{label}</div>
       <dl>
+        <dt>Product</dt><dd className={diff("product")}>{o.product ?? "—"}</dd>
         <dt>Version</dt><dd className={`mono${diff("version")}`}>{o.version ?? "—"}</dd>
         <dt>Cluster</dt><dd className="mono">{o.cluster_name ?? "—"}</dd>
         <dt>Sealed</dt><dd className={diff("sealed")}>{o.sealed === null ? "—" : o.sealed ? "yes" : "no"}</dd>
         <dt>Seal</dt><dd className={`mono${diff("seal_type")}`}>{o.seal_type ?? "—"}</dd>
         <dt>Storage</dt><dd className={`mono${diff("storage_type")}`}>{o.storage_type ?? "—"}</dd>
         <dt>High availability</dt><dd className={diff("ha_enabled")}>{o.ha_enabled ? "yes" : "no"}</dd>
-        <dt>Replication</dt><dd className={diff("replication")}>{o.replication === null ? "not available (Community Edition, or no access)"
+        <dt>Replication</dt><dd className={diff("replication")}>{o.replication === null ? (o.product === "OpenBao" ? "not in OpenBao" : "not available (Community Edition, or no access)")
           : Object.keys(o.replication).length ? Object.entries(o.replication).map(([k, m]) => `${k}: ${m}`).join(", ") : "off"}</dd>
       </dl>
     </div>
@@ -64,6 +65,12 @@ function Section({ title, rows, sides, source, onCopy }: { title: string; rows: 
                 </table>
               ) : (
                 <pre className="mono hcl-preview">{JSON.stringify(p.left ?? p.right, null, 2)}</pre>
+              )}
+              {p.set_aside && p.set_aside.length > 0 && (
+                <div className="subtle set-aside" title="These servers return different sets of fields (Vault and OpenBao, or different versions)">
+                  Not compared, as only one server has them or one leaves them automatic:{" "}
+                  {p.set_aside.map((f, i) => <span key={f.field}>{i > 0 && ", "}<span className="mono">{f.field}</span> ({show(f.left)} / {show(f.right)})</span>)}
+                </div>
               )}
               {onCopy && (copyable(source, p, "right") || copyable(source, p, "left")) && (
                 <div className="field-row">

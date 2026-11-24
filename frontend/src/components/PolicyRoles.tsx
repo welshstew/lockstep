@@ -7,6 +7,7 @@ import { AccessApply } from "./AccessApply";
 import { saveAccessPlan } from "../accessPlan";
 import { ExplainResultView } from "./PoliciesView";
 import { AuthUsers } from "./AuthUsers";
+import { PolicySelect } from "./PolicySelect";
 import type { AuthUserMount } from "../types";
 
 type View = "mount" | "compare" | "new";
@@ -16,7 +17,7 @@ const PROFILES_KEY = "lockstep.policyProfiles";
 // The fields a builder shows, per kind: [field, label, type, help]
 type FieldType = "list" | "text" | "duration" | "bool" | "map" | "choice";
 const COMMON: [string, string, FieldType, string][] = [
-  ["token_policies", "Policies", "list", "comma separated"],
+  ["token_policies", "Policies", "list", ""],
   ["token_ttl", "Token TTL", "duration", "e.g. 15m, 1h"],
   ["token_max_ttl", "Max TTL", "duration", "how long tokens can be renewed"],
   ["token_bound_cidrs", "Allowed from (CIDR)", "list", "optional, comma separated"],
@@ -170,7 +171,7 @@ export function PolicyRoles({ targets, sides, canApply = false, userWrite = fals
 
 function Groups({ connId, target, canApply, label }: { connId: string; target?: ScanTarget; canApply: boolean; label: string }) {
   const [gen, setGen] = useState(0);
-  const [editing, setEditing] = useState<string | null>(null);  // the policies being typed, comma separated
+  const [editing, setEditing] = useState<string[] | null>(null);  // the policies being chosen
   const [writing, setWriting] = useState(false);
   const [data, setData] = useState<{ name: string; type?: string; policies?: string[]; members?: string[]; member_groups?: number; alias?: string }[] | null>(null);
   const [missing, setMissing] = useState<string[]>([]);
@@ -196,9 +197,8 @@ function Groups({ connId, target, canApply, label }: { connId: string; target?: 
             <h3 className="mono role-title">group {g.name}</h3>
             <table className="plan-keys role-fields"><tbody>
               <tr><td>Type</td><td>{g.type ?? "internal"}{g.alias ? ` (from the identity provider’s group ${g.alias})` : ""}</td></tr>
-              <tr><td>Policies</td><td className="mono">{editing !== null
-                ? <input type="text" className="mono" aria-label="Group policies" value={editing} placeholder="comma separated"
-                         onChange={(e) => setEditing(e.target.value)} />
+              <tr><td>Policies</td><td className={editing !== null ? undefined : "mono"}>{editing !== null
+                ? <PolicySelect connId={connId} value={editing} onChange={setEditing} label="Group policies" />
                 : g.policies?.join(", ") || "—"}</td></tr>
               <tr><td>Members</td><td className="mono">{g.members?.join(", ") || "—"}{g.member_groups ? ` · ${g.member_groups} member group(s)` : ""}</td></tr>
             </tbody></table>
@@ -211,7 +211,7 @@ function Groups({ connId, target, canApply, label }: { connId: string; target?: 
             {canApply && (
               <div className="field-row">
                 {editing === null
-                  ? <button type="button" className="btn ghost small" onClick={() => setEditing((g.policies ?? []).join(", "))}>Edit policies</button>
+                  ? <button type="button" className="btn ghost small" onClick={() => setEditing([...(g.policies ?? [])])}>Edit policies</button>
                   : <>
                       <button type="button" className="btn primary small" onClick={() => setWriting(true)}>Review…</button>
                       <button type="button" className="btn ghost small" onClick={() => setEditing(null)}>Cancel</button>
@@ -224,7 +224,7 @@ function Groups({ connId, target, canApply, label }: { connId: string; target?: 
       {explained && <ExplainResultView key={selected ?? ""} result={explained} />}
       {writing && g && editing !== null && (
         <AccessApply label={label}
-          changes={{ conn_id: connId, group_policies: [{ name: g.name, policies: editing.split(",").map((x) => x.trim()).filter(Boolean) }] }}
+          changes={{ conn_id: connId, group_policies: [{ name: g.name, policies: editing }] }}
           onClose={(done) => { setWriting(false); if (done) { setEditing(null); setGen(gen + 1); } }} />
       )}
     </>
@@ -498,9 +498,11 @@ function NewRole({ connId, mounts, canApply, label }: { connId: string; mounts: 
           <table className="plan-keys role-form"><tbody>
             {BUILDER[draft.kind].map(([k, label, type, help]) => (
               <tr key={k}>
-                <td><label htmlFor={`rf-${k}`}>{label}</label></td>
+                <td>{k === "token_policies" ? <span id={`rf-${k}-label`}>{label}</span> : <label htmlFor={`rf-${k}`}>{label}</label>}</td>
                 <td>
-                  {type === "bool" ? <input id={`rf-${k}`} type="checkbox" checked={!!draft.body[k]} onChange={(e) => setField(k, type, e.target.checked)} />
+                  {k === "token_policies" ? <PolicySelect connId={connId} value={(draft.body[k] as string[] | undefined) ?? []} label="Role policies"
+                                                          onChange={(v) => setField(k, type, v.join(","))} />
+                    : type === "bool" ? <input id={`rf-${k}`} type="checkbox" checked={!!draft.body[k]} onChange={(e) => setField(k, type, e.target.checked)} />
                     : type === "choice" ? (
                       <select id={`rf-${k}`} value={String(draft.body[k] ?? CHOICES[k][0])} onChange={(e) => setField(k, type, e.target.value)}>
                         {CHOICES[k].map((c) => <option key={c} value={c}>{c}</option>)}</select>)

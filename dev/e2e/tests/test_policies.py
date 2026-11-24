@@ -1,5 +1,7 @@
 """The Policies tab: explaining policies on a mount."""
 
+import re
+
 from playwright.sync_api import expect
 
 from conftest import choose_mount, sign_in_userpass
@@ -212,8 +214,15 @@ def test_compare_roles_and_build_one(page, sandbox, tmp_path):
     page.get_by_role("tab", name="New role").click()
     page.get_by_role("button", name="＋ GitLab CI job (id_tokens)").click()
     page.get_by_label("Role name").fill("deploy-payments")
-    page.get_by_role("textbox", name="Policies").fill("lockstep-limited, not-there")
     editor = page.get_by_label("Role editor")
+    chosen = editor.get_by_role("group", name="Role policies")
+    chosen.get_by_role("button", name="lockstep-limited", exact=True).click()  # an existing policy, picked
+    expect(chosen.get_by_role("button", name="root", exact=True)).to_have_count(0)
+    editor.get_by_label("Add a policy name to Role policies").fill("not-there")
+    editor.get_by_label("Add a policy name to Role policies").press("Enter")  # one that doesn't exist yet
+    expect(chosen.get_by_role("button", name=re.compile("^not-there"))).to_have_attribute("aria-pressed", "true")
+    expect(chosen.get_by_role("button", name=re.compile("^not-there"))).to_contain_text("not on this Vault")
+    expect(page.get_by_label("Role JSON")).to_contain_text('"lockstep-limited"')
     expect(editor).to_contain_text("No such policy on this Vault: not-there")
     expect(page.get_by_label("Role JSON")).to_contain_text('"project_path": "mygroup/my-app"')
     with page.expect_download() as dl:
@@ -393,7 +402,9 @@ def test_edit_a_groups_policies(page, sandbox, vault_a):
         page.get_by_role("navigation", name="Groups").get_by_role("button", name=name).click()
         group = page.get_by_label(f"Group {name}")
         group.get_by_role("button", name="Edit policies").click()
-        group.get_by_label("Group policies").fill("lockstep-limited, lockstep-readonly")
+        chosen = group.get_by_role("group", name="Group policies")
+        expect(chosen.get_by_role("button", name="lockstep-limited", exact=True)).to_have_attribute("aria-pressed", "true")
+        chosen.get_by_role("button", name="lockstep-readonly", exact=True).click()
         group.get_by_role("button", name="Review…").click()
         dialog = page.get_by_role("dialog", name="Write policies and roles")
         expect(dialog.locator(".plan")).to_contain_text("+lockstep-readonly")
@@ -432,5 +443,25 @@ def test_userpass_users_compare_and_reset(page, sandbox, vault_a):
         page.get_by_label("Auth mount for roles").select_option("__users__:ldap")
         groups = page.get_by_role("region", name="LDAP group mappings")
         expect(groups.locator("tr", has_text="payments-devs")).to_contain_text("payments-dev")
+    finally:
+        vault_a.c.delete(f"auth/userpass/users/{name}")
+
+
+def test_create_a_userpass_user_with_chosen_policies(page, sandbox, vault_a):
+    name = f"e2e-nu-{sandbox.replace('/', '')[-6:]}"
+    try:
+        open_roles(page)
+        page.get_by_label("Auth mount for roles").select_option("__users__:userpass")
+        page.get_by_role("button", name="＋ New user").click()
+        form = page.get_by_role("region", name="New userpass user")
+        form.get_by_label("Username").fill(name)
+        chosen = form.get_by_role("group", name="User policies")
+        chosen.get_by_role("button", name="lockstep-readonly", exact=True).click()
+        chosen.get_by_role("button", name="lockstep-limited", exact=True).click()
+        chosen.get_by_role("button", name="lockstep-limited", exact=True).click()  # and changed their mind
+        expect(form).to_contain_text("1 chosen: lockstep-readonly")
+        form.get_by_role("button", name="Create user").click()
+        expect(form.locator("code.reveal-once")).to_have_count(1)
+        assert vault_a.c.get(f"auth/userpass/users/{name}").json()["data"]["token_policies"] == ["lockstep-readonly"]
     finally:
         vault_a.c.delete(f"auth/userpass/users/{name}")

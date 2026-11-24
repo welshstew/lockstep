@@ -79,7 +79,8 @@ async def run(args) -> int:
         print(json.dumps(out, indent=2))
     else:
         lo, ro = out["overview"]["left"], out["overview"]["right"]
-        print(f"Vault {lo.get('version')} ⇄ Vault {ro.get('version')}" + ("  (versions differ)" if lo.get("version") != ro.get("version") else ""))
+        print(f"{lo.get('product') or 'Vault'} {lo.get('version')} ⇄ {ro.get('product') or 'Vault'} {ro.get('version')}"
+              + ("  (versions differ)" if lo.get("version") != ro.get("version") else ""))
         for kind, p in rows:
             if p["status"] == "equal" and not args.show_equal:
                 continue

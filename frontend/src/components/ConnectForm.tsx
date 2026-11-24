@@ -137,7 +137,7 @@ export function ConnectForm({ config, onConnected, onCancel, initialPresetId, si
       )}
       {(custom || !preset?.namespace) && (
         <label className="field">
-          <span>Namespace <span className="subtle">(optional, Enterprise)</span></span>
+          <span>Namespace <span className="subtle">(optional: Vault Enterprise or OpenBao)</span></span>
           <input type="text" placeholder="admin/team-a" value={namespace} onChange={(e) => setNamespace(e.target.value)} />
         </label>
       )}

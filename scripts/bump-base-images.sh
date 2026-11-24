@@ -4,7 +4,9 @@
 # regularly, or let Renovate do it. A pin with no tag (e.g. hi/dex@sha256:…) tracks :latest.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-FILES=(Dockerfile dev/seed/Dockerfile dev/dex/Dockerfile compose.yaml)
+FILES=(Dockerfile dev/seed/Dockerfile dev/dex/Dockerfile compose.yaml deploy/demo/compose.yaml)
+# Stateful images are pinned to a major tag (hi/postgresql:17): :latest would move to a new
+# major whose data files the existing volume can't be opened with.
 ACCEPT='application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json'
 grep -hoE 'registry\.access\.redhat\.com/hi/[a-z0-9-]+(:[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}' "${FILES[@]}" | sort -u |
 while read -r ref; do

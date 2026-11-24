@@ -865,3 +865,10 @@ dialog.destroy-dialog { width: min(640px, calc(100vw - 32px)); }
 .input-with-clear input { flex: 1; min-width: 0; }
 .summary-row { display: flex; align-items: center; gap: 6px; }
 .summary-row .summary-btn { flex: 1; min-width: 0; }
+
+/* Choosing policies for a role, group or user: the Vault's policies as toggles, plus typed names */
+.policy-select { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.policy-select .chips-wrap { margin: 0; }
+.policy-select .chip.missing { border-style: dashed; }
+.policy-select .field-row input[type="text"] { flex: 1; min-width: 0; max-width: 320px; }
+.config-section .set-aside { margin-top: 6px; font-size: 12px; }

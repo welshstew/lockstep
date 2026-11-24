@@ -239,11 +239,11 @@ open http://localhost:8080</code></pre>
           </div>
           <div class="span">
             <h3>Command line</h3>
-<pre><code>pipx install "git+https://github.com/welshstew/lockstep@v0.8.0#subdirectory=backend"
+<pre><code>pipx install "git+https://github.com/welshstew/lockstep@v0.9.0#subdirectory=backend"
 lockstep compare --help
 
 # or run it from the image
-docker run --rm -it --entrypoint lockstep ghcr.io/welshstew/lockstep:0.8.0 --help</code></pre>
+docker run --rm -it --entrypoint lockstep ghcr.io/welshstew/lockstep:0.9.0 --help</code></pre>
           </div>
         </div>
         <p class="more">Configuration, authentication, deployment and <a href="/docs/cli/">command-line</a> guides are in the <a href="/docs/">documentation</a>.</p>
@@ -276,7 +276,7 @@ docker run --rm -it --entrypoint lockstep ghcr.io/welshstew/lockstep:0.8.0 --hel
       <div class="wrap demo-box">
         <div>
           <h2>Try it now</h2>
-          <p>The demo has two Vaults with sample data, including certificates and keystores. Sign in as <code>alice</code> (can write), <code>bob</code> (read-only) or <code>carol</code> (limited access); every password is <code>password</code>. The data resets every hour.</p>
+          <p>The demo has two Vaults and two OpenBaos with the same sample data, including certificates and keystores. Compare Vault with OpenBao to see what a migration check looks like, or sign in to an OpenBao namespace (<code>team-a</code>, <code>team-a/apps</code>) and compare two of them. Sign in as <code>alice</code> (can write), <code>bob</code> (read-only) or <code>carol</code> (limited access); every password is <code>password</code>. The data resets every hour.</p>
         </div>
         <a class="btn primary big" href="https://demo.getlockstep.cloud">Open the demo</a>
       </div>

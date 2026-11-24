@@ -1,4 +1,4 @@
-.PHONY: up up-k8s down test test-k8s e2e chart-check helm-test screenshots scan scan-clean bump-base-images pin-scanner-images
+.PHONY: up up-k8s down test test-k8s test-openbao e2e chart-check helm-test screenshots scan scan-clean bump-base-images pin-scanner-images
 
 up:            ## start the local stack
 	podman compose up --build -d
@@ -23,6 +23,16 @@ e2e:           ## browser end-to-end tests (Playwright) -> reports/e2e (junit + 
 	@rc=0; podman compose --profile e2e run --name lockstep-e2e e2e || rc=$$?; \
 	  mkdir -p reports/e2e && podman cp lockstep-e2e:/reports/. reports/e2e/ >/dev/null; \
 	  podman rm -f lockstep-e2e >/dev/null; exit $$rc
+
+test-openbao:  ## backend and browser tests with OpenBao 2.7 standing in for Vault B (then back to Vault B)
+	podman compose --profile openbao up -d --wait openbao
+	VAULT_B_HOST=openbao VAULT_B_BROWSER_URL=http://localhost:8210 podman compose up -d --build --force-recreate app
+	VAULT_B_HOST=openbao podman compose run --rm --build seed
+	@rc=0; VAULT_B_HOST=openbao podman compose --profile test run --rm --build --no-deps tests pytest -q -p no:cacheprovider \
+	    --deselect tests/test_k8s_auth.py || rc=$$?; \
+	  VAULT_B_HOST=openbao podman compose --profile e2e run --rm --build --no-deps e2e pytest -q -p no:cacheprovider tests \
+	    -k "not kubernetes" || rc=$$?; \
+	  podman compose up -d --force-recreate app && podman compose run --rm seed >/dev/null; exit $$rc
 
 chart-check:   ## Helm chart: lint, render + Kubernetes schema validation, guard checks (no cluster)
 	./scripts/chart-check.sh

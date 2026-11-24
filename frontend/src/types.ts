@@ -737,6 +737,8 @@ export interface AccessPlanInfo {
 }
 
 export interface VaultOverview {
+  /** "Vault", "Vault Enterprise" or "OpenBao" */
+  product?: string;
   version: string | null; cluster_name: string | null; sealed: boolean | null; seal_type: string | null;
   storage_type: string | null; ha_enabled: boolean | null; performance_standby: boolean | null;
   replication: Record<string, string> | null;
@@ -744,6 +746,8 @@ export interface VaultOverview {
 export interface ConfigPair {
   path: string; right_path?: string | null; mapped_to?: string; type: string | null; system: boolean; status: "equal" | "different" | "left_only" | "right_only";
   fields: { field: string; left: unknown; right: unknown }[]; left: Record<string, unknown> | null; right: Record<string, unknown> | null;
+  /** Differences not counted: fields only one server returns (Vault vs OpenBao, or two versions) */
+  set_aside?: { field: string; left: unknown; right: unknown; reason: string }[];
 }
 export interface ConfigCompare {
   overview: { left: VaultOverview; right: VaultOverview };

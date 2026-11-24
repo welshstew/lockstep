@@ -5,6 +5,25 @@ the image, the Helm chart and the app share one version.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-24
+
+### Added
+
+- **OpenBao:** tested against OpenBao 2.7, alone or with Vault on the other side (for checking a migration). `make test-openbao` runs every backend and browser test with OpenBao standing in for Vault B.
+- **Configuration overview:** a **Product** row: Vault, Vault Enterprise or OpenBao. `lockstep config compare` names the product too.
+- **Public demo:** OpenBao A and OpenBao B next to the two Vaults, seeded with the same data.
+- **Namespaces, tested on OpenBao:** the dev and demo OpenBaos have namespaces (`team-a`, `team-a/apps`, and one only on each side) with their own users and drift, and tests compare across them. The connect form's **Namespace** field says it's for Vault Enterprise or OpenBao.
+
+### Changed
+
+- **Configuration:** a built-in plugin's version shows as `builtin` and no longer counts as a difference, so upgrading one cluster, or comparing Vault with OpenBao, doesn't mark every mount as different. Pinned external plugin versions are still compared.
+- **Configuration, engine roles:** fields only one server returns (Vault and OpenBao, or two versions, add different ones), and PKI `signature_bits` left automatic on one side, are listed as "not compared" instead of making the role *Different*.
+- **Choosing policies for roles, groups and users:** the role builder, **Edit policies** on an identity group and **New user** (userpass) list the Vault's existing policies to pick from, as many as you like, instead of a comma-separated text box. A policy that doesn't exist yet can still be added by name, and is marked "not on this Vault". `root` is never offered.
+
+### Security
+
+- **Image:** rebuilt on the latest Red Hat Hardened Python image, which fixes CVE-2026-102010 in libgcc and libstdc++. The scan passes with no exceptions.
+
 ## [0.8.0] - 2026-11-22
 
 0.7.1 was prepared but never released; its fix is included here.
@@ -188,6 +207,7 @@ First public release.
 - **Helm chart:** hardened defaults, session key kept across upgrades, Ingress, NetworkPolicy, PodDisruptionBudget, Kubernetes auth, shared profiles; validated by a schema and tested in k3s.
 - Runs on Red Hat Hardened Images (distroless, non-root). Every change is scanned (CVEs, secrets, misconfigurations, base image signatures) and tested end to end in a browser.
 
+[0.9.0]: https://github.com/welshstew/lockstep/releases/tag/v0.9.0
 [0.8.0]: https://github.com/welshstew/lockstep/releases/tag/v0.8.0
 [0.7.0]: https://github.com/welshstew/lockstep/releases/tag/v0.7.0
 [0.6.0]: https://github.com/welshstew/lockstep/releases/tag/v0.6.0

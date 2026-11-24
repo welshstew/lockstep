@@ -115,7 +115,7 @@ def field(card, label: str):
         has=card.page.locator("> span", has_text=re.compile(rf"^{re.escape(label)}"))).first
 
 
-def sign_in_userpass(page: Page, which: str, username: str, vault: str | None = None) -> None:
+def sign_in_userpass(page: Page, which: str, username: str, vault: str | None = None, namespace: str | None = None) -> None:
     """Sign in through the connect form, as a user would."""
     card = side(page, which)
     if card.get_by_role("combobox").first.input_value() != "__new__" and card.locator(".conn-chip").count():
@@ -123,6 +123,8 @@ def sign_in_userpass(page: Page, which: str, username: str, vault: str | None = 
     if vault:
         sel = field(card, "Vault").locator("select")
         sel.select_option(value=sel.locator("option", has_text=vault).first.get_attribute("value"))
+    if namespace:
+        card.get_by_label("Namespace").fill(namespace)
     card.get_by_role("button", name="Username", exact=True).click()
     card.get_by_label("Username").fill(username)
     card.get_by_label("Password").fill("password")

@@ -556,7 +556,7 @@ The **Configuration** tab compares the two Vaults' setup, read-only:
 - **Overview:** version, cluster name, seal and storage type, high availability and replication. What differs is highlighted, such as a cluster that's a version behind.
 - **Secrets engines** and **auth methods:**
   - each one *Equal*, *Different*, *Left only* or *Right only*;
-  - type, plugin version, tuning (default and max lease TTL, listing visibility, audit settings, passthrough headers) and options such as the KV version;
+  - type, plugin version (built-in plugins show as `builtin`, so a version upgrade isn't drift), tuning (default and max lease TTL, listing visibility, audit settings, passthrough headers) and options such as the KV version;
   - for auth methods, their configuration (for example a JWT method's issuer and discovery URL, or a Kubernetes method's host).
 
   Open one to see the settings that differ. Fields that look sensitive (secrets, passwords, private keys) are left out even if Vault returns them, and identifiers that differ on every cluster (accessors, UUIDs) are ignored. **Built-in mounts** (`sys/`, `identity/`, `cubbyhole/`, `token/`) are hidden unless you ask.
@@ -568,7 +568,7 @@ The **Configuration** tab compares the two Vaults' setup, read-only:
   - GCP rolesets, static accounts and impersonated accounts;
   - the LDAP secrets engine's dynamic roles, static roles and library sets.
 
-  For example, `transit/keys/app-key` is *Different* when only one side allows deletion. Values that change on their own (key versions, last rotation) are ignored.
+  For example, `transit/keys/app-key` is *Different* when only one side allows deletion. Values that change on their own (key versions, last rotation) are ignored. Fields only one server returns (Vault and OpenBao, or two versions, add different ones) are set aside and listed as "not compared" instead of counting as differences.
 
 **Copy to the other side:** open a row that differs and use **Copy tuning to …** (a mount's or auth method's TTLs, description, listing visibility and audit and header settings) or, for an engine role, **Copy to …**. It goes through the same review as policies (a diff against what's there, a conflict check, audit) and can be saved as an access plan for someone else to apply. What's copied:
 - roles of PKI, database (dynamic roles), SSH, Kubernetes, AWS, Azure and the LDAP secrets engine (dynamic roles), whole;

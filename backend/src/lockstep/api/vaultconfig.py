@@ -62,6 +62,10 @@ def normalise_mount(m: dict) -> dict:
     if not out.get("plugin_version") and out.get("running_plugin_version"):
         out["plugin_version"] = out["running_plugin_version"]
     out.pop("running_plugin_version", None)
+    # A built-in plugin's version is the server's (v1.21.4+builtin.vault, v2.7.3+builtin.bao): the
+    # overview shows that once, so mounts don't all differ between versions, or Vault and OpenBao
+    if "+builtin" in str(out.get("plugin_version") or ""):
+        out["plugin_version"] = "builtin"
     return _clean(out)
 
 
@@ -108,6 +112,34 @@ def ignored(path: str, profile: ConfigProfile | None) -> bool:
                                  for p in profile.ignore)
 
 
+# Fields one product reports as a resolved default and the other as 0, "automatic"
+# (PKI signature_bits: Vault 256, OpenBao 0). Not compared when one side leaves it automatic.
+AUTOMATIC = {"signature_bits"}
+
+
+def set_aside(fields: list[dict], a: dict, b: dict) -> tuple[list[dict], list[dict]]:
+    """Split differences into real ones and fields only one server knows about. Engine objects
+    carry `_returned` (the field names the server sent): Vault and OpenBao, or two versions of
+    either, return fields the other doesn't have, which say nothing about drift."""
+    la, lb = set(a.get("_returned") or ()), set(b.get("_returned") or ())
+    if not (la and lb):
+        return fields, []
+    keep, aside = [], []
+    for f in fields:
+        top = f["field"].split(".")[0]
+        if (top in la) != (top in lb):
+            aside.append({**f, "reason": f"only {'the left' if top in la else 'the right'} server has this field"})
+        elif top in AUTOMATIC and (f["left"] is None or f["right"] is None):
+            aside.append({**f, "reason": "automatic on one side"})
+        else:
+            keep.append(f)
+    return keep, aside
+
+
+def _public(d: dict | None) -> dict | None:
+    return None if d is None else {k: x for k, x in d.items() if k != "_returned"}
+
+
 def pair(left: dict[str, dict], right: dict[str, dict], profile: ConfigProfile | None = None) -> list[dict]:
     """Pair by path (or the profile's mappings) and diff. `right_path` is set where they differ."""
     left = {p: x for p, x in left.items() if not ignored(p, profile)}
@@ -119,18 +151,28 @@ def pair(left: dict[str, dict], right: dict[str, dict], profile: ConfigProfile |
         if rpath:
             taken.add(rpath)
         a, b = left[path], right.get(rpath) if rpath else None
-        fields = diff(rewrite(a, profile), b) if b is not None else []
+        fields = diff(rewrite(_public(a), profile), _public(b)) if b is not None else []
+        fields, aside = set_aside(fields, a, b) if b is not None else (fields, [])
         out.append({"path": path, "right_path": rpath if rpath and rpath != path else None, "type": (a or b or {}).get("type"),
                     "system": path.strip("/").split("/")[0] in SYSTEM_MOUNTS,
                     "status": "left_only" if b is None else "different" if fields else "equal",
-                    "fields": fields, "left": a, "right": b,
+                    "fields": fields, **({"set_aside": aside} if aside else {}), "left": _public(a), "right": _public(b),
                     **({"mapped_to": target} if target and target not in right else {})})
     for path in sorted(set(right) - taken):
         b = right[path]
         out.append({"path": path, "right_path": None, "type": b.get("type"),
                     "system": path.strip("/").split("/")[0] in SYSTEM_MOUNTS,
-                    "status": "right_only", "fields": [], "left": None, "right": b})
+                    "status": "right_only", "fields": [], "left": None, "right": _public(b)})
     return out
+
+
+def product(seal: dict, ui_mounts: dict) -> str:
+    """Vault or OpenBao: OpenBao's built-in plugins report versions ending in .bao (readable with
+    any token through sys/internal/ui/mounts); Vault Enterprise has +ent in its version."""
+    mounts = (ui_mounts.get("data") or {}).get("secret") or {}
+    if any(str(m.get("running_plugin_version") or "").endswith(".bao") for m in mounts.values()):
+        return "OpenBao"
+    return "Vault Enterprise" if "+ent" in str(seal.get("version") or "") else "Vault"
 
 
 async def overview(v: VaultClient) -> dict:
@@ -140,9 +182,10 @@ async def overview(v: VaultClient) -> dict:
         except VaultError as e:
             return {"_error": e.message, "_status": e.status}
 
-    seal, leader, repl = await asyncio.gather(get("sys/seal-status"), get("sys/leader"), get("sys/replication/status"))
+    seal, leader, repl, ui = await asyncio.gather(get("sys/seal-status"), get("sys/leader"), get("sys/replication/status"),
+                                                  get("sys/internal/ui/mounts"))
     out: dict[str, Any] = {
-        "version": seal.get("version"), "cluster_name": seal.get("cluster_name"), "sealed": seal.get("sealed"),
+        "product": product(seal, ui), "version": seal.get("version"), "cluster_name": seal.get("cluster_name"), "sealed": seal.get("sealed"),
         "seal_type": seal.get("type"), "storage_type": seal.get("storage_type"),
         "ha_enabled": leader.get("ha_enabled"), "performance_standby": leader.get("performance_standby"),
     }
@@ -239,7 +282,7 @@ async def read_engine_objects(v: VaultClient, mounts: dict[str, dict]) -> tuple[
                     if e.denied:
                         missing.append(f"read on {mount}{kind}/*")
                     return
-            out[f"{mount}{kind}/{n}"] = {**_engine_clean(kind, d), "engine": etype, "kind": kind}
+            out[f"{mount}{kind}/{n}"] = {**_engine_clean(kind, d), "engine": etype, "kind": kind, "_returned": sorted(d)}
         await asyncio.gather(*(read(n) for n in names[:MAX_OBJECTS] if not n.endswith("/")))
 
     await asyncio.gather(*(one(p, m["type"], k) for p, m in mounts.items() for k in ENGINE_OBJECTS.get(m.get("type", ""), [])))

@@ -3,6 +3,7 @@
 # Tool:     http://localhost:8080
 # Vault A:  http://localhost:8200  (root token: root-a)
 # Vault B:  http://localhost:8201  (root token: root-b)
+# OpenBao:  http://localhost:8210  (root token: root-b; profile openbao, stands in for Vault B)
 # Dex:      http://dex.localhost:5556/dex  (alice@example.com / password)
 # Postgres: postgres:5432 inside the network (postgres / dev-postgres), for Vault A's database engine
 name: lockstep
@@ -48,6 +49,22 @@ services:
       <<: *vault-env
       VAULT_DEV_ROOT_TOKEN_ID: root-latest
 
+  # OpenBao standing in for Vault B (make test-openbao): the same root token, so the seed and
+  # tests run unchanged. VAULT_B_HOST=openbao points the app, seed and tests at it.
+  openbao:
+    image: quay.io/openbao/openbao:2.7.3@sha256:ba4b133eb9586630024e71a617e66f37f29cc3534cdd46a6233e098ceded8dc9
+    profiles: [openbao]
+    cap_add: [IPC_LOCK]
+    environment:
+      BAO_DEV_ROOT_TOKEN_ID: root-b
+      BAO_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+    healthcheck:
+      test: ["CMD", "bao", "status", "-address=http://127.0.0.1:8200"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    ports: ["8210:8200"]
+
   # OIDC identity provider used by both Vaults' oidc auth method.
   # The issuer hostname must resolve both from the browser (*.localhost -> 127.0.0.1)
   # and from inside the network (network alias -> dex container), on the same port.
@@ -63,8 +80,8 @@ services:
   # A database for Vault A's database secrets engine (Tools -> Database credentials). Dev only;
   # the password is a fixture, like the root tokens.
   postgres:
-    # Red Hat Hardened Image, PostgreSQL 17.10 (multi-arch index digest)
-    image: registry.access.redhat.com/hi/postgresql@sha256:e58f3fc1777374194f7841c251925042b6fb979b7c7234d0ffd944c48f46e8ee
+    # Red Hat Hardened Image, PostgreSQL 17 (multi-arch index digest; the tag keeps bumps on 17)
+    image: registry.access.redhat.com/hi/postgresql:17@sha256:15c059088a4610479c834988fac91ecf8ef38c848604de52f55346401d74f0a4
     environment:
       POSTGRES_PASSWORD: dev-postgres
       POSTGRES_DB: orders
@@ -75,6 +92,9 @@ services:
       interval: 3s
       timeout: 3s
       retries: 20
+      # First start runs initdb, which takes over a minute on a busy CI runner; failed checks
+      # during this period don't count
+      start_period: 120s
 
   # One-shot: configures mounts, policies, auth methods and test data in both Vaults.
   seed:
@@ -82,7 +102,7 @@ services:
     environment:
       VAULT_A_ADDR: http://vault-a:8200
       VAULT_A_TOKEN: root-a
-      VAULT_B_ADDR: http://vault-b:8200
+      VAULT_B_ADDR: http://${VAULT_B_HOST:-vault-b}:8200
       VAULT_B_TOKEN: root-b
       OIDC_DISCOVERY_URL: http://dex.localhost:5556/dex
       OIDC_CLIENT_ID: vault
@@ -106,7 +126,7 @@ services:
       # Pre-defined connections offered in the UI (JSON). Users may also add their own.
       LOCKSTEP_PRESET_CONNECTIONS: >-
         [{"name":"Vault A","url":"http://vault-a:8200","browser_url":"http://localhost:8200"},
-         {"name":"Vault B","url":"http://vault-b:8200","browser_url":"http://localhost:8201"}]
+         {"name":"Vault B","url":"http://${VAULT_B_HOST:-vault-b}:8200","browser_url":"${VAULT_B_BROWSER_URL:-http://localhost:8201}"}]
       # A shared comparison profile, offered read-only to everyone.
       LOCKSTEP_PROFILES: >-
         [{"name": "Prod ↔ staging services",
@@ -138,7 +158,7 @@ services:
     build: {context: ., target: test}
     environment:
       VAULT_A_ADDR: http://vault-a:8200
-      VAULT_B_ADDR: http://vault-b:8200
+      VAULT_B_ADDR: http://${VAULT_B_HOST:-vault-b}:8200
       VAULT_LATEST_ADDR: http://vault-latest:8200
       LOCKSTEP_K8S_AUTH_ENABLED: "true"
     volumes:
@@ -169,7 +189,7 @@ services:
       APP_URL: http://localhost:8080          # mapped to the app by Chromium host rules
       HOST_RULES: "MAP dex.localhost dex, MAP localhost lockstep"
       VAULT_A_ADDR: http://vault-a:8200
-      VAULT_B_ADDR: http://vault-b:8200
+      VAULT_B_ADDR: http://${VAULT_B_HOST:-vault-b}:8200
     depends_on:
       app: {condition: service_healthy}
       dex: {condition: service_started}

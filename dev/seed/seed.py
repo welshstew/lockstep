@@ -29,9 +29,19 @@ NOW = dt.datetime.now(dt.timezone.utc)
 
 
 class Vault:
-    def __init__(self, name: str, addr: str, token: str):
-        self.name = name
-        self.c = httpx.Client(base_url=f"{addr}/v1/", headers={"X-Vault-Token": token}, timeout=10)
+    def __init__(self, name: str, addr: str, token: str, namespace: str | None = None):
+        self.name, self.addr, self.token = name, addr, token
+        headers = {"X-Vault-Token": token, **({"X-Vault-Namespace": namespace} if namespace else {})}
+        self.c = httpx.Client(base_url=f"{addr}/v1/", headers=headers, timeout=10)
+
+    def in_namespace(self, ns: str) -> "Vault":
+        return Vault(f"{self.name}:{ns}", self.addr, self.token, ns)
+
+    def has_namespaces(self) -> bool:
+        """Namespaces: OpenBao (2.3+) and Vault Enterprise. Vault Community answers
+        "enterprise-only feature"; with namespaces, a missing one is a plain 404."""
+        r = self.c.get("sys/namespaces/lockstep-no-such-namespace")
+        return r.status_code in (200, 404) and "enterprise-only" not in r.text
 
     def req(self, method: str, path: str, body: dict | None = None, ok=(200, 204)) -> dict:
         r = self.c.request(method, path, json=body)
@@ -58,6 +68,14 @@ class Vault:
             self.req("DELETE", f"sys/mounts/{path}")
         self.req("POST", f"sys/mounts/{path}",
                  {"type": "kv", "options": {"version": str(version)}, "description": description})
+
+    def has_plugin(self, kind: str, name: str) -> bool:
+        """Whether this server has a built-in auth method or secrets engine. OpenBao ships
+        fewer than Vault (no LDAP, AWS, Azure or GCP), so the seed skips what's missing."""
+        if not hasattr(self, "_catalog"):
+            data = self.req("GET", "sys/plugins/catalog")["data"]
+            self._catalog = {k: set(data.get(k) or []) for k in ("auth", "secret")}
+        return name in self._catalog[kind]
 
     def enable_auth(self, path: str, type_: str) -> str:
         auths = self.req("GET", "sys/auth")["data"]
@@ -279,6 +297,9 @@ def seed_database(v: Vault) -> None:
 def seed_ldap_secrets(v: Vault) -> None:
     """The LDAP secrets engine at directory/: a dynamic and a static role (no directory behind
     them: they're created without contacting it), for Configuration -> Engine roles and keys."""
+    if not v.has_plugin("secret", "ldap"):
+        print(f"[{v.name}] no LDAP secrets engine on this server: skipped")
+        return
     mounts = v.req("GET", "sys/mounts")["data"]
     if "directory/" in mounts:
         v.req("DELETE", "sys/mounts/directory")
@@ -518,6 +539,17 @@ def seed_password_finder(a: Vault, b: Vault, pki: dict) -> None:
 def seed_ldap_and_users(v: Vault) -> None:
     """An LDAP auth mount with group mappings (no LDAP server: the mappings are Vault's own),
     and a service user on userpass, with drift between the Vaults for the compare."""
+    if v.has_plugin("auth", "ldap"):
+        seed_ldap_auth(v)
+    else:
+        print(f"[{v.name}] no LDAP auth method on this server: skipped")
+    svc = {"password": DEV_PASSWORD, "token_policies": "ci-drift-check" if v.name == "vault-a" else "lockstep-readonly",
+           "token_ttl": "15m"}
+    v.req("POST", "auth/userpass/users/svc-ci", svc)
+    print(f"[{v.name}] service user ready")
+
+
+def seed_ldap_auth(v: Vault) -> None:
     auths = v.req("GET", "sys/auth")["data"]
     if "ldap/" not in auths:  # not tuned to show on the login screen: there's no directory behind it
         v.req("POST", "sys/auth/ldap", {"type": "ldap", "description": "Company directory (mappings only in dev)"})
@@ -532,10 +564,60 @@ def seed_ldap_and_users(v: Vault) -> None:
     for name, pols in groups.items():
         v.req("POST", f"auth/ldap/groups/{name}", {"policies": ",".join(pols)})
     v.req("POST", "auth/ldap/users/dana", {"groups": "payments-devs,platform" if v.name == "vault-a" else "payments-devs"})
-    svc = {"password": DEV_PASSWORD, "token_policies": "ci-drift-check" if v.name == "vault-a" else "lockstep-readonly",
-           "token_ttl": "15m"}
-    v.req("POST", "auth/userpass/users/svc-ci", svc)
-    print(f"[{v.name}] ldap mappings and service user ready")
+    print(f"[{v.name}] ldap mappings ready")
+
+
+# Namespaces (OpenBao, Vault Enterprise): team-a and team-a/apps on both sides, team-b only on
+# A and team-c only on B, each with its own app-config mount, users and policies, and drift
+# between the sides, for comparing a namespace with its counterpart.
+NS_ADMIN = """
+path "app-config/*" { capabilities = ["create", "read", "update", "patch", "delete", "list"] }
+path "sys/mounts" { capabilities = ["read"] }
+path "sys/policies/acl/*" { capabilities = ["read", "list"] }
+path "sys/namespaces/*" { capabilities = ["read", "list"] }
+"""
+NS_READONLY = """
+path "app-config/*" { capabilities = ["read", "list"] }
+path "sys/mounts" { capabilities = ["read"] }
+"""
+
+
+def seed_namespaces(v: Vault) -> None:
+    if not v.has_namespaces():
+        print(f"[{v.name}] no namespaces on this server: skipped")
+        return
+    a = v.name == "vault-a"
+    spaces = ["team-a", "team-a/apps", "team-b" if a else "team-c"]
+    for ns in spaces:
+        parent, _, child = ns.rpartition("/")
+        where = v.in_namespace(parent) if parent else v
+        listed = where.c.request("LIST", "sys/namespaces")
+        existing = ((listed.json().get("data") or {}).get("keys") or []) if listed.status_code == 200 else []
+        if f"{child}/" not in existing:
+            where.req("POST", f"sys/namespaces/{child}")
+        n = v.in_namespace(ns)
+        n.mount_kv("app-config", description=f"{ns} application configuration")
+        if "userpass/" not in n.req("GET", "sys/auth")["data"]:
+            n.req("POST", "sys/auth/userpass", {"type": "userpass"})
+        n.req("POST", "sys/auth/userpass/tune", {"listing_visibility": "unauth"})  # offered on the sign-in form
+        n.policy("ns-admin", NS_ADMIN)
+        n.policy("ns-readonly", NS_READONLY)
+        n.req("POST", "auth/userpass/users/alice", {"password": DEV_PASSWORD, "token_policies": "ns-admin"})
+        n.req("POST", "auth/userpass/users/bob", {"password": DEV_PASSWORD, "token_policies": "ns-readonly"})
+    t = v.in_namespace("team-a")
+    t.kv_put("app-config", "payments/db", {"host": "db.team-a.internal" if a else "db2.team-a.internal",
+                                           "username": "payments", "password": "team-a-db-password"})
+    t.kv_put("app-config", "payments/api", {"api_key": "team-a-api-key", "endpoint": "https://api.team-a.internal"})
+    if a:
+        t.kv_put("app-config", "legacy/batch", {"schedule": "0 2 * * *"})
+        t.policy("payments-team", 'path "app-config/data/payments/*" { capabilities = ["read"] }')
+    else:
+        t.kv_put("app-config", "orders/queue", {"url": "amqp://queue.team-a.internal"})
+    apps = v.in_namespace("team-a/apps")
+    apps.kv_put("app-config", "web/config", {"base_url": "https://web.team-a.internal", "timeout_ms": 3000})
+    apps.kv_put("app-config", "web/feature-flags", {"beta_checkout": "true" if a else "false", "dark_mode": "true"})
+    v.in_namespace("team-b" if a else "team-c").kv_put("app-config", "service/config", {"owner": "team-b" if a else "team-c"})
+    print(f"[{v.name}] namespaces ready: {', '.join(spaces)}")
 
 
 def main() -> None:
@@ -551,6 +633,7 @@ def main() -> None:
     for v in (a, b):
         seed_transit(v)
         seed_ldap_secrets(v)
+        seed_namespaces(v)
     for v, policies in ((a, POLICIES_A), (b, POLICIES_B)):
         for name, text in policies.items():
             v.policy(name, text)
