@@ -1,0 +1,157 @@
+# The published GitHub Action, run for real: welshstew/lockstep@<release> against two throwaway
+# Vault dev servers in this job, logged in with this job's own GitHub OIDC token.
+#
+# - A signed baseline (lockstep baseline update --sign, with a key made for this run) accepts the
+#   seeded drift; a secret written afterwards is new drift. The action must report exactly that,
+#   upload SARIF, and write its summary.
+# - The same baseline, edited after signing, must make the action stop with exit code 2.
+#
+# Nothing here reaches a real Vault: the Vaults live and die with the job, and the JWT role only
+# accepts tokens for this repository.
+name: action-selftest
+
+on:
+  push:
+    branches: [main]
+    paths: [action.yml, .github/workflows/action-selftest.yml, backend/src/lockstep/cli/github_action.py]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write          # the OIDC token Vault's JWT auth takes
+  security-events: write   # SARIF upload (code scanning)
+
+env:
+  RELEASE: v0.12.0         # the action and CLI version under test
+  VA: http://127.0.0.1:8200
+  VB: http://127.0.0.1:8201
+
+jobs:
+  released-action:
+    runs-on: ubuntu-latest
+    services:
+      vault-a:
+        image: docker.io/hashicorp/vault:2.2.2@sha256:dfa48c2fa2b0099ccb47681ec5c4804bf5aec9d6879ecfee07ad4b92a5427ad6
+        ports: ["8200:8200"]
+        env:
+          SKIP_SETCAP: "true"
+          VAULT_DEV_ROOT_TOKEN_ID: root-a
+          VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+        options: >-
+          --cap-add IPC_LOCK
+          --health-cmd "vault status -address=http://127.0.0.1:8200"
+          --health-interval 3s --health-timeout 3s --health-retries 20
+      vault-b:
+        image: docker.io/hashicorp/vault:2.2.2@sha256:dfa48c2fa2b0099ccb47681ec5c4804bf5aec9d6879ecfee07ad4b92a5427ad6
+        ports: ["8201:8200"]
+        env:
+          SKIP_SETCAP: "true"
+          VAULT_DEV_ROOT_TOKEN_ID: root-b
+          VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+        options: >-
+          --cap-add IPC_LOCK
+          --health-cmd "vault status -address=http://127.0.0.1:8200"
+          --health-interval 3s --health-timeout 3s --health-retries 20
+    steps:
+      - name: Seed both Vaults (KV data, JWT auth for this repository)
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          api() { curl -fsS -H "X-Vault-Token: $1" -X "$2" "$3/v1/$4" -d "${5:-}" >/dev/null; }
+          for s in a b; do
+            if [ "$s" = a ]; then addr=$VA; else addr=$VB; fi
+            t="root-$s"
+            api "$t" POST "$addr" sys/mounts/app-config '{"type":"kv","options":{"version":"2"}}'
+            api "$t" POST "$addr" sys/auth/jwt '{"type":"jwt"}'
+            api "$t" POST "$addr" auth/jwt/config '{"oidc_discovery_url":"https://token.actions.githubusercontent.com","bound_issuer":"https://token.actions.githubusercontent.com"}'
+            api "$t" PUT "$addr" sys/policies/acl/drift-check '{"policy":"path \"app-config/*\" { capabilities = [\"read\", \"list\"] }"}'
+            api "$t" POST "$addr" auth/jwt/role/ci "$(jq -nc --arg repo "$REPO" '{role_type:"jwt", user_claim:"repository", bound_audiences:["vault"], bound_claims:{repository:$repo}, token_policies:["drift-check"], token_ttl:"10m"}')"
+            api "$t" POST "$addr" app-config/data/payments/db "{\"data\":{\"user\":\"svc\",\"password\":\"pw-$s\"}}"
+            api "$t" POST "$addr" app-config/data/payments/api '{"data":{"url":"https://api.example.com"}}'
+          done
+          api root-a POST "$VA" app-config/data/legacy/only-in-a '{"data":{"k":"v"}}'
+
+      - uses: actions/setup-python@v7
+        id: python
+        with: {python-version: "3.13"}
+
+      - name: Install the released CLI, make a key pair, write a signed baseline
+        env:
+          PY: ${{ steps.python.outputs.python-path }}
+        run: |
+          set -euo pipefail
+          pipx install --python "$PY" "git+https://github.com/welshstew/lockstep@${RELEASE}#subdirectory=backend"
+          lockstep --version
+          keys=$(lockstep plan-key 2>/dev/null)
+          private=$(sed -n 's/^LOCKSTEP_PLAN_SIGNING_KEY=//p' <<<"$keys")
+          echo "::add-mask::$private"
+          echo "TRUSTED=$(sed -n 's/^LOCKSTEP_PLAN_TRUSTED_KEYS=//p' <<<"$keys" | sed 's/<this installation>/selftest/')" >> "$GITHUB_ENV"
+          LOCKSTEP_PLAN_SIGNING_KEY=$private LOCKSTEP_PLAN_ISSUER=selftest LOCKSTEP_LEFT_TOKEN=root-a LOCKSTEP_RIGHT_TOKEN=root-b \
+            lockstep baseline update base.json --sign --left-addr "$VA" --right-addr "$VB" --mount app-config
+          jq -c '{issuer, accepted: [.drift[] | [.path, .key, .status]]}' base.json
+
+      - name: New drift after the baseline
+        run: |
+          curl -fsS -H "X-Vault-Token: root-b" -X POST "$VB/v1/app-config/data/payments/new-flag" -d '{"data":{"on":"true"}}'
+
+      - name: The released action, logged in with this job's OIDC token
+        id: drift
+        uses: welshstew/lockstep@v0.12.0
+        with:
+          left-addr: ${{ env.VA }}
+          right-addr: ${{ env.VB }}
+          left-name: vault-a
+          right-name: vault-b
+          mount: app-config
+          role: ci
+          baseline: base.json
+          require-signed: "true"
+          trusted-keys: ${{ env.TRUSTED }}
+          comment: "false"
+          fail-on-drift: "false"
+
+      - name: It found exactly the new drift
+        env:
+          CODE: ${{ steps.drift.outputs.exit-code }}
+          NEW: ${{ steps.drift.outputs.new }}
+          DIR: ${{ steps.drift.outputs.report-dir }}
+        run: |
+          set -euo pipefail
+          echo "exit-code=$CODE new=$NEW reports in $DIR"; ls "$DIR"
+          test "$CODE" = 1 && test "$NEW" = 1
+          jq -e '[.runs[0].results[] | select(.level == "error")] | length == 1' "$DIR/drift.sarif"
+          jq -e '[.runs[0].results[] | select(.level == "error") | .locations[0].physicalLocation.artifactLocation.uri] | .[0] | test("new-flag")' "$DIR/drift.sarif"
+          grep -q "signed by selftest" "$DIR/drift.md" || grep -rq "new-flag" "$DIR/drift.md"
+          ! grep -rq "pw-a\|pw-b" "$DIR"   # never a value
+
+      - name: Edit the signed baseline (accept the new drift by hand)
+        run: |
+          jq '.drift += [{"path": "payments/new-flag", "key": null, "status": "right_only"}]' base.json > edited.json
+          mv edited.json base.json
+
+      - name: The released action refuses the edited baseline
+        id: tampered
+        continue-on-error: true
+        uses: welshstew/lockstep@v0.12.0
+        with:
+          left-addr: ${{ env.VA }}
+          right-addr: ${{ env.VB }}
+          mount: app-config
+          role: ci
+          baseline: base.json
+          require-signed: "true"
+          trusted-keys: ${{ env.TRUSTED }}
+          report-dir: tampered-report
+          sarif: "false"
+          comment: "false"
+
+      - name: It stopped, as a run that couldn't compare (exit code 2)
+        env:
+          CODE: ${{ steps.tampered.outputs.exit-code }}
+          OUTCOME: ${{ steps.tampered.outcome }}
+        run: |
+          echo "outcome=$OUTCOME exit-code=${CODE:-(not passed on by the failed action)}"
+          test "$OUTCOME" = failure
+          test -z "$CODE" || test "$CODE" = 2
+          test ! -e tampered-report/drift.json   # it never compared

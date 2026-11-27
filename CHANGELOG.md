@@ -5,6 +5,10 @@ the image, the Helm chart and the app share one version.
 
 ## [Unreleased]
 
+### Added
+
+- **A self-test of the published GitHub Action** (`.github/workflows/action-selftest.yml`): `welshstew/lockstep@v0.12.0` against two throwaway Vault dev servers in the job, logged in with the job's own OIDC token, with a signed baseline. It must report exactly the new drift and upload SARIF, and must refuse the baseline once it's edited. It runs when the action changes, or on demand.
+
 ## [0.12.0] - 2026-11-27
 
 Governance and drift checks you can trust more: several approvers chosen by Vault policy, plans limited to named installations from the UI, rules for how exports are protected, and signed drift baselines and waivers. The Matrix takes an export file as its baseline and accepted drift per environment, Browse and the Matrix get a Connections list, and the dev and demo stacks run Vault 2.2.2.
