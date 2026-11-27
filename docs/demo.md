@@ -13,7 +13,7 @@ Point these A records at the server (no AAAA record unless the server has that I
 |---|---|
 | `demo.<domain>` | Lockstep |
 | `login.<domain>` | Dex (OIDC sign-in) |
-| `<domain>` | landing page (`deploy/demo/site`), and visit statistics at `/stats/` |
+| `<domain>` | landing page (`deploy/demo/site`), drift checks at `/drift/`, and visit statistics at `/stats/` |
 | `www.<domain>` | redirect to `<domain>` |
 
 ## Deploy
@@ -71,6 +71,14 @@ The raw access log keeps full IP addresses for 30 days, then rotates out. Sign-i
 never reaches the log: Caddy drops Cookie and Authorization headers, and the OIDC
 callback's `code` and `state` are removed from logged URLs. Totals survive log rotation
 (`stats-db` volume).
+
+## Drift checks
+
+The `drift-check` service shows the drift check working on the demo's own data, at `https://<domain>/drift/`. Every 5 minutes it runs `lockstep compare` on four seeded pairs (Vault A and B, OpenBao A and B, each on `app-config` and `apps` under the shared profiles), signed in as the read-only user `bob`. It writes a static page, with no scripts, into the `drift-data` volume, which Caddy serves.
+
+- **Baselines:** the seed writes a marker to the `seed-marks` volume after each hourly reset (`SEED_MARKER`). Within 15 seconds the job records a new baseline from the fresh data, so a run fails only on drift a visitor made since the reset.
+- **The page** has one card per pair: the latest status (no drift, known drift only, new drift, couldn't run), the counts, a strip of the last 24 hours, and a table of the new drift with paths, keys and reasons. It never shows values, so it has no password.
+- **Code:** `deploy/demo/drift/drift.py` and `drift.css`. It runs in the Lockstep image, read-only, with a 192 MB memory limit. Each compare has a 2-minute timeout. `DRIFT_INTERVAL` sets the time between runs, in seconds (300 by default).
 
 ## Operating it
 

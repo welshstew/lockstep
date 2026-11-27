@@ -58,6 +58,7 @@ services:
       - ./docs/images:/srv/images:ro
       - caddy-logs:/var/log/caddy
       - stats-report:/srv/stats:ro
+      - drift-data:/srv/drift:ro
     mem_limit: 128m
     depends_on:
       log-init: {condition: service_completed_successfully}
@@ -70,11 +71,13 @@ services:
   # One-shot: give the log and report volumes to the users that write them.
   log-init:
     image: &goaccess docker.io/allinurl/goaccess:1.12@sha256:9e6dfd4abce94bd7c2907c1840b7b35f666587d56b24ffbb930b4782a87ea172
-    entrypoint: ["sh", "-c", "chown 999:999 /logs && chown 65532:65532 /report /db"]   # 999 = caddy in hi/caddy
+    entrypoint: ["sh", "-c", "chown 999:999 /logs && chown 65532:65532 /report /db /marks /drift"]   # 999 = caddy in hi/caddy
     volumes:
       - caddy-logs:/logs
       - stats-report:/report
       - stats-db:/db
+      - seed-marks:/marks
+      - drift-data:/drift
     restart: "no"
 
   # Visit statistics: rebuilds the report from Caddy's access log every 5 minutes. IP
@@ -174,10 +177,14 @@ services:
       OIDC_WAIT_ATTEMPTS: "150"   # up to 5 min while Caddy gets its first certificates
       TOOL_PUBLIC_URL: https://${DEMO_HOST:?}
       RESEED_INTERVAL: ${RESEED_INTERVAL:-3600}
+      SEED_MARKER: /marks/vault   # the drift check records a new baseline after each reset
       POSTGRES_URL: "postgresql://{{username}}:{{password}}@postgres:5432/orders?sslmode=disable"
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+    volumes:
+      - seed-marks:/marks
     mem_limit: 256m
     depends_on:
+      log-init: {condition: service_completed_successfully}
       vault-a: {condition: service_healthy}
       vault-b: {condition: service_healthy}
       caddy: {condition: service_started}
@@ -199,10 +206,14 @@ services:
       OIDC_WAIT_ATTEMPTS: "150"
       TOOL_PUBLIC_URL: https://${DEMO_HOST:?}
       RESEED_INTERVAL: ${RESEED_INTERVAL:-3600}
+      SEED_MARKER: /marks/openbao
       POSTGRES_URL: "postgresql://{{username}}:{{password}}@postgres:5432/orders?sslmode=disable"
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+    volumes:
+      - seed-marks:/marks
     mem_limit: 256m
     depends_on:
+      log-init: {condition: service_completed_successfully}
       openbao-a: {condition: service_healthy}
       openbao-b: {condition: service_healthy}
       caddy: {condition: service_started}
@@ -228,7 +239,7 @@ services:
          {"name":"Vault B","url":"http://vault-b:8200"},
          {"name":"OpenBao A","url":"http://openbao-a:8200"},
          {"name":"OpenBao B","url":"http://openbao-b:8200"}]
-      LOCKSTEP_PROFILES: >-
+      LOCKSTEP_PROFILES: &profiles >-
         [{"name": "Prod ↔ staging services",
           "description": "services/<name>/prod in Vault A against services/<name>/staging in Vault B; hosts differ by design",
           "left_mount": "app-config", "right_mount": "app-config",
@@ -260,9 +271,40 @@ services:
       openbao-a: {condition: service_healthy}
       openbao-b: {condition: service_healthy}
 
+  # Drift checks, shown at https://APEX_HOST/drift/: every 5 minutes, lockstep compare on the
+  # seeded pairs as the read-only user bob, against a baseline recorded after each reset (the
+  # seed's marker). Writes a static page into drift-data, which Caddy serves. No values.
+  drift-check:
+    <<: *common
+    build: .
+    read_only: true
+    tmpfs: [/tmp]
+    entrypoint: ["python", "/drift/drift.py"]
+    environment:
+      # bob is the demo's read-only user; the password is public on the demo anyway
+      LOCKSTEP_LEFT_PASSWORD: password
+      LOCKSTEP_RIGHT_PASSWORD: password
+      LOCKSTEP_PROFILES: *profiles
+      DRIFT_INTERVAL: "300"
+      DRIFT_DATA: /data
+      DRIFT_MARKS: /marks
+    volumes:
+      - ./deploy/demo/drift:/drift:ro
+      - drift-data:/data
+      - seed-marks:/marks:ro
+    mem_limit: 192m
+    depends_on:
+      log-init: {condition: service_completed_successfully}
+      vault-a: {condition: service_healthy}
+      vault-b: {condition: service_healthy}
+      openbao-a: {condition: service_healthy}
+      openbao-b: {condition: service_healthy}
+
 volumes:
   caddy-data:
   caddy-config:
   caddy-logs:
   stats-report:
   stats-db:
+  seed-marks:
+  drift-data:

@@ -702,14 +702,26 @@ def main() -> None:
     print("seed complete")
 
 
+def mark_seeded() -> None:
+    """SEED_MARKER (a file path): write the time each time the data is fully restored, so the
+    public demo's drift check knows to record a new baseline."""
+    if path := os.environ.get("SEED_MARKER"):
+        tmp = f"{path}.tmp"
+        with open(tmp, "w") as f:
+            f.write(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()) + "\n")
+        os.replace(tmp, path)
+
+
 if __name__ == "__main__":
     # RESEED_INTERVAL (seconds): keep running and restore the fixtures periodically (public demo).
     interval = int(os.environ.get("RESEED_INTERVAL", "0"))
     main()
+    mark_seeded()
     while interval > 0:
         time.sleep(interval)
         try:
             main()
+            mark_seeded()
             print(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "demo data restored", flush=True)
         except Exception as e:  # keep the loop alive; the next run tries again
             print("reseed failed:", e, flush=True)

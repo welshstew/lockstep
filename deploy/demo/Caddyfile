@@ -1,5 +1,6 @@
 # Lockstep public demo. Hostnames and the stats login come from the environment (see compose.yaml).
-#   APEX_HOST     landing page (www redirects to it), and /stats (visit statistics, password protected)
+#   APEX_HOST     landing page (www redirects to it), /stats (visit statistics, password protected)
+#                 and /drift (the demo's drift checks)
 #   DEMO_HOST     the Lockstep demo
 #   LOGIN_HOST    Dex, for OIDC sign-in in the demo
 
@@ -76,6 +77,19 @@
 			X-Robots-Tag noindex
 		}
 		root * /srv/stats
+		file_server
+	}
+
+	# Drift checks on the demo (deploy/demo/drift): a static page the drift-check service rebuilds
+	# every 5 minutes. Paths and key names only, never values, so no password.
+	redir /drift /drift/
+	handle_path /drift/* {
+		header {
+			Content-Security-Policy "default-src 'none'; img-src 'self' data:; style-src 'self'; font-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+			Cache-Control no-store
+			X-Robots-Tag noindex
+		}
+		root * /srv/drift/site
 		file_server
 	}
 
