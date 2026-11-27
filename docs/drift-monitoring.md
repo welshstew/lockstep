@@ -53,6 +53,10 @@ driftCheck:
   ```
 
   `baseline: '<the JSON>'` puts it in the values instead, so it's reviewed with the chart's values. Without a baseline, any drift fails the check. `failOn` takes `any`, `new` or `changed`, as `--fail-on` does.
+- **Signed baselines.**
+  - Sign the baseline with `--sign`, and the waivers with `lockstep waivers sign`. Copy that file's `issuer` and `signature` into `waiversSignature`.
+  - The job checks them against `plans.trustedKeys`, which is passed to it. The signing key never is.
+  - `requireSigned: true` refuses unsigned files. See [sign the baseline](guides/detect-vault-secret-drift-in-ci.md#sign-the-baseline).
 - **What a run leaves.** The job's log has the summary: what differs, and which differences are new. Values never appear. The exit code is 0 for no new drift, 1 for drift, and 2 when the run couldn't compare. `backoffLimit` is 0, because running the check again doesn't change the answer. `profile` names one of the chart's `profiles`, and `extraArgs` adds any other `compare` option.
 - **Network policy.** With `networkPolicy.enabled`, the job gets its own policy: no ingress, and egress to DNS, `networkPolicy.vaultEgress` and `driftCheck.egress`. Use `driftCheck.egress` to allow the Pushgateway.
 - **Vaults with a private CA** use `vaultTls.caBundle`, like the web app.

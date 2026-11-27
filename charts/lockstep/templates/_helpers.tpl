@@ -71,7 +71,9 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- with .writePaths }}{{ $_ := set $v "write_paths" . }}{{ end }}
 {{- with .denyPaths }}{{ $_ := set $v "deny_paths" . }}{{ end }}
 {{- with .approvals }}{{ $_ := set $v "approvals" . }}{{ end }}
+{{- with .approverPolicies }}{{ $_ := set $v "approver_policies" . }}{{ end }}
 {{- with .exportMode }}{{ $_ := set $v "export" . }}{{ end }}
+{{- with .exportProtection }}{{ $_ := set $v "export_protection" . }}{{ end }}
 {{- $out = append $out $v }}
 {{- end }}
 {{- toJson $out }}

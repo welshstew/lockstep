@@ -87,6 +87,8 @@ class ConnectionOut(BaseModel):
     writes: Literal["all", "some", "none"] = "all"  # the preset's write policy (some: only certain paths)
     destroy: bool = True  # destroying secrets is allowed here
     export: Literal["any", "encrypted", "off"] = "encrypted"  # which exports are allowed from here
+    # How an encrypted export from here may be protected: key, passphrase, age, teams (age to the configured teams only)
+    export_protection: list[str] = ["key", "passphrase", "age", "teams"]
 
 
 class MountOut(BaseModel):
@@ -165,7 +167,8 @@ def to_out(c: Connection, status: str = "unknown") -> ConnectionOut:
         namespace=c.namespace, preset_id=c.preset_id, auth_method=c.auth_method,
         display_name=c.display_name, policies=c.policies, expires_at=c.expires_at, renewable=c.renewable,
         status=status, parent=c.parent, **dict(zip(("writes", "destroy"), writepolicy.summary(get_settings(), c))),
-        export=writepolicy.export_mode(get_settings(), c)[0])
+        export=writepolicy.export_mode(get_settings(), c)[0],
+        export_protection=writepolicy.export_protection(get_settings(), c))
 
 
 def resolve_target(body: ConnectionCreate, settings: Settings) -> tuple[str, str | None, str, int | None]:

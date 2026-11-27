@@ -8,7 +8,8 @@ export interface DestroyTarget {
 }
 
 interface Props {
-  side: "left" | "right";
+  /** Compare's side; Browse has no sides */
+  side?: "left" | "right";
   sideLabel: string;
   vault: { conn_id: string; mount: string; prefix: string };
   secrets: DestroyTarget[];
@@ -57,7 +58,7 @@ export function DestroyDialog({ side, sideLabel, vault, secrets, onClose }: Prop
     <dialog ref={ref} className="review destroy-dialog" aria-label="Destroy secrets"
             onClose={() => onClose(Boolean(done?.summary.destroyed))} onCancel={(e) => { if (running) e.preventDefault(); }}>
       <header className="review-head">
-        <h2>{done ? "Destroy finished" : `Destroy ${n === 1 ? "secret" : `${n} secrets`} on the ${side}`}</h2>
+        <h2>{done ? "Destroy finished" : `Destroy ${n === 1 ? "secret" : `${n} secrets`}${side ? ` on the ${side}` : ""}`}</h2>
         <button type="button" className="btn ghost icon small" aria-label="Close" onClick={() => ref.current?.close()} disabled={running}>✕</button>
       </header>
 
@@ -89,7 +90,7 @@ export function DestroyDialog({ side, sideLabel, vault, secrets, onClose }: Prop
             <div className="notice error destroy-warning" role="alert">
               <strong>This can’t be undone.</strong> Destroying deletes every version of {what} and {n === 1 ? "its" : "their"} metadata
               on <strong>{sideLabel}</strong>. Unlike <strong>Delete</strong>, nothing is left for <code>vault kv undelete</code>,
-              and Lockstep can’t bring {n === 1 ? "it" : "them"} back. The other side isn’t touched.
+              and Lockstep can’t bring {n === 1 ? "it" : "them"} back.{side && " The other side isn’t touched."}
             </div>
             <p className="subtle">
               Want a copy first? <strong>Export &amp; import</strong> can export these paths to an encrypted file.

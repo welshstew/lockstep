@@ -43,7 +43,7 @@ def test_tree_show_copyable_value_versions_and_diff(page, sandbox, vault_a):
     expect(pw.locator("td.bval")).to_contain_text("two")
     expect(pw.get_by_role("button", name="Copy")).to_be_visible()
     # The address is a link to this secret
-    assert re.search(rf"#/browse/left/app-config/{sandbox}/svc/db$", page.url)
+    assert re.search(rf"#/browse/app-config/{sandbox}/svc/db$", page.url)
 
     panel.get_by_role("button", name=re.compile(r"^v1 ")).click()
     expect(panel.locator(".panel-head")).to_contain_text("viewing v1 of 2")
@@ -115,6 +115,7 @@ def test_new_secret_rollback_delete_and_undelete(page, sandbox, vault_a):
     panel.get_by_role("alertdialog").get_by_role("button", name="Confirm").click()
     expect(panel.locator(".notice", has_text="Saved as v3")).to_be_visible()
     assert vault_a.get("app-config", f"{sandbox}/fresh") == {"a": "1"}
+    expect(panel.locator(".notice", has_text="Saved as v3").get_by_role("button", name="Make an undo plan")).to_be_visible()
 
     panel.get_by_role("button", name="Delete latest").click()
     panel.get_by_role("alertdialog").get_by_role("button", name="Confirm").click()
@@ -125,7 +126,7 @@ def test_new_secret_rollback_delete_and_undelete(page, sandbox, vault_a):
     assert vault_a.get("app-config", f"{sandbox}/fresh") == {"a": "1"}
 
 
-def test_stage_changes_and_review(page, sandbox, vault_a):
+def test_stage_changes_and_review(page, sandbox, vault_a, tmp_path):
     vault_a.put("app-config", f"{sandbox}/one", {"k": "1"})
     vault_a.put("app-config", f"{sandbox}/two", {"k": "2"})
     open_browse(page, sandbox)
@@ -144,6 +145,23 @@ def test_stage_changes_and_review(page, sandbox, vault_a):
     expect(dialog.locator(".badge", has_text="applied")).to_have_count(2)
     assert vault_a.get("app-config", f"{sandbox}/one") == {"k": "1b"}
     assert vault_a.get("app-config", f"{sandbox}/two") == {"k": "2b"}
+
+    # Undo the whole review with an undo plan, applied in Sync plans
+    with page.expect_download() as dl:
+        dialog.get_by_role("button", name="Make an undo plan").click()
+    undo = tmp_path / dl.value.suggested_filename
+    dl.value.save_as(undo)
+    expect(dialog.get_by_role("button", name=re.compile("Undo plan saved as"))).to_be_disabled()
+    dialog.locator(".review-foot").get_by_role("button", name="Close").click()
+    page.get_by_role("tab", name="Sync plans").click()
+    page.get_by_label("Plan file").set_input_files(undo)
+    page.get_by_role("button", name="Check undo plan").click()
+    expect(page.locator(".plan-table .badge", has_text="Can be undone")).to_have_count(2)
+    page.get_by_label(re.compile("Put back 2 secrets")).check()
+    page.get_by_role("button", name="Apply undo plan").click()
+    expect(page.locator(".notice", has_text="Undone: 2 of 2")).to_be_visible()
+    assert vault_a.get("app-config", f"{sandbox}/one") == {"k": "1"}
+    assert vault_a.get("app-config", f"{sandbox}/two") == {"k": "2"}
 
 
 def test_find_and_no_access(page, sandbox, vault_a):
@@ -286,3 +304,55 @@ def test_key_actions_sit_on_one_line(page, sandbox, vault_a):
     tools = page.locator(".browse-keys td.tools").first
     show, inspect = tools.get_by_role("button", name="Show"), tools.get_by_role("button", name="Inspect")
     assert abs(show.bounding_box()["y"] - inspect.bounding_box()["y"]) < 4  # side by side, not stacked
+
+
+def test_browse_picks_one_connection_from_the_list(page, sandbox, vault_a, vault_b):
+    """Browse shows every connection in one list; the chosen one is browsed, and another is one click away."""
+    vault_a.put("app-config", f"{sandbox}/svc/db", {"user": "a"})
+    vault_b.put("app-config", f"{sandbox}/only-b", {"user": "b"})
+    sign_in_userpass(page, "left", "alice", vault="Vault A")
+    choose_mount(page, "left", "app-config", sandbox)
+    sign_in_userpass(page, "right", "alice", vault="Vault B")
+    choose_mount(page, "right", "app-config", sandbox)
+    page.get_by_role("tab", name="Browse", exact=True).click()
+
+    expect(page.locator("section.side-card")).to_have_count(0)  # no left/right cards on Browse
+    pick = page.get_by_role("radiogroup", name="Connection to browse")
+    expect(pick.get_by_role("radio")).to_have_count(2)
+    expect(pick.get_by_role("radio", name=re.compile("^Browse Vault A "))).to_have_attribute("aria-checked", "true")
+    expect(tree(page).get_by_role("button", name="svc/")).to_be_visible()
+
+    # Vault B is on the right side already: it starts on that side's mount and prefix
+    pick.get_by_role("radio", name=re.compile("^Browse Vault B ")).click()
+    expect(page.locator(".browse .scope")).to_contain_text("Vault B")
+    expect(tree(page).get_by_role("button", name="only-b", exact=True)).to_be_visible()
+
+    # Sign in to another without leaving Browse: the new connection is chosen, then a mount
+    pane = page.get_by_label("Connections", exact=True)
+    pane.get_by_role("group", name="Sign in to another").get_by_role("button", name="Vault A", exact=True).click()
+    pane.get_by_role("button", name="Username", exact=True).click()
+    pane.get_by_label("Username").fill("bob")
+    pane.get_by_label("Password").fill("password")
+    pane.get_by_role("button", name="Connect", exact=True).click()
+    expect(pick.get_by_role("radio")).to_have_count(3)
+    expect(pick.get_by_role("radio", name=re.compile("userpass-bob"))).to_have_attribute("aria-checked", "true")
+    sel = pane.locator("label.field", has_text="secret engine").locator("select")
+    expect(sel.locator("option[value='app-config']")).to_have_count(1)
+    sel.select_option(value="app-config")
+    pane.get_by_placeholder("e.g. payments/").fill(sandbox)
+    expect(tree(page).get_by_role("button", name="svc/")).to_be_visible()
+
+    # The jump buttons put the browsed folder on the left side
+    tree(page).get_by_role("button", name="svc/").click()
+    tree(page).get_by_role("button", name="db", exact=True).click()
+    page.locator(".secret-panel").get_by_role("button", name="Compare this folder…").click()
+    expect(page.locator(".scope-chip.left")).to_contain_text(f"app-config/{sandbox}/svc/")
+    expect(page.locator("section.side-card.left")).to_be_visible()
+
+
+def test_an_older_browse_link_with_a_side_still_opens(page, sandbox, vault_a):
+    vault_a.put("app-config", f"{sandbox}/svc/db", {"user": "u"})
+    open_browse(page, sandbox)
+    page.goto(f"{BASE}#/browse/left/app-config/{sandbox}/svc/db")
+    page.reload()
+    expect(page.locator(".secret-panel .crumbs")).to_contain_text("svc/db")

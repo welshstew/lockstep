@@ -1,8 +1,8 @@
 # Moving the dev stack to Vault 2.x
 
-**Status:** plan, not started · **Written:** 2026-11-22 · **Owner:** unassigned
+**Status:** done (2026-11-27): Vault 2.2.2 by digest, `vault-legacy` on 1.21.4, the weekly job sets `VAULT_IMAGE` (vault-a and vault-b) · **Written:** 2026-11-22 · **Owner:** unassigned
 
-The dev and demo stacks run Vault **1.21.4** for `vault-a` and `vault-b`. Only the test-only `vault-latest` runs **2.2.2**, which checks the policy matcher. This plan covers moving the everyday stack to 2.x and what that changes. Nothing here is implemented yet.
+The dev and demo stacks run Vault **1.21.4** for `vault-a` and `vault-b`. Only the test-only `vault-latest` runs **2.2.2**, which checks the policy matcher. This plan covers moving the everyday stack to 2.x and what that changes. It's implemented: see the status above, and the CHANGELOG.
 
 ## Why
 

@@ -95,7 +95,29 @@ def _check(body: ExportRequest, session: SessionData, settings: Settings):
         raise HTTPException(403, detail={"message": f"Exporting is turned off{where} on this Lockstep server."})
     if mode == "encrypted" and not body.encrypt:
         raise HTTPException(403, detail={"message": f"This Lockstep server only allows encrypted exports{where}."})
+    if body.encrypt:
+        allowed = writepolicy.export_protection(settings, conn)
+        kind = ("passphrase" if body.passphrase is not None else "age" if body.recipients
+                else "teams" if recipients else "key")
+        if kind not in allowed:
+            raise HTTPException(403, detail={"message": (
+                f"This Lockstep server only allows exports{_where(conn, settings)} protected with "
+                f"{_ways(allowed)}." if allowed else
+                f"No way of protecting an export{_where(conn, settings)} is allowed on this Lockstep server.")})
     return conn, recipients
+
+
+_WAY = {"key": "a one-time key", "passphrase": "a passphrase", "age": "age public keys", "teams": "a team's age keys"}
+
+
+def _ways(allowed: list[str]) -> str:
+    ways = [_WAY[a] for a in allowed if not (a == "teams" and "age" in allowed)]
+    return ways[0] if len(ways) == 1 else ", ".join(ways[:-1]) + " or " + ways[-1]
+
+
+def _where(conn, settings: Settings) -> str:
+    p = writepolicy.preset_of(settings, conn)
+    return f" from {p.name}" if p and p.export_protection else ""
 
 
 def _scheme(body: ExportRequest, recipients: list[str]) -> str:

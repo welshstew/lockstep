@@ -280,6 +280,53 @@ def test_drift_check_with_a_baseline(env, capsys):
                  "--waivers", "waivers.yaml"]) == 1  # the known drift counts again
 
 
+def test_signed_baseline_and_waivers(env, capsys, monkeypatch):
+    """Signed with the plan key where baselines are approved; checked with only the public key."""
+    import json
+
+    from lockstep import plansign
+    private, public = plansign.generate()
+    trusted = json.dumps([{"name": "release", "key": public}])
+    monkeypatch.setenv("LOCKSTEP_PLAN_ISSUER", "release")
+    monkeypatch.delenv("LOCKSTEP_PLAN_SIGNING_KEY", raising=False)
+    assert main(["baseline", "update", "drift.json", "--sign", *env.args, "-q"]) == 2
+    assert "--sign needs the plan signing key" in capsys.readouterr().err
+
+    monkeypatch.setenv("LOCKSTEP_PLAN_SIGNING_KEY", private)
+    assert main(["baseline", "update", "drift.json", "--sign", *env.args]) == 0
+    assert "Baseline written to drift.json, signed as release: 4 differences accepted." in capsys.readouterr().out
+    (env.dir / "waivers.yaml").write_text("- {path: zz/*, owner: team-a, reason: not yet, expires: 2099-01-01}\n")
+    assert main(["waivers", "sign", "waivers.yaml"]) == 0
+    assert "Signed waivers.yaml as release" in capsys.readouterr().out
+
+    # The checking side has only the public key
+    monkeypatch.delenv("LOCKSTEP_PLAN_SIGNING_KEY")
+    monkeypatch.setenv("LOCKSTEP_PLAN_TRUSTED_KEYS", trusted)
+    check = ["compare", *env.args, "--baseline", "drift.json", "--waivers", "waivers.yaml", "--require-signed"]
+    assert main(check) == 0
+    out = capsys.readouterr().out
+    assert "drift.json: signed by release" in out and "waivers.yaml: signed by release" in out
+
+    # Accepting more drift by hand is caught: exit 2, not a pass
+    base = json.loads((env.dir / "drift.json").read_text())
+    base["drift"].append({"path": "eq/same", "key": "x", "status": "different"})
+    (env.dir / "drift.json").write_text(json.dumps(base))
+    assert main(check) == 2
+    assert "drift.json was changed after release signed it" in capsys.readouterr().err
+
+    # Signed again (after review), it passes; an unsigned baseline doesn't, with --require-signed
+    monkeypatch.setenv("LOCKSTEP_PLAN_SIGNING_KEY", private)
+    assert main(["baseline", "sign", "drift.json"]) == 0
+    capsys.readouterr()
+    monkeypatch.delenv("LOCKSTEP_PLAN_SIGNING_KEY")
+    assert main(check) == 0
+    capsys.readouterr()
+    assert main(["baseline", "update", "plain.json", *env.args, "-q"]) == 0
+    assert main(["compare", *env.args, "--baseline", "plain.json", "-q"]) == 0  # unsigned: as before
+    assert main(["compare", *env.args, "--baseline", "plain.json", "--require-signed", "-q"]) == 2
+    assert "plain.json isn't signed" in capsys.readouterr().err
+
+
 def test_compare_pushes_metrics(env, capsys, monkeypatch):
     from lockstep.cli import pushgateway
 

@@ -40,5 +40,5 @@ def test_copy_then_undo(page, sandbox, vault_a, vault_b, tmp_path):
     expect(page.locator(".plan-table .badge", has_text="Can be undone")).to_have_count(1)
     page.get_by_label(re.compile("Put back 1 secret")).check()
     page.get_by_role("button", name="Apply undo plan").click()
-    expect(page.get_by_role("status").last).to_contain_text("Undone: 1 of 1")
+    expect(page.locator(".notice", has_text="Undone: 1 of 1")).to_be_visible()
     assert vault_b.get("app-config", f"{sandbox}/db") == {"password": "old", "only_b": "x"}

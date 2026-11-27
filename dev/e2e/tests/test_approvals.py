@@ -67,6 +67,39 @@ def test_plan_needs_someone_elses_approval(page, browser, sandbox, vault_a, vaul
         alice.locator(".plan-actions .confirm input").check()
         alice.get_by_role("button", name="Apply plan").click()
         expect(alice.locator(".notice", has_text=re.compile("1 of 1 secret"))).to_be_visible()
+        with alice.expect_download() as dl:
+            alice.get_by_role("button", name="Make an undo plan").click()
+        undo = tmp_path / dl.value.suggested_filename
+        dl.value.save_as(undo)
     finally:
         ctx.close()
     assert vault_b.get("app-config", f"{sandbox}/db") == {"k": "new"}
+
+    # The undo plan needs someone else's approval too
+    ctx, alice = open_plan(browser, "alice", undo, sandbox)
+    try:
+        alice.get_by_role("button", name="Check undo plan").click()
+        expect(alice.locator(".plan-approvals")).to_contain_text("Not approved yet")
+        alice.get_by_label(re.compile("Put back 1 secret")).check()
+        expect(alice.get_by_role("button", name="Apply undo plan")).to_be_disabled()
+    finally:
+        ctx.close()
+    ctx, bob = open_plan(browser, "bob", undo, sandbox)
+    try:
+        bob.get_by_role("button", name="Check undo plan").click()
+        with bob.expect_download() as dl:
+            bob.get_by_role("button", name="Approve").click()
+        undo_ok = tmp_path / dl.value.suggested_filename
+        dl.value.save_as(undo_ok)
+        expect(bob.locator(".plan-approvals")).to_contain_text("Approved by userpass-bob")
+    finally:
+        ctx.close()
+    ctx, alice = open_plan(browser, "alice", undo_ok, sandbox)
+    try:
+        alice.get_by_role("button", name="Check undo plan").click()
+        alice.get_by_label(re.compile("Put back 1 secret")).check()
+        alice.get_by_role("button", name="Apply undo plan").click()
+        expect(alice.locator(".notice", has_text="Undone: 1 of 1")).to_be_visible()
+    finally:
+        ctx.close()
+    assert vault_b.get("app-config", f"{sandbox}/db") == {"k": "old"}

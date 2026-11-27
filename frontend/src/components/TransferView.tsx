@@ -1,13 +1,17 @@
 import { useRef, useState } from "react";
 import { api } from "../api";
 import type {
-  AppConfig, ApplyResult, ChangePlan, ExportResult, ImportPreview, ImportRules, LoadedFile, Profile, Transform,
+  AppConfig, ApplyResult, ChangePlan, ExportProtection, ExportResult, ImportPreview, ImportRules, LoadedFile, Profile, Transform,
 } from "../types";
 import { FileLoader, FileSummary } from "./FileLoader";
 import { formatValue } from "./ValueCell";
+import { downloadUndoPlan } from "../plans";
 
 type VaultSide = { conn_id: string; mount: string; prefix: string };
-export interface SideOption { side: "left" | "right"; label: string; ref: VaultSide | null; exportMode?: "any" | "encrypted" | "off" }
+export interface SideOption {
+  side: "left" | "right"; label: string; ref: VaultSide | null; exportMode?: "any" | "encrypted" | "off";
+  exportProtection?: ExportProtection[]; // how an encrypted export from here may be protected
+}
 
 interface Props {
   config: AppConfig;
@@ -92,6 +96,14 @@ function ExportPanel({ config, sides, profiles }: Props) {
   const [copied, setCopied] = useState(false);
   const source = usable.find((s) => s.side === from) ?? usable[0];
   const mode = source?.exportMode ?? config.export_mode ?? "encrypted";
+  // The ways this source allows: a choice it doesn't allow falls back to the first it does
+  const allowed: ExportProtection[] = source?.exportProtection ?? config.export_protection ?? ["key", "passphrase", "age", "teams"];
+  const ok = (v: "key" | "passphrase" | "age" | "none") => v === "none" ? mode === "any"
+    : v === "age" ? allowed.includes("age") || allowed.includes("teams") : allowed.includes(v);
+  const teamsOnly = !allowed.includes("age");
+  const firstOk = (["key", "passphrase", "age"] as const).find(ok) ?? "key";
+  const chosen = (mode === "encrypted" && protect === "none") || !ok(protect) ? firstOk : protect;
+  const noWay = mode !== "any" && !(["key", "passphrase", "age"] as const).some(ok);
   const offEverywhere = usable.length > 0 ? usable.every((s) => (s.exportMode ?? config.export_mode) === "off") : config.export_mode === "off";
 
   if (offEverywhere) {
@@ -104,10 +116,10 @@ function ExportPanel({ config, sides, profiles }: Props) {
     setError(null);
     setDone(null);
     try {
-      const how = mode === "encrypted" && protect === "none" ? "key" : protect;
+      const how = chosen;
       setProgress(null);
       const r = await api.exportStream(source.ref, { ignore_paths: lines(paths), ignore_keys: keyRules(keys) }, how !== "none",
-        how === "passphrase" ? { passphrase: pass } : how === "age" ? { teams, recipients: lines(ageKeys) } : {}, setProgress);
+        how === "passphrase" ? { passphrase: pass } : how === "age" ? { teams, recipients: teamsOnly ? [] : lines(ageKeys) } : {}, setProgress);
       download(r.filename, r.file);
       setDone(r);
       setPass("");
@@ -151,16 +163,18 @@ function ExportPanel({ config, sides, profiles }: Props) {
             <legend>Protect the file with</legend>
             {([["key", "A one-time key", "shown once after the export"],
                ["passphrase", "A passphrase", "that you choose and share yourself"],
-               ["age", "age public keys", "whoever holds a matching age key opens it, in Lockstep or with age -d"],
+               ["age", teamsOnly ? "A team's age keys" : "age public keys", "whoever holds a matching age key opens it, in Lockstep or with age -d"],
                ["none", "Nothing (plain text)", mode === "any" ? "" : "this Lockstep server requires encryption"]] as const).map(([v, l, hint]) => (
               <label className="inline-check" key={v}>
-                <input type="radio" name="export-protect" value={v} checked={(mode === "encrypted" && protect === "none" ? "key" : protect) === v}
-                       disabled={v === "none" && mode !== "any"} onChange={() => setProtect(v)} />
+                <input type="radio" name="export-protect" value={v} checked={chosen === v}
+                       disabled={!ok(v)} onChange={() => setProtect(v)} />
                 {l} {hint && <span className="subtle">({hint})</span>}
+                {v !== "none" && !ok(v) && <span className="subtle"> (not allowed here)</span>}
               </label>
             ))}
           </fieldset>
-          {protect === "passphrase" && (
+          {noWay && <div className="notice warn">This Lockstep server allows no way of protecting an export from {source?.label}: ask an admin.</div>}
+          {chosen === "passphrase" && (
             <div className="row">
               <label className="field grow"><span>Passphrase <span className="subtle">(at least 12 characters)</span></span>
                 <input type="password" value={pass} onChange={(e) => setPass(e.target.value)} autoComplete="new-password" aria-label="Passphrase" /></label>
@@ -168,7 +182,7 @@ function ExportPanel({ config, sides, profiles }: Props) {
                 <input type="password" value={pass2} onChange={(e) => setPass2(e.target.value)} autoComplete="new-password" aria-label="Passphrase again" /></label>
             </div>
           )}
-          {protect === "age" && (
+          {chosen === "age" && (
             <>
               {(config.export_teams ?? []).length > 0 && (
                 <div className="field"><span>Teams</span>
@@ -181,20 +195,25 @@ function ExportPanel({ config, sides, profiles }: Props) {
                   ))}
                 </div>
               )}
-              <label className="field"><span>{(config.export_teams ?? []).length ? "More age public keys" : "age public keys"} <span className="subtle">(one per line, age1…)</span></span>
-                <textarea className="mono" rows={2} value={ageKeys} onChange={(e) => setAgeKeys(e.target.value)} aria-label="age public keys" placeholder="age1…" /></label>
+              {teamsOnly ? (
+                (config.export_teams ?? []).length === 0
+                  && <div className="notice warn">Exports from here may only be encrypted to a team, and this Lockstep server has none (LOCKSTEP_EXPORT_RECIPIENTS).</div>
+              ) : (
+                <label className="field"><span>{(config.export_teams ?? []).length ? "More age public keys" : "age public keys"} <span className="subtle">(one per line, age1…)</span></span>
+                  <textarea className="mono" rows={2} value={ageKeys} onChange={(e) => setAgeKeys(e.target.value)} aria-label="age public keys" placeholder="age1…" /></label>
+              )}
             </>
           )}
           {mode === "off" && <div className="notice info">Exporting from {source?.label} is turned off on this Lockstep server.</div>}
-          {protect === "none" && mode === "any" && (
+          {chosen === "none" && mode === "any" && (
             <div className="notice warn" role="alert">
               Without encryption the file holds every value in plain text. Anyone who gets the file can read them.
             </div>
           )}
           {error && <div className="notice error" role="alert">{error}</div>}
           <div className="row"><button type="button" className="btn primary" onClick={run}
-            disabled={busy || !source || mode === "off" || (protect === "passphrase" && (pass.length < 12 || pass !== pass2))
-                      || (protect === "age" && !teams.length && !lines(ageKeys).length)}>
+            disabled={busy || !source || mode === "off" || noWay || (chosen === "passphrase" && (pass.length < 12 || pass !== pass2))
+                      || (chosen === "age" && !teams.length && (teamsOnly || !lines(ageKeys).length))}>
             {busy && <span className="spinner" />} Export and download
           </button>
           {busy && progress && progress.total > 0 && (
@@ -261,6 +280,7 @@ function ImportPanel({ reveal, files, onFile, sides }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [applied, setApplied] = useState<ApplyResult | null>(null);
+  const [undoFile, setUndoFile] = useState<string | null>(null);
   const rulesFile = useRef<HTMLInputElement>(null);
   const file = files.find((f) => f.id === fileId) ?? null;
   const target = usable.find((s) => s.side === to) ?? usable[0];
@@ -287,6 +307,7 @@ function ImportPanel({ reveal, files, onFile, sides }: Props) {
     if (!file || !target?.ref || !preview) return;
     const ready = preview.plans.filter((p) => p.status === "ready");
     setBusy(true); setError(null);
+    setUndoFile(null);
     try {
       setApplied(await api.importApply(file.doc, file.name, rules(), target.ref,
         Object.fromEntries(ready.map((p) => [p.path, p.target.state === "absent" ? null : p.target.version])), deleteMissing));
@@ -442,6 +463,14 @@ function ImportPanel({ reveal, files, onFile, sides }: Props) {
                 <div className="subtle">{r.status !== "applied" ? r.message : r.action === "delete" ? `v${r.old_version} deleted` : `v${r.old_version ?? "—"} → v${r.new_version} · ${r.keys.join(", ")}`}</div></li>
             ))}
           </ul>
+          {applied.summary.applied > 0 && (
+            <div className="row">
+              <button type="button" className="btn ghost" disabled={Boolean(undoFile)}
+                      title="A signed file that puts back what the import wrote and deleted, for you or someone else to apply in Sync plans"
+                      onClick={async () => { try { setUndoFile(await downloadUndoPlan(applied.results)); } catch (e) { setError((e as Error).message); } }}>
+                {undoFile ? `Undo plan saved as ${undoFile}` : "Make an undo plan"}</button>
+            </div>
+          )}
         </div>
       )}
     </section>

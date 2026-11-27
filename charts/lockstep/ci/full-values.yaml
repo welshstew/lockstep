@@ -4,9 +4,15 @@ image:
 publicUrl: https://lockstep.example.com
 replicaCount: 3
 vaults:
-  - {name: Production, url: https://vault.prod.example.com, browserUrl: https://vault.prod.example.com}
+  - {name: Production, url: https://vault.prod.example.com, browserUrl: https://vault.prod.example.com, approvals: 2, approverPolicies: [prod-approver], exportProtection: [teams]}
   - {name: Staging, url: https://vault.staging.example.com, namespace: team-a}
 allowCustomConnections: true
+exportProtection: [age, passphrase]
+plans:
+  approvals: 1
+  approverPolicies: [lockstep-approver, platform-lead]
+  trustedKeys:
+    - {name: release-lockstep, key: MCowBQYDK2VwAyEAGb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE=}
 customUrlPatterns: ['https://vault\.[a-z]+\.example\.com']
 vaultTls:
   caBundle: {configMap: corporate-ca, key: ca.crt}
@@ -67,6 +73,10 @@ driftCheck:
   baselineConfigMap: {name: drift-baseline, key: drift.json}
   waivers:
     - {path: "billing/*", key: feature_flags, owner: team-billing, reason: staging tries the new checkout, expires: "2027-01-31"}
+  waiversSignature:
+    issuer: {name: release-lockstep, key_id: 0123456789abcdef}
+    signature: "ed25519:AAAA"
+  requireSigned: true
   pushgateway: {url: "http://pushgateway.monitoring:9091"}
   extraArgs: [--custom-metadata]
   egress:

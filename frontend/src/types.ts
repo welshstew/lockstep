@@ -5,11 +5,15 @@ export interface Preset {
   namespace: string | null;
 }
 
+export type ExportProtection = "key" | "passphrase" | "age" | "teams";
+
 export interface AppConfig {
   presets: Preset[];
   allow_custom_connections: boolean;
   demo_banner?: string;
   export_mode?: "any" | "encrypted" | "off";
+  /** How encrypted exports may be protected (LOCKSTEP_EXPORT_PROTECTION): teams is age to the configured teams only */
+  export_protection?: ExportProtection[];
   /** Teams an export can be encrypted to (LOCKSTEP_EXPORT_RECIPIENTS): name and number of age keys */
   export_teams?: { name: string; keys: number }[];
   allow_destroy?: boolean;
@@ -17,6 +21,8 @@ export interface AppConfig {
   allow_clipboard?: boolean;
   policy_apply?: boolean;
   user_write?: boolean;
+  /** Names a plan can be limited to: this server's, and the servers whose plans it trusts */
+  plan_servers?: { self: string; trusted: string[] };
   k8s_auth: {
     available: boolean;
     mount: string;
@@ -47,6 +53,8 @@ export interface Connection {
   destroy?: boolean;
   /** Which exports are allowed from this connection (its preset's setting, else the server's) */
   export?: "any" | "encrypted" | "off";
+  /** How an encrypted export from here may be protected */
+  export_protection?: ExportProtection[];
 }
 
 export interface NamespacesResponse {
@@ -508,7 +516,7 @@ export interface PlanCheck {
   changes: { path: string; right_path: string; direction: SyncDirection; source: string; target: string;
              status: PlanCheckStatus; problems: string[] }[];
   /** Four-eyes: how many approvals this installation asks for, and which of the plan's count */
-  approvals?: { required: number; approved_by: string[]; problems: string[] } | null;
+  approvals?: PlanApprovals | null;
 }
 
 // ---- Undo plans: put back what an apply changed (old versions read from Vault's history)
@@ -530,6 +538,7 @@ export interface UndoPlan {
   undoes?: string | null;
   entries: UndoEntry[];
   signature: string;
+  approvals?: { by: string; at: string }[];
 }
 export interface UndoEntryCheck {
   target: string;
@@ -538,7 +547,7 @@ export interface UndoEntryCheck {
   message: string;
   new_version?: number | null;
 }
-export interface UndoCheck { status: "ready" | "stale" | "denied" | "error"; message: string; entries: UndoEntryCheck[] }
+export interface UndoCheck { status: "ready" | "stale" | "denied" | "error"; message: string; entries: UndoEntryCheck[]; approvals?: PlanApprovals | null }
 export interface UndoApplyResult { plan_id: string; outcome: "applied" | "partially_applied" | "not_applied"; message: string; entries: UndoEntryCheck[] }
 
 export interface PlanApplyResult extends ApplyResult {
@@ -857,6 +866,15 @@ export interface AccessChanges {
 export interface AccessPlanInfo {
   format: string; version: number; id: string; created: string; created_by: string;
   vault: string; preset: boolean; namespace: string | null; items: { id: string; action: string; status: string }[];
+  approvals?: { by: string; at: string }[];
+  audience?: string[]; // the Lockstep servers that may apply it (empty: any that trusts the issuer)
+}
+
+/** Four-eyes: how many approvals this installation asks for, and which of the plan's count */
+export interface PlanApprovals {
+  required: number; approved_by: string[]; problems: string[];
+  /** An approver must hold one of these Vault policies (empty or missing: anyone but the creator) */
+  approver_policies?: string[];
 }
 
 export interface VaultOverview {
@@ -912,15 +930,31 @@ export interface AuthUsersCompare {
 
 // ---- Environment matrix: one baseline against several environments (statuses only)
 export type MatrixCellStatus = "equal" | "different" | "missing" | "extra" | "not_compared" | "absent";
-export interface MatrixCell { status: MatrixCellStatus; reason: string }
-export interface MatrixRow { path: string; key: string | null; cells: MatrixCell[]; odd: number; unknown: number }
+export interface MatrixCell { status: MatrixCellStatus; reason: string; accepted?: boolean }
+export interface MatrixRow { path: string; key: string | null; cells: MatrixCell[]; odd: number; unknown: number; known?: number }
 export interface MatrixEnv {
   name: string; mount: string; prefix: string; kv_version: string; secret_count: number; truncated: boolean;
   denied: string[]; error: string | null; counts: Record<string, number>;
+  accepted?: string | null; accepted_unused?: number;
+  /** Who signed the accepted drift file, when it's signed and this server checked it */
+  accepted_signer?: string | null;
 }
 export interface MatrixResult {
-  baseline: { name: string; mount: string; prefix: string; kv_version: string; secret_count: number; truncated: boolean; denied: string[] };
+  baseline: { kind?: "vault" | "file"; name: string; mount: string; prefix: string; kv_version: string; secret_count: number; truncated: boolean; denied: string[] };
   environments: MatrixEnv[];
   rows: MatrixRow[];
   summary: Record<string, number>;
+}
+
+/** A drift baseline (lockstep baseline update, the drift check's base.json): accepted drift. No values. */
+export interface DriftBaseline {
+  lockstep_baseline: number;
+  created?: string;
+  left: { name?: string; mount: string; prefix?: string };
+  right: { name?: string; mount: string; prefix?: string };
+  profile?: string | null;
+  drift: { path: string; key: string | null; status: string }[];
+  /** Who signed it (lockstep baseline update --sign); the server checks the signature */
+  issuer?: { name: string; key_id: string } | null;
+  signature?: string | null;
 }

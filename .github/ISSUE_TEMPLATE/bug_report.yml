@@ -14,7 +14,7 @@ body:
     attributes: {label: Lockstep version or image tag}
   - type: input
     id: vault
-    attributes: {label: Vault version(s), placeholder: "e.g. 1.21.4"}
+    attributes: {label: Vault version(s), placeholder: "e.g. 2.2.2"}
   - type: dropdown
     id: deploy
     attributes:

@@ -28,7 +28,7 @@ With [pipx](https://pipx.pypa.io/), which installs the CLI into its own virtual 
 
 ```sh
 # a release (recommended); the CLI is in v0.2.0 and later
-pipx install "git+https://github.com/welshstew/lockstep@v0.11.0#subdirectory=backend"
+pipx install "git+https://github.com/welshstew/lockstep@v0.12.0#subdirectory=backend"
 
 # or the latest code on main
 pipx install "git+https://github.com/welshstew/lockstep#subdirectory=backend"
@@ -39,7 +39,7 @@ lockstep --version
 [uv](https://docs.astral.sh/uv/) works the same way:
 
 ```sh
-uv tool install "git+https://github.com/welshstew/lockstep@v0.11.0#subdirectory=backend"
+uv tool install "git+https://github.com/welshstew/lockstep@v0.12.0#subdirectory=backend"
 ```
 
 To move to another release, run the same command with the new tag and `--force` (`pipx install --force ...`, `uv tool install --force ...`). To remove the CLI, run `pipx uninstall lockstep` or `uv tool uninstall lockstep`.
@@ -48,7 +48,7 @@ If you'd rather use a plain virtual environment:
 
 ```sh
 python3 -m venv ~/.venvs/lockstep
-~/.venvs/lockstep/bin/pip install "git+https://github.com/welshstew/lockstep@v0.11.0#subdirectory=backend"
+~/.venvs/lockstep/bin/pip install "git+https://github.com/welshstew/lockstep@v0.12.0#subdirectory=backend"
 ~/.venvs/lockstep/bin/lockstep --help
 ```
 
@@ -62,7 +62,7 @@ Every release image (`ghcr.io/welshstew/lockstep`, v0.2.0 and later, for amd64 a
 docker run --rm -it --entrypoint lockstep \
   -e VAULT_ADDR -e VAULT_TOKEN \
   -v "$PWD:/work" -w /work \
-  ghcr.io/welshstew/lockstep:0.11.0 \
+  ghcr.io/welshstew/lockstep:0.12.0 \
   compare --mount app-config -o report.yaml
 ```
 
@@ -80,7 +80,7 @@ A shell alias makes the image feel like an installed command:
 
 ```sh
 alias lockstep='docker run --rm -it --entrypoint lockstep -e VAULT_ADDR -e VAULT_TOKEN -e VAULT_NAMESPACE \
-  -e LOCKSTEP_LEFT_TOKEN -e LOCKSTEP_RIGHT_TOKEN -v "$PWD:/work" -w /work ghcr.io/welshstew/lockstep:0.11.0'
+  -e LOCKSTEP_LEFT_TOKEN -e LOCKSTEP_RIGHT_TOKEN -v "$PWD:/work" -w /work ghcr.io/welshstew/lockstep:0.12.0'
 ```
 
 ## Logging in
@@ -147,7 +147,7 @@ Report written to report.yaml. Set actions in it, then run: lockstep apply repor
 | `--left-ui-addr`, `--right-ui-addr` | the address people open the Vault UI at, if it differs from the API address the CLI uses |
 | `-o FILE` | write the report (`-o -` writes it to stdout, and the summary goes to stderr). Repeat it to write several formats; the format follows the extension (see [Drift checks in CI](#drift-checks-in-ci)) |
 | `--format` | `yaml`, `json`, `sarif`, `junit`, `markdown` or `csv` for every `-o`, instead of following the extension |
-| `--baseline FILE`, `--fail-on`, `--waivers FILE` | a drift check that fails only on new drift: see [Drift checks in CI](#drift-checks-in-ci) |
+| `--baseline FILE`, `--fail-on`, `--waivers FILE`, `--require-signed` | a drift check that fails only on new drift, with signed files if you like: see [Drift checks in CI](#drift-checks-in-ci) |
 | `--include-equal` | list equal secrets in the report too |
 | `-q` | no summary |
 
@@ -191,6 +191,12 @@ lockstep compare --left-addr … --right-addr … --mount app-config --prefix se
   ```
 
   `--waivers waivers.yaml` doesn't fail on what a waiver covers. An expired waiver fails the run until it's renewed or removed, and the summary names waivers that match nothing any more.
+- **Signed baselines and waivers.** These commands sign with the plan key (`LOCKSTEP_PLAN_SIGNING_KEY`, from `lockstep plan-key`):
+  - `baseline update … --sign` writes a signed baseline;
+  - `baseline sign FILE` signs an existing one;
+  - `waivers sign FILE` signs a waivers file.
+
+  With `LOCKSTEP_PLAN_TRUSTED_KEYS` set, `compare` checks a signed file. An edited one, or one signed by a key that isn't trusted, exits 2. `--require-signed` refuses unsigned files too. `lockstep matrix --require-signed` does the same for the environments' `accepted:` files. See [sign the baseline](guides/detect-vault-secret-drift-in-ci.md#sign-the-baseline).
 
 The summary adds a line like `Drift: 1 new, 4 known (in the baseline), 0 resolved.` and lists what's new. The YAML and JSON reports mark each key `drift: new`, `known` or `waived`, and add a `drift_check` section.
 
@@ -226,6 +232,7 @@ environments:                        # up to 12
     prefix: services-dev              # mount and prefix default to the baseline's
   - name: preview
     namespace: previews/pr-123        # no addr: the baseline's Vault
+    accepted: drift/preview.base.json # optional: accepted drift for this pair (lockstep baseline update)
 ```
 
 ```console
@@ -245,6 +252,7 @@ Baseline: prod (https://vault.prod.example.com) app-config/services
 
 - **Logins.** Each Vault logs in like the other commands: `LOCKSTEP_<NAME>_TOKEN`, with the name upper-cased and other characters turned into `_` (`LOCKSTEP_STAGING_TOKEN`), then `VAULT_TOKEN` or `~/.vault-token`. Or give an `auth:` block, either at the top of the file for every Vault or on one place: `{method: kubernetes, role: lockstep-drift}`, `{method: jwt, role: ci}` (the JWT from `LOCKSTEP_<NAME>_JWT` or `jwt_file`), `{method: userpass, user: alice}` (the password from `LOCKSTEP_<NAME>_PASSWORD`). Places on the same Vault and namespace with the same login share one sign-in. Tokens Lockstep minted by logging in are revoked at the end.
 - **Profiles.** `profile` takes a profile file (or `profile_name` to pick one from a file holding several) or a `$LOCKSTEP_PROFILES` name. A profile's right mount and prefix apply when the environment doesn't set its own.
+- **Accepted drift.** `accepted` names a drift baseline for that pair, relative to the file. What it lists with the same status is marked `*` (`(accepted)` in Markdown and CSV) and doesn't count: a matrix with only accepted drift exits 0. A baseline for other mounts or prefixes is refused (exit 2).
 - **Output.** `-o` writes `.json`, `.yaml`, `.md` (a table for a pull request comment), `.csv` or `.txt`, and can be repeated. `--include-equal` lists the rows where everything matches too. None of them holds a value.
 - **Exit codes.** 0: every environment matches the baseline. 1: something differs, or couldn't be told. 2: something couldn't be compared, such as a bad file, a failed login or an environment whose listing failed. That environment's column says why, and the outputs are still written.
 

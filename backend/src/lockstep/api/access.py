@@ -39,7 +39,8 @@ from ..vault import VaultClient, VaultError, _q
 from .connections import client_for, get_connection, vault_http_error
 from .configcopy import COPYABLE, EngineObjectChange, TuneChange, engine_path, mount_types, normalise as as_text, read_tune, tune_path
 from .guard import require_writable
-from .. import plansign
+from .. import approvals, plansign
+from ..approvals import Approval, ApprovalsOut
 from ..plansign import Issuer
 from .. import writepolicy
 
@@ -401,8 +402,12 @@ def item_path(it: Item) -> str:
     return rest  # engine: <mount>/<kind>/<name>
 
 
-def mark_refused(items: list[Item], conn: Connection, settings: Settings, log: bool = False) -> None:
-    """Items the preset's write policy forbids become invalid, with the reason."""
+def mark_refused(items: list[Item], conn: Connection, settings: Settings, log: bool = False,
+                 via_plan: bool = False) -> None:
+    """Items the preset's write policy forbids become invalid, with the reason. On a Vault that
+    changes only through approved plans, direct writes become "denied" (so the preview can still be
+    saved as an access plan); `via_plan` writes are fine."""
+    plan_only = None if via_plan else writepolicy.needs_plan(settings, conn, "access")
     for it in items:
         if it.status in ("ready", "denied") and it.action not in ("same", "absent"):
             path = item_path(it)
@@ -411,6 +416,12 @@ def mark_refused(items: list[Item], conn: Connection, settings: Settings, log: b
                 it.problems.append(why)
                 if log:
                     writepolicy.log_refusal(conn, path, "write", "access.apply", why)
+            elif plan_only:
+                it.status = "denied"
+                if plan_only not in it.problems:
+                    it.problems.append(plan_only)
+                if log:
+                    writepolicy.log_refusal(conn, path, "write", "access.apply", plan_only)
 
 
 @router.post("/preview", response_model=list[Item])
@@ -442,7 +453,7 @@ async def run_apply(v: VaultClient, conn: Connection, body: Changes, expected: d
         items = await plan(v, body)
     except VaultError as e:
         raise vault_http_error(e) from e
-    mark_refused(items, conn, get_settings(), log=True)
+    mark_refused(items, conn, get_settings(), log=True, via_plan=plan_id is not None)
     policies = {f"policy:{p.name}": p for p in body.policies}
     roles = {f"role:{r.mount.strip('/')}/{r.name}": r for r in body.roles}
     groups = {f"group:{g.name}": g for g in body.group_policies}
@@ -531,6 +542,7 @@ class AccessPlan(BaseModel):
     expected: dict[str, str | None]  # item id -> hash of what was in Vault when the plan was made
     items: list[PlanItem]  # what the preview said then (informational)
     signature: str = ""
+    approvals: list[Approval] = []  # outside the plan's signature (each is signed on its own)
 
 
 def _plan_key(settings: Settings) -> bytes:
@@ -542,7 +554,7 @@ _NEWER = ("created_by_entity", "created_by_accessor", "issuer", "audience", "not
 
 def _canonical(data: dict) -> bytes:
     # Fields added in version 2 are left out when empty, so version 1 plans still verify
-    data = {k: x for k, x in data.items() if k != "signature" and not (k in _NEWER and not x)}
+    data = {k: x for k, x in data.items() if k not in ("signature", "approvals") and not (k in _NEWER and not x)}
     if isinstance(data.get("changes"), dict):
         # Added after the first plans were signed: left out when empty so those still verify
         data["changes"] = {k: x for k, x in data["changes"].items()
@@ -588,8 +600,12 @@ def _targets(session: SessionData, settings: Settings, p: AccessPlan, conn_ids: 
     raise HTTPException(409, detail={"message": f"This plan is for {where}: sign in to it on one side first."})
 
 
+class PlanCreate(AccessChanges):
+    audience: list[str] = Field(default=[], max_length=20)  # the installations that may apply it (empty: any that trusts this one)
+
+
 @router.post("/plans", response_model=AccessPlan)
-async def create_plan(body: AccessChanges, session: Sess, settings: Conf):
+async def create_plan(body: PlanCreate, session: Sess, settings: Conf):
     conn = get_connection(session, body.conn_id)
     async with client_for(conn, settings) as v:
         try:
@@ -602,7 +618,8 @@ async def create_plan(body: AccessChanges, session: Sess, settings: Conf):
     p = AccessPlan(id=uuid.uuid4().hex[:12], created=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                    created_by=conn.display_name or conn.auth_method, created_by_entity=conn.entity_id,
                    created_by_accessor=conn.accessor, **plansign.validity(settings), vault=vault, preset=preset,
-                   namespace=conn.namespace or None, changes=Changes(**body.model_dump(exclude={"conn_id"})),
+                   namespace=conn.namespace or None, changes=Changes(**body.model_dump(exclude={"conn_id", "audience"})),
+                   audience=[a.strip() for a in body.audience if a.strip()],
                    expected={i.id: i.hash for i in items}, items=[PlanItem(id=i.id, action=i.action, status=i.status) for i in items])
     audit.info(json.dumps({"ts": p.created, "event": "access.plan", "outcome": "created", "plan_id": p.id,
                            "actor": {"identity": conn.display_name, "auth": conn.auth_method, "entity_id": conn.entity_id, "accessor": conn.accessor},
@@ -620,12 +637,17 @@ class PlanApply(PlanCheck):
     confirm: bool
 
 
-@router.post("/plans/check")
-async def check_plan(body: PlanCheck, session: Sess, settings: Conf):
-    p = load_access_plan(body.plan, settings)
-    # Both sides may be signed in to the plan's Vault: use the one that may make the changes
+def _approvals(p: AccessPlan, conn: Connection, settings: Settings) -> ApprovalsOut:
+    where = p.vault + (f" (namespace {p.namespace})" if p.namespace else "")
+    return approvals.count("access", p.id, p.signature, p.approvals, {"vault": p.created_by_entity}, {"vault": where},
+                           writepolicy.approvals_for(settings, conn), settings,
+                           {"vault": writepolicy.approver_policies_for(settings, conn)})
+
+
+async def _check(p: AccessPlan, session: SessionData, settings: Settings, conn_ids: list[str]) -> tuple[Connection, list[Item]]:
+    """The plan's items against Vault now, on the signed-in side that may make the most of them."""
     best: tuple[Connection, list[Item]] | None = None
-    for conn in _targets(session, settings, p, body.conn_ids):
+    for conn in _targets(session, settings, p, conn_ids):
         async with client_for(conn, settings) as v:
             try:
                 items = await plan(v, p.changes)
@@ -634,12 +656,40 @@ async def check_plan(body: PlanCheck, session: Sess, settings: Conf):
         if best is None or sum(i.status == "denied" for i in items) < sum(i.status == "denied" for i in best[1]):
             best = (conn, items)
     conn, items = best  # type: ignore[misc]
+    mark_refused(items, conn, settings, via_plan=True)
     for it in items:
         if it.status == "ready" and it.id in p.expected and p.expected[it.id] != it.hash:
             it.status = "conflict"
             it.problems.append("Changed in Vault since the plan was made. Make a new plan.")
+    return conn, items
+
+
+@router.post("/plans/check")
+async def check_plan(body: PlanCheck, session: Sess, settings: Conf):
+    p = load_access_plan(body.plan, settings)
+    # Both sides may be signed in to the plan's Vault: use the one that may make the changes
+    conn, items = await _check(p, session, settings, body.conn_ids)
     return {"plan": {k: x for k, x in p.model_dump(mode="json").items() if k not in ("signature", "changes", "expected")},
-            "conn_id": conn.id, "items": [i.model_dump() for i in items]}
+            "conn_id": conn.id, "items": [i.model_dump() for i in items],
+            "approvals": _approvals(p, conn, settings).model_dump()}
+
+
+@router.post("/plans/approve", response_model=AccessPlan)
+async def approve_plan(body: PlanCheck, session: Sess, settings: Conf):
+    """Check the plan against Vault now and, if it still applies, add an approval from whoever is
+    signed in to its Vault (they needn't be allowed to write it). The plan itself is unchanged."""
+    p = load_access_plan(body.plan, settings)
+    conn, items = await _check(p, session, settings, body.conn_ids)
+    bad = [i for i in items if i.status in ("conflict", "invalid", "error")]
+    if bad or not any(i.status in ("ready", "denied") for i in items):
+        raise HTTPException(409, detail={"message": "Only a plan that checks out can be approved: "
+                                         + ("; ".join(f"{i.name}: {'; '.join(i.problems) or i.status}" for i in bad[:5])
+                                            or "nothing in it would be written any more.")})
+    where = p.vault + (f" (namespace {p.namespace})" if p.namespace else "")
+    a = approvals.approve("access", p.id, p.signature, {"vault": conn}, {"vault": p.created_by_entity},
+                          {"vault": where}, settings, {"vault": writepolicy.approver_policies_for(settings, conn)}, p.approvals)
+    p.approvals = [*p.approvals, a]
+    return p
 
 
 @router.post("/plans/apply", response_model=list[Item])
@@ -649,5 +699,6 @@ async def apply_plan(body: PlanApply, session: Sess, settings: Conf):
         raise HTTPException(400, detail={"message": "Applying requires confirm=true"})
     p = load_access_plan(body.plan, settings)
     conn = _targets(session, settings, p, body.conn_ids)[0]  # the client passes the one the check chose
+    approvals.require("access", _approvals(p, conn, settings))
     async with client_for(conn, settings) as v:
         return await run_apply(v, conn, p.changes, p.expected, plan_id=p.id)

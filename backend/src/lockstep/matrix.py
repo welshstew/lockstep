@@ -5,6 +5,11 @@ profile. The baseline is read once and shared by every pair. The result is a gri
 secret (is it there?) and per key (does it match?), a column per environment, sorted so the odd
 one out comes first: a key that differs in only one environment is the likeliest mistake.
 
+An environment can carry **accepted drift**: a drift baseline (`lockstep baseline update`, the
+drift check's base.json) for its pair. A difference listed there with the same status is marked
+accepted: it's shown, but doesn't make the environment the odd one out. The baseline itself can be
+an export file instead of a Vault (the caller passes a FileVault).
+
 Like the pairwise comparison, nothing here returns a value.
 """
 
@@ -34,14 +39,16 @@ DEVIATING = ("different", "missing", "extra")
 class MatrixCell(BaseModel):
     status: Cell
     reason: str = ""  # a few words, never a value
+    accepted: bool = False  # a deviation listed in this environment's accepted drift
 
 
 class MatrixRow(BaseModel):
     path: str  # the baseline's form of the path, relative to its prefix
     key: str | None = None  # None: the secret itself (is it there?)
     cells: list[MatrixCell]  # one per environment, in order
-    odd: int  # environments that differ from the baseline here
+    odd: int  # environments that differ from the baseline here (accepted drift aside)
     unknown: int  # environments where it couldn't be told
+    known: int = 0  # environments that differ here as their accepted drift says
 
 
 class MatrixEnv(BaseModel):
@@ -53,10 +60,14 @@ class MatrixEnv(BaseModel):
     truncated: bool = False
     denied: list[str] = []
     error: str | None = None  # the comparison failed: every cell is not_compared
-    counts: dict[str, int] = {}  # cells by status, over the rows shown and hidden
+    counts: dict[str, int] = {}  # cells by status, over the rows shown and hidden; "known": accepted ones
+    accepted: str | None = None  # the accepted drift file's name, when one was given
+    accepted_unused: int = 0  # differences it lists that aren't there any more (resolved)
+    accepted_signer: str | None = None  # who signed the accepted drift file, when it's signed and checked
 
 
 class MatrixBaseline(BaseModel):
+    kind: Literal["vault", "file"] = "vault"
     name: str
     mount: str
     prefix: str
@@ -80,6 +91,9 @@ class EnvInput:
     mount: str
     prefix: str  # "" or ending in "/"
     rules: Rules | None = None
+    accepted: dict[tuple[str, str | None], str] | None = None  # accepted drift: (path, key) -> status
+    accepted_name: str | None = None
+    accepted_signer: str | None = None  # who signed the accepted drift (checked)
 
 
 KEY_CELL = {"equal": "equal", "different": "different", "left_only": "missing", "right_only": "extra",
@@ -111,9 +125,25 @@ def _cells_of(d: SecretDiff) -> tuple[MatrixCell, dict[str, MatrixCell]]:
     return MatrixCell(status="equal"), keys
 
 
+def _accept(d: SecretDiff, cell: MatrixCell, keys: dict[str, MatrixCell],
+            accepted: dict[tuple[str, str | None], str]) -> set[tuple[str, str | None]]:
+    """Mark the cells that this environment's accepted drift lists with the same status. Returns
+    the findings used (the rest of the file is resolved drift)."""
+    used = set()
+    if cell.status in ("missing", "extra") and accepted.get((d.path, None)) == d.status:
+        cell.accepted = True
+        used.add((d.path, None))
+    for k in d.keys:
+        kc = keys.get(k.key)
+        if kc is not None and kc.status in DEVIATING and accepted.get((d.path, k.key)) == k.status:
+            kc.accepted = True
+            used.add((d.path, k.key))
+    return used
+
+
 def _rank(row: MatrixRow, compared: int) -> tuple:
     if row.odd == 0:
-        return (3, 0)  # only unknowns
+        return (3, 0) if row.unknown else (4, 0)  # only unknowns, then only accepted drift
     if row.odd == 1 and compared > 1:
         return (0, 1)  # the odd one out
     if row.odd < compared:
@@ -122,18 +152,26 @@ def _rank(row: MatrixRow, compared: int) -> tuple:
 
 
 def build(baseline: MatrixBaseline, envs: list[MatrixEnv], results: list[list[SecretDiff] | None],
-          include_equal: bool = False) -> Matrix:
-    """The grid from each environment's pairwise result (None: that comparison failed)."""
+          include_equal: bool = False,
+          accepted: list[dict[tuple[str, str | None], str] | None] | None = None) -> Matrix:
+    """The grid from each environment's pairwise result (None: that comparison failed), with each
+    environment's accepted drift, if any ((path, key) -> status)."""
     n = len(envs)
     secret_cells: dict[str, list[MatrixCell | None]] = {}
     key_cells: dict[tuple[str, str], list[MatrixCell | None]] = {}
     for i, diffs in enumerate(results):
+        acc = accepted[i] if accepted else None
+        used: set[tuple[str, str | None]] = set()
         for d in diffs or []:
             path = d.left_path or d.path
             cell, keys = _cells_of(d)
+            if acc:
+                used |= _accept(d, cell, keys, acc)
             secret_cells.setdefault(path, [None] * n)[i] = cell
             for k, kc in keys.items():
                 key_cells.setdefault((path, k), [None] * n)[i] = kc
+        if acc is not None and diffs is not None:
+            envs[i].accepted_unused = len(set(acc) - used)
 
     def fill(cells: list[MatrixCell | None], key: str | None, path: str) -> list[MatrixCell]:
         out = []
@@ -157,11 +195,13 @@ def build(baseline: MatrixBaseline, envs: list[MatrixEnv], results: list[list[Se
         rows.append(_row(path, key, fill(cells, key, path)))
 
     for i, e in enumerate(envs):
-        counts = dict.fromkeys(("equal", "different", "missing", "extra", "not_compared"), 0)
+        counts = dict.fromkeys(("equal", "different", "missing", "extra", "not_compared", "known"), 0)
         for r in rows:
-            s = r.cells[i].status
-            if s != "absent":
-                counts[s] += 1
+            c = r.cells[i]
+            if c.accepted:
+                counts["known"] += 1
+            elif c.status != "absent":
+                counts[c.status] += 1
         e.counts = counts
 
     compared = sum(e.error is None for e in envs)
@@ -171,20 +211,22 @@ def build(baseline: MatrixBaseline, envs: list[MatrixEnv], results: list[list[Se
         "odd_one_out": sum(1 for r in rows if _rank(r, compared)[0] == 0),
         "differing_rows": sum(1 for r in rows if r.odd),
         "unknown_rows": sum(1 for r in rows if r.unknown and not r.odd),
+        "known_rows": sum(1 for r in rows if r.known and not r.odd and not r.unknown),
     }
     if not include_equal:
-        rows = [r for r in rows if r.odd or r.unknown]
+        rows = [r for r in rows if r.odd or r.unknown or r.known]
     return Matrix(baseline=baseline, environments=envs, rows=rows, summary=summary)
 
 
 def _row(path: str, key: str | None, cells: list[MatrixCell]) -> MatrixRow:
     return MatrixRow(path=path, key=key, cells=cells,
-                     odd=sum(c.status in DEVIATING for c in cells),
+                     odd=sum(c.status in DEVIATING and not c.accepted for c in cells),
+                     known=sum(c.status in DEVIATING and c.accepted for c in cells),
                      unknown=sum(c.status == "not_compared" and c.reason != "the comparison failed" for c in cells))
 
 
 async def run(baseline_name: str, base_client, base_mount: str, base_prefix: str, envs: list[EnvInput],
-              max_secrets: int = 5000, include_equal: bool = False) -> Matrix:
+              max_secrets: int = 5000, include_equal: bool = False, base_kind: str = "vault") -> Matrix:
     """Compare the baseline with each environment and build the grid. The baseline is read once
     for every pair. Raises VaultError only when the baseline itself can't be listed; a failing
     environment is reported in its column."""
@@ -207,18 +249,20 @@ async def run(baseline_name: str, base_client, base_mount: str, base_prefix: str
     finally:
         base.clear()
 
-    baseline = MatrixBaseline(name=baseline_name, mount=base_mount, prefix=base_prefix.rstrip("/"), kv_version=version,
+    baseline = MatrixBaseline(kind=base_kind, name=baseline_name, mount=base_mount, prefix=base_prefix.rstrip("/"), kv_version=version,
                               secret_count=len(tree.secrets), truncated=tree.truncated,
                               denied=[d[len(base_prefix):] for d in tree.denied])
     menvs, results = [], []
     for e, (c, ver, err) in zip(envs, outcomes):
-        me = MatrixEnv(name=e.name, mount=e.mount, prefix=e.prefix.rstrip("/"), kv_version=ver, error=err)
+        me = MatrixEnv(name=e.name, mount=e.mount, prefix=e.prefix.rstrip("/"), kv_version=ver, error=err,
+                       accepted=e.accepted_name if e.accepted is not None else None,
+                       accepted_signer=e.accepted_signer if e.accepted is not None else None)
         if c is not None:
             me.secret_count, me.truncated = len(c.right_tree.secrets), c.right_tree.truncated
             me.denied = [d[len(e.prefix):] for d in c.right_tree.denied]
         menvs.append(me)
         results.append(c.secrets if c is not None else None)
-    return build(baseline, menvs, results, include_equal)
+    return build(baseline, menvs, results, include_equal, [e.accepted for e in envs])
 
 
 async def _kv_version(client, mount: str) -> str:

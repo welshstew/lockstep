@@ -53,6 +53,8 @@ expect_fail "driftCheck.right: set role" -f "$CHART/ci/minimal-values.yaml" --se
 expect_fail "failOn new needs a baseline" -f "$CHART/ci/full-values.yaml" --set driftCheck.baselineConfigMap.name= \
   --set driftCheck.failOn=new
 expect_fail "not both" -f "$CHART/ci/full-values.yaml" --set driftCheck.baseline=x
+expect_fail "requireSigned checks the baseline and waivers" -f "$CHART/ci/full-values.yaml" \
+  --set driftCheck.baselineConfigMap.name= --set driftCheck.waivers=null
 
 expect_fail "is used twice" -f "$CHART/ci/minimal-values.yaml" --set 'profiles[0].name=p' --set 'profiles[1].name=p'
 expect_fail "additional properties" -f "$CHART/ci/minimal-values.yaml" --set 'profiles[0].name=p' --set 'profiles[0].rules.ignore_paths[0]=x'
@@ -73,7 +75,7 @@ fi
 args=$(helm template t "$CHART" -f "$CHART/ci/full-values.yaml" --show-only templates/drift-check.yaml \
   | sed -n '/command: \["lockstep"\]/,/env:/p' | sed -n 's/^ *- //p' \
   | python3 -c 'import sys,json; print(" ".join(["lockstep"] + [json.loads(a) if a.startswith(chr(34)) else a for a in sys.stdin.read().splitlines()]))')
-want="lockstep compare --left-addr=https://vault.prod.example.com --left-mount=app-config --left-prefix=services --left-name=prod --left-auth=kubernetes --left-auth-mount=kubernetes --left-role=lockstep-drift --right-addr=https://vault.staging.example.com --right-mount=app-config --right-prefix=services --right-namespace=team-a --right-name=staging: team a --profile=Prod vs staging --baseline=/etc/lockstep/drift/drift.json --waivers=/etc/lockstep/drift/waivers.yaml --pushgateway=http://pushgateway.monitoring:9091 --pushgateway-job=lockstep --custom-metadata"
+want="lockstep compare --left-addr=https://vault.prod.example.com --left-mount=app-config --left-prefix=services --left-name=prod --left-auth=kubernetes --left-auth-mount=kubernetes --left-role=lockstep-drift --right-addr=https://vault.staging.example.com --right-mount=app-config --right-prefix=services --right-namespace=team-a --right-name=staging: team a --profile=Prod vs staging --baseline=/etc/lockstep/drift/drift.json --waivers=/etc/lockstep/drift/waivers.yaml --require-signed --pushgateway=http://pushgateway.monitoring:9091 --pushgateway-job=lockstep --custom-metadata"
 if [[ $args == "$want" ]]; then echo "ok drift check arguments"; else echo "!! drift check runs: $args"; fail=1; fi
 
 [[ $fail == 0 ]] && echo "CHART CHECK: PASS" || { echo "CHART CHECK: FAIL"; exit 1; }

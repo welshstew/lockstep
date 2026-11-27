@@ -32,6 +32,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from .. import matrix as matrix_mod
 from ..vault import VaultError
 from .connect import AUTH_METHODS, CliError, Target, add_tls_args, cli_settings, connect, env, revoke
+from .drift import cli_keys as drift_keys
 from .formats import _cell, _code, _md
 
 FORMATS = ("text", "json", "yaml", "markdown", "csv")
@@ -64,6 +65,7 @@ class Place(BaseModel):
 class EnvSpec(Place):
     profile: str | None = None  # a profile file, or a name from $LOCKSTEP_PROFILES
     profile_name: str | None = None  # which profile, when the file holds several
+    accepted: str | None = None  # a drift baseline for this pair (lockstep baseline update): accepted drift
 
 
 class MatrixFile(BaseModel):
@@ -87,6 +89,8 @@ def add_parser(sub) -> None:
                         ".json, .yaml, .md, .csv, .txt. Repeat it for several formats")
     m.add_argument("--format", choices=FORMATS, help="the format of every -o, instead of following the extension")
     m.add_argument("--include-equal", action="store_true", help="list the rows where every environment matches too")
+    m.add_argument("--require-signed", action="store_true",
+                   help="refuse an accepted-drift file that isn't signed by a key in $LOCKSTEP_PLAN_TRUSTED_KEYS")
     m.add_argument("-q", "--quiet", action="store_true", help="don't print the grid")
     add_tls_args(m)
 
@@ -170,6 +174,11 @@ async def run(args) -> int:
         prefix = e.prefix if e.prefix is not None else (profile.right_prefix if profile and profile.right_prefix is not None
                                                         else base_prefix)
         places.append((e, _target(e, spec.auth, addr, ns), mount.strip("/"), (prefix or "").strip("/"), rules))
+    keys = drift_keys(settings)
+    accepted = [_accepted(e, args.file, base_mount, base_prefix, m, pre, keys, args.require_signed)
+                for e, _t, m, pre, _r in places[1:]]
+    if args.require_signed and not any(accepted):
+        raise CliError("--require-signed checks the environments' accepted: files, and none has one.")
 
     conns, logins = [], {}
     try:
@@ -182,8 +191,10 @@ async def run(args) -> int:
             logins.setdefault(key, c)
             conns.append(c)
         async with _clients(client_for, conns, settings) as clients:
-            envs = [matrix_mod.EnvInput(name=p.name, client=c, mount=m, prefix=f"{pre}/" if pre else "", rules=r)
-                    for (p, _t, m, pre, r), c in zip(places[1:], clients[1:])]
+            envs = [matrix_mod.EnvInput(name=p.name, client=c, mount=m, prefix=f"{pre}/" if pre else "", rules=r,
+                                        accepted=acc[0] if acc else None, accepted_name=acc[1] if acc else None,
+                                        accepted_signer=acc[2] if acc else None)
+                    for (p, _t, m, pre, r), c, acc in zip(places[1:], clients[1:], accepted)]
             try:
                 result = await matrix_mod.run(b.name, clients[0], base_mount, f"{base_prefix}/" if base_prefix else "",
                                               envs, max_secrets=settings.max_tree_secrets,
@@ -210,6 +221,26 @@ async def run(args) -> int:
     if result.summary["failed"]:
         return 2
     return 1 if result.summary["differing_rows"] or result.summary["unknown_rows"] else 0
+
+
+def _accepted(e: EnvSpec, file: str, bmount: str, bprefix: str, mount: str, prefix: str, keys, require: bool):
+    """The environment's accepted drift as ((path, key) -> status, file name, signer), or None.
+    A signed file is checked (and refused if edited); with `require`, an unsigned one is refused."""
+    if not e.accepted:
+        return None
+    from .drift import check_signed, load_baseline
+    path = _profile_ref(e.accepted, file)
+    b = load_baseline(path)
+    note = check_signed("baseline", b.body(), b.issuer, b.signature, keys, e.accepted, require)
+    for which, (m, pre) in (("baseline", (bmount, bprefix)), (e.name, (mount, prefix))):
+        side = b.left if which == "baseline" else b.right
+        if (side.mount.strip("/"), side.prefix.strip("/")) != (m, pre):
+            raise CliError(f"The accepted drift {e.accepted} for {e.name} is for {which} "
+                           f"{_where(side.mount, side.prefix.strip('/'))}, but the matrix compares {_where(m, pre)}.")
+    signer = None
+    if note and b.issuer and keys.trusted.get(b.issuer.key_id):
+        signer = keys.trusted[b.issuer.key_id][0]
+    return {(f.path, f.key): f.status for f in b.drift}, Path(path).name, signer
 
 
 class _clients:
@@ -251,7 +282,9 @@ def text(m: matrix_mod.Matrix, addrs: dict[str, str]) -> str:
     lines = [f"Baseline: {b.name} ({addrs.get(b.name, '')}) {_where(b.mount, b.prefix)}".replace(" () ", " ")]
     for e in m.environments:
         where = f"{e.name} ({addrs.get(e.name, '')}) {_where(e.mount, e.prefix)}".replace(" () ", " ")
-        lines.append(f"  {where}" + (f": couldn't compare: {e.error}" if e.error else ""))
+        acc = (f", accepted drift {e.accepted}" + (f" (signed by {e.accepted_signer})" if e.accepted_signer else "")
+               if e.accepted else "")
+        lines.append(f"  {where}{acc}" + (f": couldn't compare: {e.error}" if e.error else ""))
     if m.rows:
         width = min(60, max(len(_what(r)) for r in m.rows))
         cols = [max(len(e.name), 7) for e in m.environments]
@@ -259,20 +292,32 @@ def text(m: matrix_mod.Matrix, addrs: dict[str, str]) -> str:
         for r in m.rows:
             what = _what(r)
             what = what if len(what) <= width else "…" + what[-(width - 1):]
-            cells = "  ".join(matrix_mod.SYMBOL[c.status].ljust(w) for c, w in zip(r.cells, cols))
+            cells = "  ".join(_sym(c).ljust(w) for c, w in zip(r.cells, cols))
             lines.append(f"  {what:<{width}}  {cells}".rstrip())
         lines.append("\n= equal  ≠ different  missing: not in this environment  extra: only in this environment  "
-                     "? not compared  · neither has it")
+                     "? not compared  · neither has it" + ("  *: accepted drift" if s_known(m) else ""))
     s = m.summary
     n = s["environments"]
     if s["differing_rows"] or s["unknown_rows"]:
         lines.append(f"\n{s['differing_rows']} row{'s' if s['differing_rows'] != 1 else ''} differ"
                      f"{'s' if s['differing_rows'] == 1 else ''} from {b.name}"
                      + (f"; {s['odd_one_out']} in only one environment (listed first)" if n > 1 and s["odd_one_out"] else "")
-                     + (f"; {s['unknown_rows']} couldn't be told" if s["unknown_rows"] else "") + ".")
+                     + (f"; {s['unknown_rows']} couldn't be told" if s["unknown_rows"] else "")
+                     + (f"; {s['known_rows']} only accepted drift" if s.get("known_rows") else "") + ".")
     else:
-        lines.append(f"\nEvery environment matches {b.name}" + (" (except those that couldn't be compared)." if s["failed"] else "."))
+        lines.append(f"\nEvery environment matches {b.name}"
+                     + (f", apart from accepted drift ({s['known_rows']} row{'s' if s['known_rows'] != 1 else ''})"
+                        if s.get("known_rows") else "")
+                     + (" (except those that couldn't be compared)." if s["failed"] else "."))
     return "\n".join(lines) + "\n"
+
+
+def _sym(c: matrix_mod.MatrixCell) -> str:
+    return matrix_mod.SYMBOL[c.status] + ("*" if c.accepted else "")
+
+
+def s_known(m: matrix_mod.Matrix) -> bool:
+    return any(c.accepted for r in m.rows for c in r.cells)
 
 
 MD = {"equal": "=", "different": "≠ different", "missing": "missing", "extra": "extra", "not_compared": "? not compared",
@@ -292,7 +337,7 @@ def markdown(m: matrix_mod.Matrix) -> str:
         out.append("|---|---|" + "---|" * len(m.environments))
         for r in m.rows:
             out.append(f"| {_code(r.path)} | {_code(r.key) if r.key is not None else '(the secret)'} | "
-                       + " | ".join(MD[c.status] for c in r.cells) + " |")
+                       + " | ".join(MD[c.status] + (" (accepted)" if c.accepted else "") for c in r.cells) + " |")
         out.append("")
     s = m.summary
     out.append(f"{s['differing_rows']} rows differ, {s['odd_one_out']} in only one environment. Values are never shown.")
@@ -304,5 +349,5 @@ def csv_(m: matrix_mod.Matrix) -> str:
     w = csv.writer(buf, lineterminator="\n")
     w.writerow(["secret", "key", *(_cell(e.name) for e in m.environments)])
     for r in m.rows:
-        w.writerow([_cell(r.path), _cell(r.key or ""), *(WORD[c.status] for c in r.cells)])
+        w.writerow([_cell(r.path), _cell(r.key or ""), *(WORD[c.status] + (" (accepted)" if c.accepted else "") for c in r.cells)])
     return buf.getvalue()

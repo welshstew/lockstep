@@ -5,6 +5,43 @@ the image, the Helm chart and the app share one version.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-27
+
+Governance and drift checks you can trust more: several approvers chosen by Vault policy, plans limited to named installations from the UI, rules for how exports are protected, and signed drift baselines and waivers. The Matrix takes an export file as its baseline and accepted drift per environment, Browse and the Matrix get a Connections list, and the dev and demo stacks run Vault 2.2.2.
+
+**Upgrading from 0.11:** nothing to change. New settings are off or permissive by default, unsigned baselines work as before, and old `#/browse/left/…` links still open. For contributors: the test profile's `vault-latest` (`VAULT_LATEST_IMAGE`) is now `vault-legacy`, and `VAULT_IMAGE` sets the dev Vaults' image.
+
+### Added
+
+- **Signed drift baselines and waivers:**
+  - Signing uses the plan key (`LOCKSTEP_PLAN_SIGNING_KEY`): `lockstep baseline update --sign`, `lockstep baseline sign FILE` and `lockstep waivers sign FILE`.
+  - `compare` checks a signed file against `LOCKSTEP_PLAN_TRUSTED_KEYS`, and exits 2 if it was edited or signed by an untrusted key. `--require-signed` refuses unsigned files too.
+  - The rest follow suit:
+    - `lockstep matrix` checks `accepted:` files, and takes `--require-signed`.
+    - The Matrix tab checks a signed accepted-drift file and shows its signer.
+    - The GitHub Action gains the `trusted-keys` and `require-signed` inputs.
+    - The chart's `driftCheck` gains `requireSigned` and `waiversSignature`, and passes `plans.trustedKeys` to the job.
+  - Unsigned files work as before. Design: [continuous drift §8a](docs/proposals/continuous-drift.md).
+- **Choose how exports are protected:** `LOCKSTEP_EXPORT_PROTECTION` (chart `exportProtection`) and a preset's `export_protection` (chart `vaults[].exportProtection`) limit encrypted exports to some ways: `key`, `passphrase`, `age` or `teams` (only the age keys of the configured teams). The Export panel greys out the others and the server refuses them. Connections and `/api/config` list what's allowed (`export_protection`).
+- **Only for, when saving a plan:** a sync or access plan can be limited to named Lockstep installations (its `audience`) from the UI, not only the API. The field suggests this installation's name and the ones it trusts, and points out a name it doesn't know. An opened access plan says who it's for. `POST /api/access/plans` takes `audience`, and `/api/config` lists `plan_servers` (`self` and `trusted`).
+- **Several approvers, and approver groups:** `approvals` (a preset's, or `LOCKSTEP_PLAN_APPROVALS`) now goes up to 5, counted by Vault entity: approving twice is refused, and a repeated approval counts once. `LOCKSTEP_PLAN_APPROVER_POLICIES` and a preset's `approver_policies` let only someone holding one of those Vault policies approve, including policies granted through an identity group. The approver's policies are recorded in the signed approval, so installations a plan travels to check the same thing; approvals given where none were required don't count where they are. Chart: `plans.approverPolicies` and `vaults[].approverPolicies`. The check's `approvals` gains `approver_policies`.
+- **Undo plans after Browse edits and imports:** **Make an undo plan** is offered after a Browse save, after an applied review of staged Browse edits, and after an import (including what `delete_missing` soft-deleted). Browse writes and rollbacks are put back, a secret the edit created is soft-deleted, and a soft-deleted latest version is undeleted; undeletes, destroys and deletes of older versions can't be undone.
+- **Approvals for access plans and undo plans:** `LOCKSTEP_PLAN_APPROVALS` and a preset's `approvals` now cover every kind of plan. An access plan is approved from **Policies → Open an access plan…**, and an undo plan in **Sync plans**, the same way as a sync plan. On a preset with `approvals`, policy, role, group, tuning and engine writes from the Policies tab are refused too, so the Vault changes only through approved plans; **Save as access plan** still works. The `plan.approve` audit event names the kind of plan. API: `POST /api/access/plans/approve`, `POST /api/undo/approve`; the checks return `approvals`.
+- **Matrix from an export file, with accepted drift:** the Matrix's baseline can be an export file (**Open an export file…** in its baseline list), such as last release's export, and each environment can take a drift baseline (`base.json`, from `lockstep baseline update` or a drift check) as **Accepted drift**. Accepted differences are shown, marked `*`, but don't count as odd and are listed last; differences no longer there are counted as resolved. `lockstep matrix` takes `accepted:` per environment, and exits 0 when only accepted drift is left. API: `POST /api/matrix` takes an export as `baseline`, and `accepted` / `accepted_name` per environment.
+- **A release baseline for the environment matrix:** the seed adds `apps-baseline` to Vault A, the last release of the `apps` applications as in prod. The shared profiles **Release ↔ test: apps** and **Release ↔ dev: apps (ELP rename)** compare it with test and dev in the **Matrix**, so dev's changes since the release come first and the rename disappears. `dev/matrix/apps.yaml` runs the same matrix with `lockstep matrix`. The [rename guide](docs/guides/compare-environments-after-a-rename.md) walks through it.
+
+### Changed
+
+- **The dev and demo stacks run Vault 2.2.2** (pinned by digest), up from 1.21.4. The test profile's `vault-latest` became `vault-legacy` (Vault 1.21.4, `VAULT_LEGACY_ADDR`, `root-legacy`), so the policy matcher's 1.x rules are still checked against a real Vault. The weekly `vault-release` workflow now runs the whole stack on the newest release through `VAULT_IMAGE`. Lockstep itself is unchanged and still supports Vault 1.x. Backend, browser, OpenBao and Kubernetes tests pass on 2.2.2.
+- **Demo drift page:** each card's strip is now a fixed 12 hours, one slot per run, so it keeps its length and slides along. It has a time axis, and pointing at a mark shows when that run was and what it found. A full-width screenshot shows the `apps` pair's comparison in Lockstep, and each card links its own under **See this comparison in Lockstep**.
+- **A Connections list on Browse and Matrix:** these two tabs show every signed-in connection in one list across the page, with **Sign in to** for another, instead of the left and right cards. Browse explores the one you pick, its mount and prefix under it; switching is one click, and until you pick one it starts on a side's mount as before. Its jump buttons (**Compare this folder…** and the others) put the folder on the left side. The Matrix's baseline is picked in the matrix (any connection or export file; it starts as the left side's), and **Open in Compare** puts the baseline on the left and the environment on the right. Compare and the other tabs keep their side cards. Browse links drop the side: `#/browse/<mount>/<path>`; older links with `left/` or `right/` still open.
+- **Tabs scroll when they don't fit:** on a narrower window the top bar's tabs no longer push the page wider; arrows at either end scroll them, and the chosen tab stays in view.
+
+### Documentation
+
+- **[Running the demo locally](docs/guides/run-the-lockstep-demo-locally.md):** start the demo with Podman Compose, the seed job and the demo users, reset the data, run a drift check from the image, and use OpenBao as Vault B. Linked from the README, the landing page and its guides.
+- **Demo drift page:** each pair's card has **View base.json**, the baseline the check runs against, to expand or download; the page now refreshes after each run instead of every minute, so an open baseline stays open. The [drift guide](docs/guides/detect-vault-secret-drift-in-ci.md) shows an example baseline.
+
 ## [0.11.0] - 2026-11-27
 
 Drift checks in CI and on a schedule, an environment matrix, and promotion with guardrails: a write policy per Vault, signed plans that travel between installations, approvals and undo. Exports can be encrypted with a passphrase or age keys, and stream.

@@ -116,8 +116,10 @@ def field(card, label: str):
 
 
 def sign_in_userpass(page: Page, which: str, username: str, vault: str | None = None, namespace: str | None = None) -> None:
-    """Sign in through the connect form, as a user would."""
+    """Sign in through a side's connect form, as a user would (on Compare: Browse and Matrix have no side cards)."""
     card = side(page, which)
+    if not card.count():
+        page.get_by_role("tab", name="Compare", exact=True).click()
     if card.get_by_role("combobox").first.input_value() != "__new__" and card.locator(".conn-chip").count():
         card.get_by_role("combobox").first.select_option("__new__")
     if vault:

@@ -91,3 +91,28 @@ def test_changed_target_means_plan_must_be_made_again(page, browser, data, vault
     finally:
         ctx.close()
     assert vault_b.get("app-config", f"{data}/two") is None  # nothing written, not even the unchanged one
+
+
+def test_plan_only_for_named_servers(page, data, tmp_path):
+    """A plan can be limited to named Lockstep servers; a name this server doesn't know is pointed out."""
+    import json
+    connect_both(page, "alice", data)
+    compare(page)
+    key_row(expand(page, "one"), "k").get_by_role("button", name="Copy k from left to right").click()
+    page.get_by_role("button", name="Review & apply…").click()
+    dialog = page.locator("dialog.review")
+    only = dialog.get_by_label("Only for these Lockstep servers")
+    only.fill("prdo-lockstep")
+    expect(dialog.locator(".audience-unknown")).to_contain_text("Not a server this one knows: prdo-lockstep")
+    only.fill("localhost")  # this server's name (from LOCKSTEP_PUBLIC_URL)
+    expect(dialog.locator(".audience-unknown")).to_have_count(0)
+    with page.expect_download() as dl:
+        dialog.get_by_role("button", name="Save as plan").click()
+    path = tmp_path / dl.value.suggested_filename
+    dl.value.save_as(path)
+    assert json.loads(path.read_text())["audience"] == ["localhost"]
+    page.keyboard.press("Escape")
+
+    page.get_by_role("tab", name="Sync plans").click()
+    page.get_by_label("Plan file").set_input_files(path)
+    expect(page.locator(".plan-meta, .plan-head, section").filter(has_text="For localhost").first).to_be_visible()

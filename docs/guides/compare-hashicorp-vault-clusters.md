@@ -51,7 +51,7 @@ Values stay hidden until you turn on **Show values**, and then only for the secr
 The same comparison runs from a terminal with the [`lockstep` CLI](../cli.md), which logs in the way the `vault` CLI does:
 
 ```sh
-pipx install "git+https://github.com/welshstew/lockstep@v0.11.0#subdirectory=backend"
+pipx install "git+https://github.com/welshstew/lockstep@v0.12.0#subdirectory=backend"
 
 lockstep compare \
   --left-addr https://vault-prod.example.com --left-name prod \
@@ -72,7 +72,7 @@ In the web UI, **Read both sides** in the profile editor suggests the mappings a
 
 ### More than two environments
 
-Comparing prod with staging, then with dev, then with each preview environment, one pair at a time, hides the most useful signal: which environment is the odd one out. The **Matrix** tab compares one baseline with up to 12 environments at once, each under its own comparison profile, and puts the rows that differ in only one environment first. **Open in Compare** opens any pair side by side. On the command line, `lockstep matrix environments.yaml` does the same from a file and exits like `compare`, so it works in CI. See [environment matrix](../usage.md#environment-matrix).
+Comparing prod with staging, then with dev, then with each preview environment, one pair at a time, hides the most useful signal: which environment is the odd one out. The **Matrix** tab compares one baseline with up to 12 environments at once, each under its own comparison profile, and puts the rows that differ in only one environment first. **Open in Compare** opens any pair side by side. The baseline can also be an export file, such as the last release's export, and each environment can take a `base.json` of accepted drift. On the command line, `lockstep matrix environments.yaml` does the same from a file and exits like `compare`, so it works in CI. See [environment matrix](../usage.md#environment-matrix).
 
 ### KV v1 mounts and namespaces
 

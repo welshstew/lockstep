@@ -50,7 +50,7 @@ jobs:
       pull-requests: write     # the PR comment
     steps:
       - uses: actions/checkout@v4
-      - uses: welshstew/lockstep@v0.11.0
+      - uses: welshstew/lockstep@v0.12.0
         with:
           left-addr: https://vault-prod.example.com
           left-name: prod
@@ -83,7 +83,7 @@ jobs:
     permissions: {id-token: write, contents: read}
     steps:
       - name: Install the Lockstep CLI
-        run: pipx install "git+https://github.com/welshstew/lockstep@v0.11.0#subdirectory=backend"
+        run: pipx install "git+https://github.com/welshstew/lockstep@v0.12.0#subdirectory=backend"
 
       - name: Get an ID token for Vault (JWT auth)
         run: |
@@ -137,7 +137,38 @@ lockstep baseline update drift.json …        # the same options as compare
 lockstep compare … --baseline drift.json -o drift.sarif -o drift.md
 ```
 
-The baseline holds paths, key names and statuses, never values. `--waivers` accepts single differences with an owner, a reason and an expiry date. `drift.sarif` goes to GitHub code scanning, and `drift.md` is a summary for a pull request comment. See [drift checks in CI](../cli.md#drift-checks-in-ci).
+The baseline holds paths, key names and statuses, never values. A short one looks like this:
+
+```json
+{
+  "lockstep_baseline": 1,
+  "created": "2026-11-27T15:15:32Z",
+  "left": {"name": "vault-a:8200", "mount": "app-config", "prefix": ""},
+  "right": {"name": "vault-b:8200", "mount": "app-config", "prefix": ""},
+  "drift": [
+    {"path": "crypto/keys", "key": "aes_key", "status": "different"},
+    {"path": "payments/api", "key": null, "status": "left_only"}
+  ]
+}
+```
+
+Each entry is one accepted difference: a key that differs, or a secret on one side only (`key` is `null`). The [demo's drift checks](https://getlockstep.cloud/drift/) show each pair's live baseline under **View base.json**. `--waivers` accepts single differences with an owner, a reason and an expiry date. `drift.sarif` goes to GitHub code scanning, and `drift.md` is a summary for a pull request comment. See [drift checks in CI](../cli.md#drift-checks-in-ci).
+
+## Sign the baseline
+
+A baseline is a file in the repository, so anyone who can push could add a line and hide new drift. Sign it, and changing what's accepted needs the signing key too:
+
+```sh
+lockstep plan-key                                  # once: a key pair
+LOCKSTEP_PLAN_SIGNING_KEY=… lockstep baseline update drift.json --sign …
+LOCKSTEP_PLAN_SIGNING_KEY=… lockstep waivers sign waivers.yaml
+```
+
+The check needs only the public key, in `LOCKSTEP_PLAN_TRUSTED_KEYS`:
+- **A signed file is checked.** An edit, a garbled signature, or a key that isn't trusted makes the run exit 2. The summary names the signer.
+- **`--require-signed` refuses an unsigned file too.** With the action, set `require-signed: true` and `trusted-keys: ${{ vars.LOCKSTEP_TRUSTED_KEYS }}`. The keys are public, so a repository variable will do; they don't need to be a secret.
+- **Keep the private key out of the checking job.** It belongs where baseline changes are approved: an admin's machine, or a protected job that runs once a change is reviewed. A job that can sign could sign anything, and the signature would prove nothing.
+- **Signing waivers** puts the issuer and signature at the end of the file. Comments and layout stay, but changing a waiver breaks the signature until someone signs it again.
 
 ## On a schedule, in Kubernetes
 

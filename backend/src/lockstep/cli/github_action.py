@@ -70,9 +70,13 @@ def build(report_dir: Path) -> tuple[list[str], dict[str, str]]:
             args += [f"--{opt}", v]
     if inp("include-custom-metadata") == "true":
         args.append("--custom-metadata")
+    if inp("require-signed") == "true":
+        args.append("--require-signed")
     if inp("ca-cert"):
         args += ["--ca-cert", inp("ca-cert")]
     env: dict[str, str] = {}
+    if inp("trusted-keys"):  # public keys: checking a signed baseline or waivers file needs no secret
+        env["LOCKSTEP_PLAN_TRUSTED_KEYS"] = inp("trusted-keys")
     auth = inp("auth", "jwt")
     same_vault = right_addr.rstrip("/") == left_addr.rstrip("/") and inp("right-namespace") in ("", inp("left-namespace"))
     if auth == "jwt":

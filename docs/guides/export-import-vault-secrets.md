@@ -46,7 +46,7 @@ lockstep export --vault-addr https://vault-prod.example.com --mount app-config -
 jq -r .ciphertext services.json | age -d -i ~/.config/age/key.txt > services.plain.json
 ```
 
-Admins name the teams with `LOCKSTEP_EXPORT_RECIPIENTS` ([configuration](../configuration.md)).
+Admins name the teams with `LOCKSTEP_EXPORT_RECIPIENTS`. They can also allow only some kinds of protection, with `LOCKSTEP_EXPORT_PROTECTION` or per Vault (say, a team's age keys only for prod). The web app then greys out the rest ([configuration](../configuration.md)).
 
 ### What's in the file
 

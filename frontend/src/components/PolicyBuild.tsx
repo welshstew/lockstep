@@ -4,6 +4,7 @@ import type { ExplainResult, PolicyCan, PolicyDraft, PolicyFinding, PolicyProfil
 import type { ScanTarget } from "./ExpiryView";
 import { AccessApply } from "./AccessApply";
 import { saveAccessPlan } from "../accessPlan";
+import { AudienceField, parseAudience } from "./AudienceField";
 import { ExplainResultView } from "./PoliciesView";
 
 const DRAFTS_KEY = "lockstep.policyDrafts";
@@ -379,6 +380,7 @@ function ExportDialog({ drafts, target, canApply, onClose }: { drafts: PolicyDra
   const bad = useMemo(() => drafts.filter((d, i) => chosen.has(i) && !NAME.test(d.name)), [drafts, chosen]);
   const [writing, setWriting] = useState<{ name: string; text: string }[] | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
+  const [audience, setAudience] = useState(""); // the Lockstep servers that may apply a saved plan
   const texts = () => Promise.all(drafts.filter((_, i) => chosen.has(i)).map(async (d) => ({
     name: d.name, text: d.hcl ?? (await api.buildPolicy(d.mount, d.name, d.rules.filter((r) => r.where.trim() && r.can.length))).hcl })));
 
@@ -447,12 +449,13 @@ function ExportDialog({ drafts, target, canApply, onClose }: { drafts: PolicyDra
         {saved && <div className="notice info" role="status">Saved access plan {saved}. Someone with the rights opens it in Policies → Open an access plan… on this Lockstep server.</div>}
       </div>
       <footer className="review-foot">
+        <AudienceField value={audience} onChange={setAudience} />
         <span className="spacer" />
         <button type="button" className="btn ghost" onClick={() => ref.current?.close()}>Cancel</button>
         <button type="button" className="btn" disabled={busy || !chosen.size || bad.length > 0}
                 title="A signed file for someone with the rights to check and apply these in Lockstep"
                 onClick={async () => {
-                  try { setSaved(await saveAccessPlan({ conn_id: target.conn_id, policies: await texts() })); } catch (e) { setError((e as Error).message); }
+                  try { setSaved(await saveAccessPlan({ conn_id: target.conn_id, policies: await texts() }, parseAudience(audience))); } catch (e) { setError((e as Error).message); }
                 }}>Save as access plan</button>
         {canApply && (
           <button type="button" className="btn" disabled={busy || !chosen.size || bad.length > 0}

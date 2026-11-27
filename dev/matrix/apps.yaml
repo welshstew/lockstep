@@ -1,0 +1,15 @@
+# The demo's environment matrix: the last release (apps-baseline) against test and dev.
+# Profiles are the shared ones in compose.yaml (LOCKSTEP_PROFILES). See docs/guides/compare-environments-after-a-rename.md.
+auth: {method: userpass, user: bob}
+baseline:
+  name: release
+  addr: http://vault-a:8200
+  mount: apps-baseline
+environments:
+  - name: test
+    mount: apps
+    profile: "Release ↔ test: apps"
+  - name: dev
+    addr: http://vault-b:8200
+    mount: apps
+    profile: "Release ↔ dev: apps (ELP rename)"

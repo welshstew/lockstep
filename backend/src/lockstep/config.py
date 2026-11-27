@@ -14,6 +14,11 @@ from .policy.suggest import SuggestPattern
 from .rules import Profile
 
 
+# Ways to protect an encrypted export: a one-time key, a passphrase, any age keys, or only the age
+# keys of the teams in LOCKSTEP_EXPORT_RECIPIENTS ("age" includes the teams).
+ExportProtection = Literal["key", "passphrase", "age", "teams"]
+
+
 class PresetConnection(BaseModel):
     name: str
     url: str  # address the backend uses to reach Vault
@@ -25,10 +30,14 @@ class PresetConnection(BaseModel):
     allow_destroy: bool | None = None  # None: LOCKSTEP_ALLOW_DESTROY decides
     write_paths: list[str] = []  # if set, writes only to these paths (`kv/apps/**`, `sys/policies/acl/app-*`)
     deny_paths: list[str] = []  # never write to these, even inside write_paths
-    # 1: secrets are written here only through sync plans someone other than their creator approved
-    approvals: int = Field(default=0, ge=0, le=1)
+    # 1 or more: secrets are written here only through plans that many people other than their creator approved
+    approvals: int = Field(default=0, ge=0, le=5)
+    # If set, only someone holding one of these Vault policies here can approve plans writing to this Vault
+    approver_policies: list[str] = Field(default=[], max_length=20)
     # Exports from this Vault: "any", "encrypted" or "off". None: LOCKSTEP_EXPORT_MODE decides
     export: Literal["any", "encrypted", "off"] | None = None
+    # How an encrypted export from this Vault may be protected (on top of LOCKSTEP_EXPORT_PROTECTION). Empty: any way
+    export_protection: list[ExportProtection] = Field(default=[], max_length=4)
 
 
 class ExportTeam(BaseModel):
@@ -77,6 +86,9 @@ class Settings(BaseSettings):
     export_mode: Literal["any", "encrypted", "off"] = "encrypted"
     # Teams an export can be encrypted to, by name: their members open it with their own age key
     export_recipients: Annotated[list[ExportTeam], NoDecode] = []
+    # How encrypted exports may be protected: key, passphrase, age, teams (comma-separated). Empty: any way.
+    # A preset's "export_protection" narrows it for that Vault. Plain exports are LOCKSTEP_EXPORT_MODE's business.
+    export_protection: Annotated[list[ExportProtection], NoDecode] = []
     # Destroying secrets (every version and the metadata, can't be undone) from the compare view.
     # Vault's policies still decide who may; this turns the feature off for everyone.
     allow_destroy: bool = True
@@ -96,9 +108,12 @@ class Settings(BaseSettings):
     plan_trusted_keys: Annotated[list[TrustedKey], NoDecode] = []
     plan_issuer: str = ""
     plan_ttl_hours: int = Field(default=168, gt=0, le=24 * 90)
-    # 1: a sync plan applied here needs an approval from someone other than its creator (four-eyes,
-    # as a check against mistakes). A preset's "approvals" asks for it for that Vault only.
-    plan_approvals: int = Field(default=0, ge=0, le=1)
+    # 1 or more: a plan (sync, access or undo) applied here needs that many approvals from different people other
+    # than its creator (four-eyes, as a check against mistakes). A preset's "approvals" asks for it for that Vault only.
+    plan_approvals: int = Field(default=0, ge=0, le=5)
+    # If set, an approval counts only from someone holding one of these Vault policies (directly or through an
+    # identity group) on each Vault the plan writes. A preset's "approver_policies" adds to it for that Vault.
+    plan_approver_policies: Annotated[list[str], NoDecode] = []
     # Refuse every write (copies, edits, imports, plan applies, destroys): for look-only installs
     read_only: bool = False
     # Offer a Copy button next to shown values (an admin may prefer not to)
@@ -138,7 +153,7 @@ class Settings(BaseSettings):
     k8s_auth_mount: str = "kubernetes"  # default shown in the UI
     k8s_auth_roles: Annotated[list[str], NoDecode] = []  # if set, only these Vault role names may be used
 
-    @field_validator("k8s_auth_roles", "custom_url_patterns", mode="before")
+    @field_validator("k8s_auth_roles", "custom_url_patterns", "plan_approver_policies", "export_protection", mode="before")
     @classmethod
     def _parse_list(cls, v):
         if isinstance(v, str):

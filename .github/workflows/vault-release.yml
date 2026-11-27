@@ -1,10 +1,10 @@
 # Weekly: does Lockstep's policy matcher still agree with the newest Vault release?
 #
 # Finds the latest Vault release (api.releases.hashicorp.com), starts it as the compose stack's
-# vault-latest, and runs the matcher's differential tests against it (tests/test_policy_acl.py)
+# vault-a and vault-b (VAULT_IMAGE), seeds them, and runs the matcher's differential tests (tests/test_policy_acl.py)
 # with a new random seed and four times the usual trials. On a disagreement it opens (or comments
 # on) an issue; when a newer release than the pinned one passes, the summary says to bump the pin
-# in compose.yaml (vault-latest) and, if its evaluation rules changed, lockstep/policy/acl.py.
+# in compose.yaml (VAULT_IMAGE's default) and, if its evaluation rules changed, lockstep/policy/acl.py.
 name: vault-release
 
 on:
@@ -52,7 +52,7 @@ jobs:
           if [[ -n ${WANTED:-} ]]; then v=$WANTED
           else v=$(curl -fsS https://api.releases.hashicorp.com/v1/releases/vault/latest | jq -r .version); fi
           [[ $v =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::unexpected version '$v'"; exit 1; }
-          pinned=$(sed -n 's|.*VAULT_LATEST_IMAGE:-docker.io/hashicorp/vault:\([0-9.]*\)}.*|\1|p' compose.yaml)
+          pinned=$(sed -n 's|.*VAULT_IMAGE:-docker.io/hashicorp/vault:\([0-9.]*\)@.*|\1|p' compose.yaml)
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "pinned=$pinned" >> "$GITHUB_OUTPUT"
           if ! docker pull -q "docker.io/hashicorp/vault:$v" >/dev/null; then
@@ -66,7 +66,7 @@ jobs:
         id: run
         if: steps.v.outputs.available == 'true'
         env:
-          VAULT_LATEST_IMAGE: docker.io/hashicorp/vault:${{ steps.v.outputs.version }}
+          VAULT_IMAGE: docker.io/hashicorp/vault:${{ steps.v.outputs.version }}
           FUZZ_SEED: ${{ github.run_number }}
         run: |
           $COMPOSE --profile test build tests
@@ -86,7 +86,7 @@ jobs:
             echo
             if [[ $OUTCOME == success ]]; then
               echo "Agrees with Vault $V (seed offset ${{ github.run_number }}, 4x trials)."
-              [[ $V != "$PINNED" ]] && echo "Newer than the pinned $PINNED: bump \`vault-latest\` in compose.yaml."
+              [[ $V != "$PINNED" ]] && echo "Newer than the pinned $PINNED: bump VAULT_IMAGE's default (vault-a, vault-b) in compose.yaml and deploy/demo/compose.yaml."
             else
               echo "**Disagrees with Vault $V.** See the log below and the issue opened for it."
             fi

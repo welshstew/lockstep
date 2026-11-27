@@ -300,4 +300,4 @@ def test_the_builtin_default_policy_raises_no_admin_warnings(client, connect):
 def test_explain_reports_the_vault_version(client, connect):
     root = connect(token="root-a")
     out = explain(client, root, names=["lockstep-limited"])
-    assert out["vault_version"].startswith("1.21") and out["evaluation"] == "Vault 2.2.1 or earlier"
+    assert out["vault_version"].startswith("2.") and out["evaluation"] == "Vault 2.2.2 or later"

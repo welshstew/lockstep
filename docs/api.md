@@ -11,7 +11,7 @@ The web UI uses this API, and you can script against it too. Interactive documen
 
 | Method & path | Purpose |
 |---|---|
-| `GET /api/config` | Preset Vaults (server-side URLs hidden), whether custom URLs and Kubernetes auth are available |
+| `GET /api/config` | Preset Vaults (server-side URLs hidden), whether custom URLs and Kubernetes auth are available, and `plan_servers`: this installation's name in plans and the names it trusts |
 | `GET /api/connections` | This session's connections, with live token status |
 | `POST /api/connections` | Add one: `{"preset_id": 0 \| "url": "…", "namespace"?, "auth": {...}}`, where `auth` is `{"method":"token","token"}`, `{"method":"userpass"\|"ldap","username","password","mount"?}` or `{"method":"kubernetes","role","mount"?}`. `202` with `{"mfa_required": true, "constraints"}` when Vault asks for a second factor |
 | `GET /api/connections/mfa` | The second factors a sign-in is waiting for (after a `202` from `POST /api/connections`, or `?mfa=1` after an OIDC redirect) |
@@ -69,7 +69,7 @@ The web UI uses this API, and you can script against it too. Interactive documen
 | `GET /api/identity/groups?conn_id=` | Identity groups with type, policies, member entities (by name), member group count and external alias |
 | `POST /api/identity/compare-groups` | `{"left": conn_id, "right": conn_id, "profile"?}`: groups paired by name (or the profile's mappings), compared field by field |
 | `POST /api/access/preview` | `{"conn_id", "policies"?: [{"name", "text"}], "roles"?: [{"kind", "mount", "name", "body"}], "delete_policies"?: [...], "delete_roles"?: [{"mount", "name"}]}`: per item, `action` (`new`, `change`, `same`, `delete`), a `diff` against Vault, whether the token is `allowed`, a `hash` of what's there now, problems and warnings |
-| `POST /api/access/plans` | The same body as a preview: returns a signed access plan (`format` `lockstep.access-plan`), with the changes, the target Vault, `created_by` and the hashes of what's there now. Allowed even when `LOCKSTEP_POLICY_APPLY=off` |
+| `POST /api/access/plans` | The same body as a preview, plus an optional `"audience"` (installation names that may apply it): returns a signed access plan (`format` `lockstep.access-plan`), with the changes, the target Vault, `created_by` and the hashes of what's there now. Allowed even when `LOCKSTEP_POLICY_APPLY=off` |
 | `POST /api/access/plans/check` | `{"conn_ids": [...], "plan": {...}}`: verifies the signature, picks the signed-in connection to the plan's Vault (the one with the fewest denials), and previews; items changed since the plan are `conflict`. Returns `plan` (without the changes), `conn_id`, `items`. `400` edited or foreign plan, `409` not signed in to its Vault |
 | `POST /api/access/plans/apply` | The same plus `"confirm": true`, with the checked `conn_id` first: applies, skipping conflicts. Guarded like `/api/access/apply` |
 | `POST /api/access/apply` | The same plus `"expected": {item id: hash}` and `"confirm": true`. Items that changed since the preview are skipped as `conflict`. 403 when `LOCKSTEP_READ_ONLY` or `LOCKSTEP_POLICY_APPLY=off` |

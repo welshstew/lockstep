@@ -36,6 +36,8 @@ def test_kv1_is_compared_and_copied_from_but_never_to(page, sandbox, kv1_mount, 
     expect(r.get_by_role("button", name="Copy password from left to right")).to_be_visible()
     expect(r.get_by_role("button", name="Copy password from right to left")).to_have_count(0)  # never into KV v1
 
-    # Other tabs leave the KV v1 side out and say why
+    # Other tabs leave the KV v1 side out and say why; Browse starts on the KV v2 side instead
     page.get_by_role("tab", name="Browse", exact=True).click()
+    expect(page.locator(".browse .scope")).to_contain_text("app-config")
+    page.get_by_role("tab", name="Certificate expiry", exact=True).click()
     expect(page.locator(".kv1-note")).to_contain_text("this tab needs a KV v2 mount")

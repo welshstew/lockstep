@@ -21,5 +21,5 @@ def test_read_only_preset_hides_writes(page, sandbox, vault_a, vault_b):
     expect(r.get_by_role("button", name="Copy password from left to right")).to_have_count(0)  # never into it
 
     page.get_by_role("tab", name="Browse", exact=True).click()
-    page.get_by_role("group", name="Which side to browse").get_by_role("button", name=re.compile("read-only")).click()
+    page.get_by_role("radiogroup", name="Connection to browse").get_by_role("radio", name=re.compile("read-only")).click()
     expect(page.locator(".badge", has_text="read-only here")).to_be_visible()

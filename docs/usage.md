@@ -21,7 +21,7 @@ Both sides can be the same Vault with different mounts or prefixes. ⇄ swaps th
 
 ## Browse
 
-**Browse**, the first tab and the one Lockstep opens on, explores one side's KV v2 mount. It starts at the mount and prefix chosen in the side card. When both sides have a Vault chosen, the switch at the top picks which one to browse.
+**Browse**, the first tab and the one Lockstep opens on, explores one connection's KV v2 mount at a time. The **Connections** list across the top of the tab shows every signed-in connection: pick one, then its KV v2 secret engine and, optionally, a path prefix. Switching to another is one click, and a connection a side already uses starts on that side's mount. **Sign in to** adds another Vault without leaving the tab. Until you pick one, Browse starts on the left side's mount (or the right's).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/20-browse-dark.png">
@@ -42,7 +42,7 @@ Both sides can be the same Vault with different mounts or prefixes. ⇄ swaps th
 - **YAML** shows the whole secret as YAML, with values masked unless shown.
 - **Limited access:** if you may see a secret's structure but not its values (Vault's `subkeys`), Browse shows the key names. If you may `patch` but not `update` a secret, your edits are sent as a patch (only the changed keys, with check-and-set), so you can change keys without reading the others.
 - **Snippets** shows the `vault kv` commands, a `curl` call and a Terraform `vault_kv_secret_v2` block for the secret, and for your unsaved changes (as `vault kv patch`, or `put` when keys are removed), with placeholders instead of values. **Generate** in a value editor fills in a random 32-character value.
-- **Links:** the address names the side, mount and secret (`#/browse/left/app-config/payments/db`), so the back button works and a link can be shared. It holds no connection or token: whoever opens it uses their own sign-in. **Compare this folder…**, **Scan for certificates**, **Why can I…?** and **Export this folder…** open the other tabs on the secret's folder.
+- **Links:** the address names the mount and secret (`#/browse/app-config/payments/db`), so the back button works and a link can be shared. It holds no connection or token: whoever opens it uses their own sign-in. Older links that also name a side (`#/browse/left/…`) still open. **Compare this folder…**, **Scan for certificates**, **Why can I…?** and **Export this folder…** put the secret's folder on the left side and open that tab.
 
 ### Editing
 
@@ -167,7 +167,7 @@ Each pick is struck through straight away and listed in the bar above the result
 
 ## Environment matrix
 
-The **Matrix** tab compares one baseline with several environments at once, for example prod against staging, dev, test and preview environments. The left side is the baseline. Add an environment for each place to compare with it: a name, a signed-in connection, a KV mount, a path prefix and, optionally, the comparison profile for that pair. The right side is offered as the first environment. To add a Vault you aren't signed in to yet, sign in to it on the right side: every signed-in connection is offered.
+The **Matrix** tab compares one baseline with several environments at once, for example prod against staging, dev, test and preview environments. Like Browse, the tab has a **Connections** list across the top instead of the left and right side cards: every signed-in connection, and **Sign in to** for another. The baseline is picked in the matrix: any signed-in connection with a KV mount and path prefix, or an export file (**Open an export file…** in the baseline list), such as last release's export or a backup. It starts as the left side's. Add an environment for each place to compare with it: a name, a signed-in connection, a KV mount, a path prefix and, optionally, the comparison profile for that pair. The right side is offered as the first environment. **Open in Compare** puts the baseline on the left and that environment on the right.
 
 **Compare all** compares the baseline with each environment, up to 12, and shows a grid. There's a row per secret and per key, and a column per environment:
 
@@ -180,7 +180,11 @@ The **Matrix** tab compares one baseline with several environments at once, for 
 | ? | couldn't be compared: unreadable, a keystore without its password, or the comparison failed |
 | · | neither has it |
 
+**Accepted drift** (optional, per environment) is a drift baseline for that pair: the `base.json` a drift check uses, written by `lockstep baseline update`. A difference it lists with the same status is still shown, marked `*` and greyed, but doesn't count: it doesn't make the environment the odd one out, and rows with only accepted drift come last. With another status (a key that was missing and now differs) it counts as new. A drift file for other mounts or prefixes is refused. Under the environment's name, the grid says which file it used and how many of its differences have since been resolved.
+
 Rows that differ in only one environment come first, marked on the left: one environment out of line is the likeliest mistake. Rows where every environment differs come last, because those are usually meant to differ. Hover over a cell for the reason. **Open in Compare** under an environment's name opens that pair side by side, with its profile, to look closer or copy values. **Download CSV** saves the grid. Values are never shown or saved. The environments you set up are remembered in this browser, without tokens.
+
+To try it on the demo data, compare the last release (Vault A's `apps-baseline`) with test and dev: see [Every environment against the release](guides/compare-environments-after-a-rename.md#every-environment-against-the-release-the-matrix).
 
 `lockstep matrix` does the same from a file, for scripts and CI. See [Command line](cli.md#environment-matrix).
 
@@ -303,7 +307,7 @@ By default a plan is signed with a key derived from `LOCKSTEP_SESSION_KEY`, so i
 only on a Lockstep with the same session key, and changing that key invalidates existing
 plans. To make a plan on one installation (dev) and apply it on another (prod), give the
 installations an Ed25519 key pair: see [plans between installations](configuration.md#plans-between-installations).
-A plan can also name the installations that may apply it (`audience` in the API).
+A plan can also name the installations that may apply it: **Only for**, next to **Save as plan** (and **Save as access plan**), takes their names, comma-separated. It suggests this installation's name and those it trusts, and points out a name it doesn't know, because only an installation with that exact name can apply the plan. Empty means any installation that trusts this one.
 **Made on** shows which installation made it. A plan from another installation
 can't check typed values against its creator's, so you type each of them twice.
 
@@ -329,12 +333,14 @@ and make a new plan for what's left.
 **Approvals.** Where the server asks for them (see [four-eyes approvals](configuration.md#four-eyes-approvals)),
 **Check plan** shows whether the plan is approved, and **Apply plan** waits until someone other
 than its creator has approved it. To approve, open the plan, **Check plan**, then **Approve**:
-the approved file downloads, ready to pass on to whoever applies it.
+the approved file downloads, ready to pass on to whoever applies it. Undo plans and access plans
+take approvals the same way.
 
 ### Undo an apply
 
 After copies or a plan are applied, **Make an undo plan** (in the review dialog, or under a
-plan's result in **Sync plans**) downloads a signed file that undoes them. For each secret
+plan's result in **Sync plans**) downloads a signed file that undoes them. It's offered after an
+import too, and in Browse after a save or an applied review of staged edits. For each secret
 written, it records the version the apply replaced and the version it left. It holds no values.
 
 Open it in **Sync plans**, **Check undo plan**, tick the confirmation and **Apply undo plan**:
@@ -342,6 +348,8 @@ Open it in **Sync plans**, **Check undo plan**, tick the confirmation and **Appl
 - **A secret that was overwritten** gets its old version back: Lockstep reads that version from
   Vault's KV history and writes it again as a new version, with check-and-set.
 - **A secret the apply created** is soft-deleted, and **one it soft-deleted** is undeleted.
+- **From Browse,** writes and rollbacks are undone this way, and a soft-delete of the latest
+  version is undeleted. An undelete, a destroy, or deleting older versions can't be.
 - **Nothing is undone** for a secret someone has written since the apply, or whose old version
   has been deleted or destroyed (KV v2 keeps 10 versions by default). Like a plan, the check is
   all or nothing, and applying stops at the first secret that isn't put back.
@@ -436,6 +444,8 @@ The **Export & import** tab moves a whole secret engine, values included, throug
    - **A passphrase** you choose, typed twice, at least 12 characters. Share it apart from the file.
    - **age public keys** (`age1…`): pick teams the admin set up, or paste keys. Whoever holds a matching age key opens the file, in Lockstep or with the `age` tool, so no key or passphrase has to be passed around.
    - **Nothing (plain text)**, only where the admin allows plain exports. The file then holds every value in plain text, and the tool says so before you export one.
+
+   An admin can allow only some of these (`LOCKSTEP_EXPORT_PROTECTION`, or per Vault): the others are greyed out, marked *not allowed here*. With **teams only**, the age choice reads **A team's age keys** and takes no pasted keys.
 
 The file (`lockstep-export-<vault>-<mount>-<prefix>-<time>[.encrypted].json`) holds each secret's current data, version and update time, plus where it came from, the rules used, and what was left out or couldn't be read. Its format is described by a [JSON Schema](https://getlockstep.cloud/schemas/lockstep-export-v1.json).
 
@@ -663,6 +673,7 @@ When you can't write policies or roles yourself, **Save as access plan** prepare
 - **Applying:** the person applying signs in to that Vault on either side and chooses **Policies → Open an access plan…**. Lockstep checks the plan was made by this server and not edited. It finds the right connection (the one with the rights, if both sides are on that Vault) and shows the same review as a write, with diffs.
 - **Changes since:** anything that changed in Vault after the plan was made is shown as *Changed* and skipped.
 - **Audit:** writes from a plan are logged with its `plan_id`, and making a plan is logged as `access.plan`.
+- **Approvals:** where the server asks for them ([four-eyes approvals](configuration.md#four-eyes-approvals)), the review shows whether the plan is approved, and **Write** waits until someone other than its creator has opened it and chosen **Approve** (the approved file downloads). On a Vault whose preset asks for approvals, policies and roles change only through approved access plans: a direct write is shown as not allowed, with **Save as access plan** still offered.
 
 
 <picture>

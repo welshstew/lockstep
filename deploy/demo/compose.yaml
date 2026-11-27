@@ -16,7 +16,7 @@ x-common: &common
 
 x-vault: &vault
   <<: *common
-  image: docker.io/hashicorp/vault:1.21.4
+  image: docker.io/hashicorp/vault:2.2.2@sha256:dfa48c2fa2b0099ccb47681ec5c4804bf5aec9d6879ecfee07ad4b92a5427ad6
   cap_add: [IPC_LOCK]
   mem_limit: 384m
   healthcheck:
@@ -257,6 +257,19 @@ services:
           "left_mount": "apps", "right_mount": "apps",
           "rules": {"mappings": [{"left": "enterprise-logging-app/**", "right": "ELP/**"}],
                     "rewrites": [{"left": "enterprise-logging-app", "right": "elp"}, {"left": "test", "right": "dev"}],
+                    "ignore_keys": [{"key": "api_token", "path": "**"}, {"key": "log_level", "path": "**"},
+                                    {"key": "tls.*", "path": "**/certs"}]}},
+         {"name": "Release ↔ test: apps",
+          "description": "The last release (apps-baseline in Vault A, prod values) against test (apps in Vault A). For the environment matrix: rewrites prod to test; tokens, log level and TLS material differ per environment by design",
+          "left_mount": "apps-baseline", "right_mount": "apps",
+          "rules": {"rewrites": [{"left": "prod", "right": "test"}],
+                    "ignore_keys": [{"key": "api_token", "path": "**"}, {"key": "log_level", "path": "**"},
+                                    {"key": "tls.*", "path": "**/certs"}]}},
+         {"name": "Release ↔ dev: apps (ELP rename)",
+          "description": "The last release (apps-baseline in Vault A, prod values) against dev (apps in Vault B), where enterprise-logging-app is now ELP. For the environment matrix: maps the folder, rewrites the name and prod to dev; tokens, log level and TLS material differ per environment by design",
+          "left_mount": "apps-baseline", "right_mount": "apps",
+          "rules": {"mappings": [{"left": "enterprise-logging-app/**", "right": "ELP/**"}],
+                    "rewrites": [{"left": "enterprise-logging-app", "right": "elp"}, {"left": "prod", "right": "dev"}],
                     "ignore_keys": [{"key": "api_token", "path": "**"}, {"key": "log_level", "path": "**"},
                                     {"key": "tls.*", "path": "**/certs"}]}}]
       # One client can't use up the app: measured capacity is about 20 requests a second

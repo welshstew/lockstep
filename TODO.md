@@ -6,24 +6,24 @@ Open items left over from the proposals in [docs/proposals](docs/proposals/). Ea
 
 From [promotion-governance.md](docs/proposals/promotion-governance.md).
 
-- [ ] **Approvals for access plans and undo plans.** Only sync plans take approvals today. A preset's `approvals` doesn't cover policy and role writes either.
-- [ ] **Undo plans for Browse edits and imports.** Today undo plans are offered only after copies and sync plans are applied.
-- [ ] **Approver groups and more than one approver.** Approvals are one person, compared by Vault entity.
-- [ ] **`audience` in the UI.** A plan can name the installations that may apply it, but only through the API.
-- [ ] **Require one kind of export protection.** Admins can require encryption, but not a particular kind (for example age keys only).
+- [x] **Approvals for access plans and undo plans**, and a preset's `approvals` covering policy and role writes from the Policies tab.
+- [x] **Undo plans for Browse edits and imports.**
+- [x] **Approver groups and more than one approver:** up to 5 approvals from different people, and approver policies (granted through Vault groups).
+- [x] **`audience` in the UI:** **Only for** when saving a sync or access plan, with the known server names suggested.
+- [x] **Require one kind of export protection:** `LOCKSTEP_EXPORT_PROTECTION` and a preset's `export_protection` (key, passphrase, age, teams).
 
 ## Continuous drift
 
 From [continuous-drift.md](docs/proposals/continuous-drift.md).
 
-- [ ] **Try the GitHub Action on real GitHub** (`uses: welshstew/lockstep@v0.11.0`). It's tested locally, but has never run in a GitHub workflow.
-- [ ] **Sign drift baselines** with the plan signing key, so a baseline file can't be edited unnoticed.
+- [ ] **Try the GitHub Action on real GitHub** (`uses: welshstew/lockstep@v0.12.0`). It's tested locally, but has never run in a GitHub workflow.
+- [x] **Sign drift baselines** (and waivers) with the plan key: `--sign`, `baseline sign`, `waivers sign`, `--require-signed`.
 - [ ] **Scheduling inside the app** (phase 7). It was skipped: the chart's `driftCheck` CronJob and CI cover scheduled checks.
 
 ## Vault Enterprise and the dev stack
 
 - [ ] **Licence expiry** ([vault-enterprise.md](docs/proposals/vault-enterprise.md)). This is blocked until there's an Enterprise licence to test with. Namespaces are done and tested on OpenBao.
-- [ ] **Move the dev stack to Vault 2.x** ([vault-2-dev-stack.md](docs/proposals/vault-2-dev-stack.md)).
+- [x] **Move the dev stack to Vault 2.x** ([vault-2-dev-stack.md](docs/proposals/vault-2-dev-stack.md)): 2.2.2, with `vault-legacy` (1.21.4) for the 1.x matcher rules. The screenshots follow in their own PR.
 
 ## Ideas, not started
 

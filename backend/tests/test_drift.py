@@ -227,3 +227,84 @@ def test_pushgateway_grouping_and_methods():
     bad = httpx.MockTransport(lambda r: httpx.Response(400, text="pushed metrics are invalid"))
     with pytest.raises(CliError, match="answered 400: pushed metrics are invalid"):
         pushgateway.push("http://pg:9091", "j", {}, "", transport=bad)
+
+
+# --------------------------------------------------------------------------- signed baselines and waivers
+
+
+def _keys(sign=True, trust=True, name="release"):
+    from lockstep import plansign
+    private, public = plansign.generate()
+    signer = plansign._keys(private, (), name)  # signs; trusts only itself
+    checker = plansign._keys("", ((name, public),) if trust else (), "ci")  # the public key only
+    return (signer if sign else None), checker
+
+
+def test_signed_baseline_is_checked_and_an_edit_is_caught(tmp_path):
+    signer, checker = _keys()
+    b = drift.sign_baseline(drift.baseline_of(report(DB, QUEUE)), signer)
+    (tmp_path / "base.json").write_text(drift.dump_baseline(b))
+    loaded = drift.load_baseline(str(tmp_path / "base.json"))
+    assert loaded.issuer.name == "release" and loaded.signature.startswith("ed25519:")
+    note = drift.check_signed("baseline", loaded.body(), loaded.issuer, loaded.signature, checker, "base.json", True)
+    assert note == f"base.json: signed by release (key {loaded.issuer.key_id})."
+
+    # Accepting more drift by hand breaks the signature
+    raw = json.loads((tmp_path / "base.json").read_text())
+    raw["drift"].append({"path": "new-secret", "status": "left_only"})
+    edited = drift.Baseline.model_validate(raw)
+    with pytest.raises(CliError, match="was changed after release signed it"):
+        drift.check_signed("baseline", edited.body(), edited.issuer, edited.signature, checker, "base.json", False)
+    # So does a garbled signature, or a key the checker doesn't trust
+    with pytest.raises(CliError, match="can't read"):
+        drift.check_signed("baseline", loaded.body(), loaded.issuer, "nope", checker, "base.json", False)
+    _, stranger = _keys()
+    with pytest.raises(CliError, match="isn't a trusted key here"):
+        drift.check_signed("baseline", loaded.body(), loaded.issuer, loaded.signature, stranger, "base.json", False)
+    # Signed as a baseline, it isn't a signed waivers file
+    with pytest.raises(CliError, match="was changed after"):
+        drift.check_signed("waivers", loaded.body(), loaded.issuer, loaded.signature, checker, "base.json", False)
+
+
+def test_unsigned_files_and_no_trusted_keys():
+    signer, checker = _keys()
+    _, nobody = _keys(trust=False)
+    b = drift.baseline_of(report(DB))
+    assert drift.check_signed("baseline", b.body(), None, None, checker, "base.json", False) is None  # as before
+    with pytest.raises(CliError, match="isn't signed, and signed files are required"):
+        drift.check_signed("baseline", b.body(), None, None, checker, "base.json", True)
+    drift.sign_baseline(b, signer)
+    assert "not checked" in drift.check_signed("baseline", b.body(), b.issuer, b.signature, nobody, "base.json", False)
+    with pytest.raises(CliError, match="needs the signer's public key"):
+        drift.check_signed("baseline", b.body(), b.issuer, b.signature, nobody, "base.json", True)
+    with pytest.raises(CliError, match="LOCKSTEP_PLAN_SIGNING_KEY"):
+        drift.sign_baseline(b, checker)  # no private key
+
+
+def test_signed_waivers_keep_comments_and_catch_edits(tmp_path):
+    from lockstep import driftsign
+    signer, checker = _keys()
+    p = tmp_path / "waivers.yaml"
+    p.write_text("# accepted until the migration ends\n"
+                 "- {path: billing/*, key: flag, owner: team-a, reason: trying the new checkout, expires: 2099-01-31}\n")
+
+    def sign():
+        w = drift.load_waivers_file(str(p))
+        issuer, sig = driftsign.sign("waivers", w.body(), signer)
+        p.write_text(drift.signed_waivers_text(p.read_text(), issuer, sig))
+
+    def check():
+        w = drift.load_waivers_file(str(p))
+        return drift.check_signed("waivers", w.body(), w.issuer, w.signature, checker, "waivers.yaml", True)
+
+    sign()
+    text = p.read_text()
+    assert text.startswith("waivers:\n  # accepted until the migration ends\n  - {path: billing/*")
+    assert "signed by release" in check()
+    sign()  # signing again replaces the old signature
+    assert p.read_text().count("signature:") == 1 and "signed by release" in check()
+    p.write_text("# a new comment\n" + p.read_text())  # comments and layout don't matter
+    assert "signed by release" in check()
+    p.write_text(p.read_text().replace("2099-01-31", "2199-01-31"))  # a waiver does
+    with pytest.raises(CliError, match="was changed after release signed it"):
+        check()

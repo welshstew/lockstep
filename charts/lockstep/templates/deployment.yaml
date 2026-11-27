@@ -69,6 +69,10 @@ spec:
               value: {{ .Values.maxTreeSecrets | quote }}
             - name: LOCKSTEP_EXPORT_MODE
               value: {{ .Values.exportMode | quote }}
+            {{- with .Values.exportProtection }}
+            - name: LOCKSTEP_EXPORT_PROTECTION
+              value: {{ join "," . | quote }}
+            {{- end }}
             {{- with .Values.exportRecipients }}
             - name: LOCKSTEP_EXPORT_RECIPIENTS
               value: {{ toJson . | quote }}
@@ -105,6 +109,10 @@ spec:
               value: {{ .ttlHours | default 168 | quote }}
             - name: LOCKSTEP_PLAN_APPROVALS
               value: {{ .approvals | default 0 | quote }}
+            {{- if .approverPolicies }}
+            - name: LOCKSTEP_PLAN_APPROVER_POLICIES
+              value: {{ join "," .approverPolicies | quote }}
+            {{- end }}
             {{- if .trustedKeys }}
             - name: LOCKSTEP_PLAN_TRUSTED_KEYS
               value: {{ toJson .trustedKeys | quote }}

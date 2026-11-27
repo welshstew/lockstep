@@ -151,6 +151,11 @@ def test_arguments(github, monkeypatch, tmp_path):
     set_inputs(monkeypatch, right_addr="https://b", right_role="ci-b")
     args, env_ = gha.build(tmp_path / "r")
     assert args[args.index("--right-role") + 1] == "ci-b" and env_["LOCKSTEP_RIGHT_JWT"] == "jwt-value"
+    assert "--require-signed" not in args and "LOCKSTEP_PLAN_TRUSTED_KEYS" not in env_
+    keys = '[{"name": "release", "key": "AAAA"}]'
+    set_inputs(monkeypatch, baseline="drift.json", require_signed="true", trusted_keys=keys)
+    args, env_ = gha.build(tmp_path / "r")
+    assert "--require-signed" in args and env_["LOCKSTEP_PLAN_TRUSTED_KEYS"] == keys
 
 
 def test_action_metadata_matches_the_runner():

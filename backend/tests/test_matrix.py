@@ -47,8 +47,9 @@ def test_odd_one_out_first_and_cells():
         ("db", "password", ["different", "different", "different"]),
     ]
     assert m.summary == {"environments": 3, "failed": 0, "rows": 9, "odd_one_out": 4, "differing_rows": 5,
-                         "unknown_rows": 0}
-    assert m.environments[0].counts == {"equal": 4, "different": 1, "missing": 1, "extra": 0, "not_compared": 0}
+                         "unknown_rows": 0, "known_rows": 0}
+    assert m.environments[0].counts == {"equal": 4, "different": 1, "missing": 1, "extra": 0, "not_compared": 0,
+                                        "known": 0}
     full = matrix.build(BASE, envs("staging", "dev", "test"), results, include_equal=True)
     assert len(full.rows) == 9 and full.rows[-1].odd == 0
 
@@ -70,6 +71,32 @@ def test_ignored_failed_and_unknown():
     assert pw.odd == 0 and pw.unknown == 1  # a failed environment isn't counted as unknown per row
     assert by[("locked", None)].cells[2].reason == "this environment can't be read"
     assert m.summary["failed"] == 1 and m.summary["unknown_rows"] == 2 and m.summary["differing_rows"] == 0
+
+
+def test_accepted_drift():
+    """An environment's accepted drift (a drift baseline): listed with the same status, a cell is
+    accepted. It's still shown, but doesn't count as odd; with another status it's new."""
+    results = [
+        [sd("db", "different", [("user", "equal"), ("password", "different")]), sd("cache", "left_only"),
+         sd("api", "different", [("url", "different")])],
+        [sd("db", "different", [("user", "equal"), ("password", "different")]), sd("cache", "equal", [("ttl", "equal")]),
+         sd("api", "equal", [("url", "equal")])],
+    ]
+    accepted = [{("db", "password"): "different", ("cache", None): "left_only", ("api", "url"): "left_only",
+                 ("gone", None): "right_only"}, None]
+    es = envs("staging", "dev")
+    m = matrix.build(BASE, es, results, accepted=accepted)
+    by = {(r.path, r.key): r for r in m.rows}
+    pw = by[("db", "password")]
+    assert [c.accepted for c in pw.cells] == [True, False] and pw.odd == 1 and pw.known == 1
+    cache = by[("cache", None)]
+    assert cache.cells[0].status == "missing" and cache.cells[0].accepted and cache.odd == 0 and cache.known == 1
+    url = by[("api", "url")]
+    assert not url.cells[0].accepted and url.odd == 1  # accepted as left_only, now different: new
+    assert m.rows[-1].path == "cache"  # only accepted drift: listed last
+    assert m.summary["known_rows"] == 1 and m.summary["differing_rows"] == 2
+    assert es[0].counts["known"] == 2 and es[0].counts["different"] == 1 and es[0].accepted_unused == 2
+    assert es[1].accepted is None and es[1].accepted_unused == 0
 
 
 # --------------------------------------------------------------------------- against the dev Vaults
@@ -136,6 +163,69 @@ def test_api_matrix(client, vaults, three, monkeypatch):
     same = client.post("/api/matrix", json={**body, "baseline_name": "staging"})
     assert same.status_code == 400 and "different name" in same.json()["detail"]["message"]
 
+    # dev's flag accepted as drift: shown, but not odd any more; for other locations it's refused
+    drift = {"lockstep_baseline": 1, "left": {"mount": MOUNT, "prefix": f"{three}/prod"},
+             "right": {"mount": MOUNT, "prefix": f"{three}/dev"},
+             "drift": [{"path": "flags", "key": "new_checkout", "status": "different"}]}
+    envs3 = [{**e} for e in body["environments"][:3]]
+    envs3[1] |= {"accepted": drift, "accepted_name": "dev.base.json"}
+    r = client.post("/api/matrix", json={**body, "environments": envs3})
+    assert r.status_code == 200, r.text
+    m = r.json()
+    flag = next(r for r in m["rows"] if r["key"] == "new_checkout")
+    assert flag["cells"][1] == {"status": "different", "reason": flag["cells"][1]["reason"], "accepted": True}
+    assert flag["odd"] == 0 and flag["known"] == 1 and m["rows"][-1]["key"] == "new_checkout"
+    assert m["environments"][1]["accepted"] == "dev.base.json" and m["environments"][1]["counts"]["known"] == 1
+    envs3[2] |= {"accepted": drift}
+    wrong = client.post("/api/matrix", json={**body, "environments": envs3})
+    assert wrong.status_code == 400 and "written for test" in wrong.json()["detail"]["message"]
+
+    # Signed with this server's plan key: checked, and the signer shown; edited: refused
+    from lockstep import driftsign, plansign
+    from lockstep.cli.drift import Baseline
+    from lockstep.config import get_settings
+    private, _public = plansign.generate()
+    monkeypatch.setattr(get_settings(), "plan_signing_key", private)
+    monkeypatch.setattr(get_settings(), "plan_issuer", "release-lockstep")
+    issuer, sig = driftsign.sign("baseline", Baseline.model_validate(drift).body(), plansign.keys(get_settings()))
+    signed = drift | {"issuer": issuer.model_dump(), "signature": sig}
+    envs3[2] = {**body["environments"][2]}
+    envs3[1] |= {"accepted": signed}
+    r = client.post("/api/matrix", json={**body, "environments": envs3})
+    assert r.status_code == 200, r.text
+    assert r.json()["environments"][1]["accepted_signer"] == "release-lockstep"
+    envs3[1] |= {"accepted": signed | {"drift": [*drift["drift"], {"path": "db", "key": "password", "status": "different"}]}}
+    r = client.post("/api/matrix", json={**body, "environments": envs3})
+    assert r.status_code == 400 and "was changed after release-lockstep signed it" in r.json()["detail"]["message"]
+
+
+def test_api_matrix_from_an_export(client, vaults, three):
+    """An export file as the baseline: compared like a Vault, with no Vault behind it."""
+    ca, cb = _connect(client, 0, "root-a"), _connect(client, 1, "root-b")
+    r = client.post("/api/exports", json={"side": {"conn_id": ca, "mount": MOUNT, "prefix": f"{three}/prod"}, "encrypt": False})
+    assert r.status_code == 200, r.text
+    f = r.json()["file"]
+    body = {"baseline_name": "prod", "baseline": {"export": f, "name": "prod.json"},
+            "environments": [{"name": "staging", "side": {"conn_id": cb, "mount": MOUNT, "prefix": f"{three}/staging"}},
+                             {"name": "dev", "side": {"conn_id": ca, "mount": MOUNT, "prefix": f"{three}/dev"}}]}
+    r = client.post("/api/matrix", json=body)
+    assert r.status_code == 200, r.text
+    m = r.json()
+    assert m["baseline"]["kind"] == "file" and m["baseline"]["secret_count"] == 3
+    rows = {(r["path"], r["key"]): [c["status"] for c in r["cells"]] for r in m["rows"]}
+    assert rows[("flags", "new_checkout")] == ["equal", "different"]
+    assert rows[("db", "password")] == ["different", "different"]
+    assert "prod-pw" not in r.text
+    # accepted drift works with a file baseline too: only the environment's side is checked
+    drift = {"lockstep_baseline": 1, "left": {"mount": MOUNT, "prefix": f"{three}/prod"},
+             "right": {"mount": MOUNT, "prefix": f"{three}/dev"},
+             "drift": [{"path": "db", "key": "password", "status": "different"}]}
+    body["environments"][1] |= {"accepted": drift}
+    r = client.post("/api/matrix", json=body)
+    assert r.status_code == 200, r.text
+    pw = next(r for r in r.json()["rows"] if r["key"] == "password")
+    assert [c["accepted"] for c in pw["cells"]] == [False, True] and pw["odd"] == 1
+
 
 def test_cli_matrix(vaults, three, tmp_path, monkeypatch, capsys):
     from lockstep.cli import main
@@ -168,6 +258,23 @@ def test_cli_matrix(vaults, three, tmp_path, monkeypatch, capsys):
     assert "| `flags` | `new_checkout` | = | ≠ different | = |" in (tmp_path / "m.md").read_text()
     assert (tmp_path / "m.csv").read_text().splitlines()[0] == "secret,key,staging,dev-1,test"
     assert not any(v in (tmp_path / "m.json").read_text() for v in ("prod-pw", "test-pw", "db-test"))  # no values
+
+    # dev-1's flag is accepted drift: marked *, and without other drift the run would pass
+    (tmp_path / "dev.base.json").write_text(json.dumps({
+        "lockstep_baseline": 1, "left": {"mount": MOUNT, "prefix": f"{three}/prod"},
+        "right": {"mount": MOUNT, "prefix": f"{three}/dev"},
+        "drift": [{"path": "flags", "key": "new_checkout", "status": "different"}]}))
+    spec2 = {**spec, "environments": [{**spec["environments"][1], "accepted": "dev.base.json"}]}
+    (tmp_path / "m2.yaml").write_text(yaml.safe_dump(spec2))
+    rc = main(["matrix", "m2.yaml", "-o", "m2.md"])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "≠*" in out and "*: accepted drift" in out and "apart from accepted drift (1 row)" in out
+    assert "≠ different (accepted)" in (tmp_path / "m2.md").read_text()
+    spec2["environments"][0]["prefix"] = f"{three}/test"
+    (tmp_path / "m3.yaml").write_text(yaml.safe_dump(spec2))
+    assert main(["matrix", "m3.yaml"]) == 2
+    assert "is for dev-1" in capsys.readouterr().err
 
     (tmp_path / "bad.yaml").write_text(yaml.safe_dump({"baseline": spec["baseline"],
                                                        "environments": [{"name": "prod"}]}))

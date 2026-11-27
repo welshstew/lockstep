@@ -3,6 +3,7 @@ import { api, type SideRef } from "../api";
 import { downloadPlan, downloadReport, downloadUndoPlan, planFileName } from "../plans";
 import { type Changeset, hasOverrides, secretFor, toApiChanges, unstageChange, unstageKey } from "../staging";
 import type { ApplyResult, ChangePlan, CompareResult, PlanStatus, ResultStatus, Rewrite, SyncPlan } from "../types";
+import { AudienceField, parseAudience } from "./AudienceField";
 import { formatValue } from "./ValueCell";
 
 interface Props {
@@ -45,6 +46,7 @@ export function ReviewDialog({ result, changeset, onChangeset, reveal, profile, 
   const [undoFile, setUndoFile] = useState<string | null>(null);
   const [planning, setPlanning] = useState(false);
   const [note, setNote] = useState("");
+  const [audience, setAudience] = useState(""); // the Lockstep servers that may apply the plan
   const [saved, setSaved] = useState<SyncPlan | null>(null);
 
   useEffect(() => { ref.current?.showModal(); }, []);
@@ -83,7 +85,7 @@ export function ReviewDialog({ result, changeset, onChangeset, reveal, profile, 
     setPlanning(true);
     setError(null);
     try {
-      const plan = await api.planCreate(vaultSide(sides.left)!, vaultSide(sides.right)!, changes, note, profile, rewrites);
+      const plan = await api.planCreate(vaultSide(sides.left)!, vaultSide(sides.right)!, changes, note, profile, rewrites, parseAudience(audience));
       downloadPlan(plan);
       setSaved(plan);
     } catch (e) {
@@ -250,6 +252,7 @@ export function ReviewDialog({ result, changeset, onChangeset, reveal, profile, 
               <input type="text" className="plan-note-input" placeholder="Note for the plan (optional)" value={note}
                      maxLength={2000} onChange={(e) => setNote(e.target.value)} aria-label="Plan note" />
             )}
+            {plans && plannable.length > 0 && !saved && !fileSide && <AudienceField value={audience} onChange={setAudience} />}
             <button type="button" className="btn ghost" disabled={!plans || plannable.length === 0 || unplannable.length > 0 || fileSide || planning || applying || Boolean(saved)}
                     title={fileSide ? "A plan needs a Vault on both sides, not an export file"
                       : unplannable.length > 0 ? "Some changes conflict or can't be read: compare again first" : "Download these changes as a plan for someone else to apply"}

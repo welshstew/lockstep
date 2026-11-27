@@ -35,12 +35,14 @@ vaults: []
 #    namespace: ""                   # Vault Enterprise namespace (optional)
 #    writable: false                 # compare and read only: nothing is written to this Vault from Lockstep
 #    exportMode: "off"               # no exports from this Vault, whatever exportMode says
+#    exportProtection: [teams]       # exports from here only to a team's age keys
 #  - name: Development
 #    url: https://vault.dev.example.com
 #    writePaths: ["app-config/**"]   # writes only here (KV: mount/path; otherwise the API path)
 #    denyPaths: ["app-config/*/break-glass/**"]
 #    allowDestroy: false             # no Destroy here, whatever allowDestroy says
-#    approvals: 1                    # secrets change here only through plans someone else approved
+#    approvals: 1                    # changes here only through plans someone else approved (up to 5 people)
+#    approverPolicies: [lockstep-approver]  # only someone holding one of these Vault policies here may approve
 #    exportMode: any                 # plain exports allowed from this Vault
 
 allowCustomConnections: false       # let users type any Vault address (SSRF risk; see docs)
@@ -50,6 +52,9 @@ maxTreeSecrets: 5000
 # Secret-engine exports hold values: encrypted (only with a one-time key) | any (users choose
 # encrypted or plain) | off. A Vault's own exportMode (under vaults) replaces this for that Vault.
 exportMode: encrypted
+# How encrypted exports may be protected: key (one-time), passphrase, age (any age keys), teams
+# (only the exportRecipients teams). Empty: any way. A Vault's exportProtection narrows it.
+exportProtection: []
 # Teams an export can be encrypted to: members open it with their own age identity (or age -d)
 exportRecipients: []
 #  - name: Platform
@@ -72,7 +77,8 @@ allowClipboard: true
 plans:
   issuer: ""                        # this installation's name in plans (default: publicUrl's host)
   ttlHours: 168                     # how long a new plan can be applied
-  approvals: 0                      # 1: every sync plan applied here needs someone else's approval
+  approvals: 0                      # 1-5: every plan (sync, access, undo) applied here needs that many other people's approvals
+  approverPolicies: []              # if set, approvers must hold one of these Vault policies (e.g. via an identity group)
   signingKeySecret:                 # a Secret holding the Ed25519 private key (`lockstep plan-key` makes one)
     name: ""
     key: signing-key
@@ -123,7 +129,11 @@ driftCheck:
   baseline: ""
   baselineConfigMap: {name: "", key: drift.json}
   failOn: ""                        # any | new | changed (default: new with a baseline, any without)
-  waivers: []                       # [{path, key, owner, reason, expires}]; an expired one fails the run
+  waivers: []                       # [{path, key, owner, reason, expires}]; an expired one fails the run.
+  waiversSignature:                 # from `lockstep waivers sign`: the file's issuer and signature lines
+    issuer: {}                      # {name: …, key_id: …}
+    signature: ""
+  requireSigned: false              # refuse a baseline or waivers that aren't signed by a key in plans.trustedKeys
   pushgateway:
     url: ""                         # e.g. http://pushgateway.monitoring:9091
     job: lockstep

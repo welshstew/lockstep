@@ -100,6 +100,9 @@ def parser() -> argparse.ArgumentParser:
                         "the default with it) or changed (new, or in the baseline but resolved)")
     g.add_argument("--waivers", metavar="FILE",
                    help="accepted differences, each with path, key, owner, reason and expires; an expired one fails the run")
+    g.add_argument("--require-signed", action="store_true",
+                   help="refuse a baseline or waivers file that isn't signed by a key in $LOCKSTEP_PLAN_TRUSTED_KEYS "
+                        "(a signed one is always checked when trusted keys are set)")
     g.add_argument("--pushgateway", metavar="URL",
                    help="push the drift gauges to this Prometheus Pushgateway (default: $LOCKSTEP_PUSHGATEWAY_URL)")
     g.add_argument("--pushgateway-job", metavar="NAME", default="lockstep", help="the Pushgateway job (default: lockstep)")
@@ -114,7 +117,22 @@ def parser() -> argparse.ArgumentParser:
                          description="Compare two locations and write what differs as the baseline.")
     bu.add_argument("file", help="the baseline file to write (JSON)")
     _compare_args(bu)
+    bu.add_argument("--sign", action="store_true",
+                    help="sign it with the plan key ($LOCKSTEP_PLAN_SIGNING_KEY), so an edit to it is caught")
     bu.add_argument("-q", "--quiet", action="store_true", help="don't print the summary")
+    bs = bsub.add_parser("sign", help="sign an existing baseline with the plan key",
+                         description="Sign a baseline file with the plan key ($LOCKSTEP_PLAN_SIGNING_KEY), for example "
+                                     "once a change to it has been reviewed. `compare --baseline` then refuses it if "
+                                     "it's edited, wherever $LOCKSTEP_PLAN_TRUSTED_KEYS has the public key.")
+    bs.add_argument("file", help="the baseline file (JSON)")
+
+    w = sub.add_parser("waivers", help="sign a waivers file", description="Waivers files for compare --waivers.")
+    wsub = w.add_subparsers(dest="waivers_command", required=True, metavar="ACTION")
+    ws = wsub.add_parser("sign", help="sign a waivers file with the plan key",
+                         description="Check a waivers file and sign it with the plan key ($LOCKSTEP_PLAN_SIGNING_KEY). "
+                                     "The signature goes at the end; comments and layout stay. Changing a waiver "
+                                     "afterwards breaks it, so `compare --waivers` refuses the file until it's signed again.")
+    ws.add_argument("file", help="the waivers file (YAML)")
 
     a = sub.add_parser("apply", help="carry out the actions set in a report",
                        description="Carry out the actions set in a report from `lockstep compare`. Values are "
@@ -275,16 +293,27 @@ async def _run_compare(args, include_equal: bool = False,
 def _drift_inputs(args):
     if args.fail_on in ("new", "changed") and not args.baseline:
         raise CliError(f"--fail-on {args.fail_on} needs --baseline: without one, every difference is new.")
+    if args.require_signed and not (args.baseline or args.waivers):
+        raise CliError("--require-signed checks the --baseline and --waivers files: give at least one.")
     baseline = drift_mod.load_baseline(args.baseline) if args.baseline else None
-    waivers = drift_mod.load_waivers(args.waivers) if args.waivers else None
+    wfile = drift_mod.load_waivers_file(args.waivers) if args.waivers else None
+    notes: list[str] = []
+    if baseline or wfile:
+        keys = drift_mod.cli_keys(cli_settings(args))
+        if baseline:
+            notes.append(drift_mod.check_signed("baseline", baseline.body(), baseline.issuer, baseline.signature, keys,
+                                                args.baseline, args.require_signed))
+        if wfile:
+            notes.append(drift_mod.check_signed("waivers", wfile.body(), wfile.issuer, wfile.signature, keys,
+                                                args.waivers, args.require_signed))
     outputs = args.output or []
     if outputs.count("-") > 1:
         raise CliError("Only one -o can be '-' (stdout).")
-    return baseline, waivers, outputs
+    return baseline, wfile.waivers if wfile else None, outputs, [n for n in notes if n]
 
 
 async def _compare(args) -> int:
-    baseline, waivers, outputs = _drift_inputs(args)  # bad files fail before logging in
+    baseline, waivers, outputs, signed = _drift_inputs(args)  # bad or tampered files fail before logging in
     gateway = args.pushgateway or os.environ.get("LOCKSTEP_PUSHGATEWAY_URL")
     started = time.perf_counter()
     sides: dict[str, report_mod.ReportSide] = {}
@@ -309,7 +338,7 @@ async def _compare(args) -> int:
     out = sys.stderr if to_stdout else sys.stdout
     if not args.quiet:
         _print_summary(rep, out)
-        for line in drift_mod.summary_lines(outcome):
+        for line in [*signed, *drift_mod.summary_lines(outcome)]:
             print(line, file=out)
     written = []
     for target in outputs:
@@ -334,15 +363,51 @@ async def _compare(args) -> int:
     return 1 if outcome.failed else 0
 
 
+def _env_keys():
+    """The plan keys from the environment, for commands that don't talk to Vault."""
+    import secrets as _secrets
+    from ..config import Settings
+    return drift_mod.cli_keys(Settings(session_key=_secrets.token_hex(32)))
+
+
 async def _baseline(args) -> int:
+    if args.baseline_command == "sign":
+        b = drift_mod.load_baseline(args.file)
+        Path(args.file).write_text(drift_mod.dump_baseline(drift_mod.sign_baseline(b, _env_keys())))
+        print(f"Signed {args.file} as {b.issuer.name} (key {b.issuer.key_id}): {len(b.drift)} accepted difference"
+              f"{'s' if len(b.drift) != 1 else ''}.")
+        return 0
+    keys = _env_keys() if args.sign else None  # a missing key fails before comparing
+    if keys and not keys.private:
+        raise CliError("--sign needs the plan signing key in LOCKSTEP_PLAN_SIGNING_KEY (`lockstep plan-key` makes a key pair).")
     rep = await _run_compare(args)
     b = drift_mod.baseline_of(rep)
+    if keys:
+        drift_mod.sign_baseline(b, keys)
     Path(args.file).write_text(drift_mod.dump_baseline(b))
     if not args.quiet:
         _print_summary(rep, sys.stdout)
         n = len(b.drift)
-        print(f"Baseline written to {args.file}: {n} difference{'s' if n != 1 else ''} accepted. "
+        signed = f", signed as {b.issuer.name}" if b.issuer else ""
+        print(f"Baseline written to {args.file}{signed}: {n} difference{'s' if n != 1 else ''} accepted. "
               f"Check it with: lockstep compare … --baseline {args.file}")
+    return 0
+
+
+async def _waivers(args) -> int:
+    path = args.file
+    wfile = drift_mod.load_waivers_file(path)  # refuses a file with mistakes
+    keys = _env_keys()
+    try:
+        from .. import driftsign
+        issuer, signature = driftsign.sign("waivers", wfile.body(), keys)
+    except driftsign.SignatureProblem as e:
+        raise CliError(str(e)) from e
+    Path(path).write_text(drift_mod.signed_waivers_text(Path(path).read_text(), issuer, signature))
+    again = drift_mod.load_waivers_file(path)
+    drift_mod.check_signed("waivers", again.body(), again.issuer, again.signature, keys, path, True)  # it reads back
+    print(f"Signed {path} as {issuer.name} (key {issuer.key_id}): {len(wfile.waivers)} waiver"
+          f"{'s' if len(wfile.waivers) != 1 else ''}.")
     return 0
 
 
@@ -414,6 +479,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(schema, indent=2, ensure_ascii=False))
         return 0
     commands = {"compare": lambda: _compare(args), "baseline": lambda: _baseline(args), "apply": lambda: _apply(args),
+                "waivers": lambda: _waivers(args),
                 "matrix": lambda: matrix_mod.run(args),
                 "export": lambda: transfer.run_export(args, _load_profile), "import": lambda: transfer.run_import(args),
                 "policy": lambda: policy_mod.run(args), "config": lambda: config_mod.run(args)}

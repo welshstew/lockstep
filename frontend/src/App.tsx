@@ -6,7 +6,8 @@ import { ConfigView } from "./components/ConfigView";
 import { ToolsView } from "./components/ToolsView";
 import { MfaPrompt } from "./components/MfaPrompt";
 import { applyTheme, loadTheme, type Theme } from "./theme";
-import { type BrowseTarget, BrowseView } from "./components/BrowseView";
+import { BrowseView, readHash } from "./components/BrowseView";
+import { ConnectionsPane } from "./components/ConnectionsPane";
 import { MatrixView } from "./components/MatrixView";
 import { PlansView } from "./components/PlansView";
 import { Results } from "./components/Results";
@@ -19,6 +20,7 @@ import {
 } from "./profiles";
 import { type Changeset, changesetSize } from "./staging";
 import { SideCard } from "./components/SideCard";
+import { TabStrip } from "./components/TabStrip";
 import { TransferView } from "./components/TransferView";
 import type { AppConfig, CompareResult, Connection, LoadedFile, MfaConstraint, Profile, ProfileRules, SideSelection } from "./types";
 
@@ -33,6 +35,14 @@ function loadSides(): [SideSelection, SideSelection] {
     if (Array.isArray(v) && v.length === 2) return [{ ...EMPTY, ...v[0], fileId: null }, { ...EMPTY, ...v[1], fileId: null }];
   } catch { /* storage unavailable */ }
   return [EMPTY, EMPTY];
+}
+const BROWSE_KEY = "lockstep.browse.selection";
+function loadBrowse(): SideSelection {
+  try {
+    const v = JSON.parse(localStorage.getItem(BROWSE_KEY) ?? "null");
+    if (v && typeof v === "object" && v.connId) return { connId: String(v.connId), mount: v.mount ?? null, prefix: String(v.prefix ?? "") };
+  } catch { /* storage unavailable */ }
+  return EMPTY;
 }
 function saveSides(s: [SideSelection, SideSelection]) {
   const plain = s.map(({ fileId: _f, ...rest }) => rest);
@@ -77,15 +87,22 @@ export function App() {
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [connections, setConnections] = useState<Connection[]>([]);
   const [sides, setSides] = useState<[SideSelection, SideSelection]>(loadSides);
-  // A Browse link to another mount than the side has chosen: switch the side to it
+  // Browse explores one connection and mount, chosen in the Connections list. Until one is
+  // chosen there, it starts on a side's (the left's first).
+  const [browseSel, setBrowseSelState] = useState<SideSelection>(loadBrowse);
+  const setBrowseSel = (s: SideSelection) => {
+    setBrowseSelState(s);
+    try { localStorage.setItem(BROWSE_KEY, JSON.stringify({ connId: s.connId, mount: s.mount, prefix: s.prefix })); } catch { /* ignore */ }
+  };
+  // A Browse link to another mount than the one chosen: switch to it
   useEffect(() => {
-    const m = /^#\/browse\/(left|right)\/([^/]+)\//.exec(window.location.hash);
-    if (!m) return;
-    const i = m[1] === "left" ? 0 : 1;
-    const mount = decodeURIComponent(m[2]);
-    setSides((prev) => (prev[i].connId && prev[i].mount !== mount
-      ? prev.map((s, j) => (j === i ? { ...s, mount, prefix: "" } : s)) as typeof prev : prev));
-  }, []);
+    const h = readHash();
+    if (!h) return;
+    setBrowseSelState((prev) => {
+      const base = prev.connId ? prev : sides.find((s) => s.connId && !s.fileId) ?? null;
+      return base && base.mount !== h.mount ? { connId: base.connId, mount: h.mount, prefix: "" } : prev;
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const [result, setResult] = useState<CompareResult | null>(null);
   const [comparing, setComparing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -205,6 +222,10 @@ export function App() {
     if (hadResult) setRerun(true);
   };
 
+  const browsing: SideSelection = browseSel.connId && connections.some((c) => c.id === browseSel.connId) ? browseSel
+    : sides.find((s) => s.connId && !s.fileId && s.kvVersion !== "1" && connections.some((c) => c.id === s.connId))
+      ?? (browseSel.connId && !connections.length ? browseSel : EMPTY);
+
   const label = (s: SideSelection) => {
     const f = fileOf(s);
     if (f) return `${f.name}${s.prefix ? `/${s.prefix.replace(/^\/+|\/+$/g, "")}` : ""}`;
@@ -258,7 +279,7 @@ export function App() {
     <div className="app">
       <header className="topbar">
         <div className="brand"><span className="brand-mark"><i /><i /></span> Lockstep <span className="brand-sub">compatible with HashiCorp Vault</span></div>
-        <nav className="tabs" role="tablist" aria-label="View">
+        <TabStrip selected={view}>
           <button type="button" role="tab" aria-selected={view === "browse"} onClick={() => setView("browse")}>Browse</button>
           <button type="button" role="tab" aria-selected={view === "compare"} onClick={() => setView("compare")}>Compare</button>
           <button type="button" role="tab" aria-selected={view === "matrix"} onClick={() => setView("matrix")}>Matrix</button>
@@ -268,7 +289,7 @@ export function App() {
           <button type="button" role="tab" aria-selected={view === "policies"} onClick={() => setView("policies")}>Policies</button>
           <button type="button" role="tab" aria-selected={view === "config"} onClick={() => setView("config")}>Configuration</button>
           <button type="button" role="tab" aria-selected={view === "tools"} onClick={() => setView("tools")}>Tools</button>
-        </nav>
+        </TabStrip>
         <div className="spacer" />
         <label className="theme-switch subtle" title="Colour theme">
           <select aria-label="Theme" value={theme} onChange={(e) => { const t = e.target.value as Theme; setTheme(t); applyTheme(t); }}>
@@ -283,6 +304,17 @@ export function App() {
       </header>
       {config.demo_banner && <div className="demo-banner" role="note">{config.demo_banner}</div>}
 
+      {view === "browse" || view === "matrix" ? (
+        <ConnectionsPane config={config} connections={connections} onConnected={() => refresh()} onDisconnect={disconnect}
+          {...(view === "browse" ? { selection: browsing,
+                                     // A connection a side already uses starts on that side's mount
+                                     onSelect: (s: SideSelection) => {
+                                       const on = !s.mount && sides.find((x) => x.connId === s.connId && x.mount && !x.fileId && x.kvVersion !== "1");
+                                       setBrowseSel(on ? { connId: s.connId, mount: on.mount, prefix: on.prefix } : s);
+                                     },
+                                     hint: "Choose the one to browse, then a KV v2 secret engine." }
+            : { hint: "The baseline and each environment below can use any of these." })} />
+      ) : (
       <div className="sides">
         <SideCard side="left" config={config} connections={connections} selection={sides[0]}
                   onChange={setSide(0)} onConnected={() => refresh()} onDisconnect={disconnect}
@@ -299,9 +331,10 @@ export function App() {
                   onChange={setSide(1)} onConnected={() => refresh()} onDisconnect={disconnect}
                   files={files} onFile={addFile} />
       </div>
+      )}
 
 
-      {view !== "compare" && view !== "matrix" && view !== "tools" && view !== "config" && sides.some((s) => s.kvVersion === "1") && (
+      {view !== "compare" && view !== "matrix" && view !== "browse" && view !== "tools" && view !== "config" && sides.some((s) => s.kvVersion === "1") && (
         <div className="notice info kv1-note">A side is a KV v1 mount: this tab needs a KV v2 mount, so it leaves that side out. KV v1 mounts are only compared, in Compare.</div>
       )}
       {view === "tools" ? (
@@ -316,23 +349,24 @@ export function App() {
         }))} />
       ) : view === "browse" ? (
         <BrowseView config={config} reveal={reveal} onInspect={setInspecting}
-          targets={sides.flatMap((s, i): BrowseTarget[] => (s.connId && s.mount && !s.fileId && s.kvVersion !== "1"
-            ? [{ side: i === 0 ? "left" : "right", conn_id: s.connId, mount: s.mount, prefix: s.prefix, label: label(s),
-                 writes: connections.find((c) => c.id === s.connId)?.writes,
-                 destroy: connections.find((c) => c.id === s.connId)?.destroy,
-                 export: connections.find((c) => c.id === s.connId)?.export,
-                 url: connections.find((c) => c.id === s.connId)?.url
-                   ?? config.presets.find((p) => p.id === connections.find((c) => c.id === s.connId)?.preset_id)?.browser_url }] : []))}
-          onGo={(to, side, folder) => {
-            const i = side === "left" ? 0 : 1;
-            setSides((prev) => prev.map((s, j) => (j === i ? { ...s, prefix: folder } : s)) as typeof prev);
+          target={(() => {
+            const c = connections.find((x) => x.id === browsing.connId);
+            return c && browsing.mount ? {
+              conn_id: c.id, mount: browsing.mount, prefix: browsing.prefix, label: label(browsing),
+              writes: c.writes, destroy: c.destroy, export: c.export,
+              url: c.url ?? config.presets.find((p) => p.id === c.preset_id)?.browser_url,
+            } : null;
+          })()}
+          onGo={(to, folder) => {
+            // The other tabs work on the sides: the browsed folder becomes the left side
+            setSides(([, r]) => [{ connId: browsing.connId, mount: browsing.mount, prefix: folder }, r]);
             setResult(null);
             setChangeset({});
             if (to === "policies") {
               try { localStorage.setItem("lockstep.policyMode", "explain"); localStorage.setItem("lockstep.policySource", "token"); } catch { /* ignore */ }
             }
             if (to === "policy-build") {
-              startPolicyDraft(sides[i].mount ?? "secret", folder);
+              startPolicyDraft(browsing.mount ?? "secret", folder);
               setView("policies");
               return;
             }
@@ -350,14 +384,16 @@ export function App() {
         <TransferView config={config} reveal={reveal} files={files} onFile={addFile}
                       sides={sides.map((s, i) => ({ side: i === 0 ? "left" as const : "right" as const, label: label(s),
                         ref: s.connId && s.mount && !s.fileId && s.kvVersion !== "1" ? { conn_id: s.connId, mount: s.mount, prefix: s.prefix } : null,
-                        exportMode: connections.find((c) => c.id === s.connId)?.export }))}
+                        exportMode: connections.find((c) => c.id === s.connId)?.export,
+                        exportProtection: connections.find((c) => c.id === s.connId)?.export_protection }))}
                       profiles={[...sharedProfiles, ...personal]} />
       ) : view === "matrix" ? (
-        <MatrixView connections={connections} baseline={sides[0]} baselineLabel={label(sides[0])} right={sides[1]}
+        <MatrixView connections={connections} files={files} onFile={addFile} left={sides[0]} right={sides[1]}
                     shared={sharedProfiles} personal={personal}
-                    onOpenPair={(env) => {
+                    onOpenPair={(base, env) => {
                       if (env.profile) selectProfile(env.profile); else selectProfile(null);
-                      setSides(([l]) => [l, { connId: env.connId, mount: env.mount, prefix: env.prefix }]);
+                      setSides([{ connId: base.connId, mount: base.mount, prefix: base.prefix, fileId: base.fileId },
+                                { connId: env.connId, mount: env.mount, prefix: env.prefix }]);
                       setChangeset({});
                       setView("compare");
                     }} />

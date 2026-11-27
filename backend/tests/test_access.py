@@ -152,6 +152,24 @@ def test_access_plan_conflict(client, ctx):
     assert client.post("/api/access/plans", json={"conn_id": conn, "policies": [{"name": f"acc-{tag}-b", "text": 'path "z" { capabilities = ["list"] }'}]}).status_code == 400  # nothing to do
 
 
+def test_access_plan_for_named_servers(client, ctx, monkeypatch):
+    """An access plan limited to named Lockstep servers (its audience) is refused anywhere else."""
+    from lockstep.config import get_settings
+    tag, v, mount, conn = ctx
+    monkeypatch.setattr(get_settings(), "plan_issuer", "dev-lockstep")
+    servers = client.get("/api/config").json()["plan_servers"]
+    assert servers == {"self": "dev-lockstep", "trusted": []}
+    body = {"conn_id": conn, "policies": [{"name": f"acc-{tag}-aud", "text": 'path "x" { capabilities = ["read"] }'}]}
+    plan = client.post("/api/access/plans", json=body | {"audience": [" prod-lockstep ", ""]}).json()
+    assert plan["audience"] == ["prod-lockstep"]
+    r = client.post("/api/access/plans/check", json={"conn_ids": [conn], "plan": plan})
+    assert r.status_code == 400 and "is for prod-lockstep, not this Lockstep server (dev-lockstep)" in r.json()["detail"]["message"]
+    tampered = plan | {"audience": []}
+    assert client.post("/api/access/plans/check", json={"conn_ids": [conn], "plan": tampered}).status_code == 400  # signed
+    mine = client.post("/api/access/plans", json=body | {"audience": ["dev-lockstep"]}).json()
+    assert client.post("/api/access/plans/check", json={"conn_ids": [conn], "plan": mine}).status_code == 200
+
+
 def test_set_a_groups_policies_with_review_and_plan(client, ctx):
     tag, v, mount, conn = ctx
     name = f"acc-group-{tag}"

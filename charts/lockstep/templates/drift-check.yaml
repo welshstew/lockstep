@@ -4,6 +4,9 @@
 {{- $k8sAuth := or (not $d.left.tokenSecret.name) (not $d.right.tokenSecret.name) }}
 {{- $ca := or .Values.vaultTls.caBundle.configMap .Values.vaultTls.caBundle.secret }}
 {{- $files := or $d.baseline $d.waivers }}
+{{- if and $d.requireSigned (not (or $files $d.baselineConfigMap.name)) }}
+{{- fail "driftCheck.requireSigned checks the baseline and waivers: set driftCheck.baseline, baselineConfigMap or waivers" }}
+{{- end }}
 {{- if $d.serviceAccount.create }}
 apiVersion: v1
 kind: ServiceAccount
@@ -32,7 +35,11 @@ data:
   drift.json: {{ . | quote }}
   {{- end }}
   {{- with $d.waivers }}
+  {{- if $d.waiversSignature.signature }}
+  waivers.yaml: {{ toYaml (dict "waivers" . "issuer" $d.waiversSignature.issuer "signature" $d.waiversSignature.signature) | quote }}
+  {{- else }}
   waivers.yaml: {{ toYaml . | quote }}
+  {{- end }}
   {{- end }}
 ---
 {{- end }}
@@ -102,6 +109,9 @@ spec:
                 {{- if $d.waivers }}
                 - --waivers=/etc/lockstep/drift/waivers.yaml
                 {{- end }}
+                {{- if $d.requireSigned }}
+                - --require-signed
+                {{- end }}
                 {{- with $d.pushgateway.url }}
                 - {{ printf "--pushgateway=%s" . | quote }}
                 - {{ printf "--pushgateway-job=%s" $d.pushgateway.job | quote }}
@@ -129,6 +139,11 @@ spec:
                 {{- if .Values.profiles }}
                 - name: LOCKSTEP_PROFILES
                   value: {{ include "lockstep.profiles" . | quote }}
+                {{- end }}
+                {{- with .Values.plans.trustedKeys }}
+                # Public keys only: a signed baseline or waivers file is checked against them
+                - name: LOCKSTEP_PLAN_TRUSTED_KEYS
+                  value: {{ toJson . | quote }}
                 {{- end }}
                 - name: LOCKSTEP_LOG_LEVEL
                   value: {{ .Values.logging.level | quote }}

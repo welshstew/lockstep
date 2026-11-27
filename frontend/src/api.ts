@@ -1,7 +1,7 @@
 import type { MatrixResult, NamespacesResponse, UndoApplyResult, UndoCheck, UndoPlan,
   ProfileSuggestions, Rewrite,
   AuthUserMount, AuthUsersCompare, AuthUsersList,
-  AnalyzeOptions, AnalyzeResult, ApiChange, PasswordSearch, ExportDoc, ExportResult, ImportPreview, ImportRules, AppConfig, ApplyResult, ChangePlan, CompareResult, Connection, AccessChanges, AccessCompareResult, ConfigCompare, MfaChallenge, MfaConstraint, AccessItem, AccessPlanInfo, AuthMount, BrowseDiff, BrowseEdit, BrowseEditResult, BrowseList, BrowseSecret, DestroyOut, ExpiryResult, ExplainResult, PolicyBuildRule, PolicyCompareResult, PolicyProfile, RoleDraft, RoleFinding, RoleKind, RolePair, RolesList, RoleTemplate, SuggestResult, TerraformOptions, KeyHistory, Locator, Mount, MountsResponse, PlanApplyResult, PlanCheck, Profile, ProfileRules, SecretValues, SyncPlan,
+  AnalyzeOptions, AnalyzeResult, DriftBaseline, ApiChange, PasswordSearch, ExportDoc, ExportResult, ImportPreview, ImportRules, AppConfig, ApplyResult, ChangePlan, CompareResult, Connection, AccessChanges, AccessCompareResult, ConfigCompare, MfaChallenge, MfaConstraint, AccessItem, AccessPlanInfo, PlanApprovals, AuthMount, BrowseDiff, BrowseEdit, BrowseEditResult, BrowseList, BrowseSecret, DestroyOut, ExpiryResult, ExplainResult, PolicyBuildRule, PolicyCompareResult, PolicyProfile, RoleDraft, RoleFinding, RoleKind, RolePair, RolesList, RoleTemplate, SuggestResult, TerraformOptions, KeyHistory, Locator, Mount, MountsResponse, PlanApplyResult, PlanCheck, Profile, ProfileRules, SecretValues, SyncPlan,
 } from "./types";
 
 /** A comparison side: a Vault location, or an opened export file (read-only). */
@@ -189,11 +189,13 @@ export const api = {
   mounts: (id: string, kv1 = false) => call<MountsResponse>("GET", `/api/connections/${id}/mounts${kv1 ? "?kv1=true" : ""}`),
   describeMount: (id: string, path: string, kv1 = false) =>
     call<Mount>("GET", `/api/connections/${id}/mounts/${encodeURIComponent(path).replace(/%2F/g, "/")}${kv1 ? "?kv1=true" : ""}`),
-  matrix: (baselineName: string, baseline: VaultSide, environments: { name: string; side: VaultSide; rules?: ProfileRules | null }[],
+  matrix: (baselineName: string, baseline: SideRef,
+           environments: { name: string; side: VaultSide; rules?: ProfileRules | null; accepted?: { name: string; doc: DriftBaseline } | null }[],
            includeEqual = false) =>
     call<MatrixResult>("POST", "/api/matrix", {
       baseline_name: baselineName, baseline, include_equal: includeEqual,
-      environments: environments.map((e) => ({ name: e.name, side: e.side, ...(e.rules ? { rules: e.rules } : {}) })),
+      environments: environments.map((e) => ({ name: e.name, side: e.side, ...(e.rules ? { rules: e.rules } : {}),
+                                               ...(e.accepted ? { accepted: e.accepted.doc, accepted_name: e.accepted.name } : {}) })),
     }),
   compare: (left: SideRef, right: SideRef, rules?: ProfileRules | null, customMetadata = false) =>
     call<CompareResult>("POST", "/api/compare", { left, right, ...(rules ? { rules } : {}), ...(customMetadata ? { custom_metadata: true } : {}) }),
@@ -261,9 +263,12 @@ export const api = {
   accessPreview: (body: AccessChanges) => call<AccessItem[]>("POST", "/api/access/preview", body),
   accessApply: (body: AccessChanges, expected: Record<string, string | null>) =>
     call<AccessItem[]>("POST", "/api/access/apply", { ...body, expected, confirm: true }),
-  accessPlanCreate: (body: AccessChanges) => call<Record<string, unknown> & { id: string }>("POST", "/api/access/plans", body),
+  accessPlanCreate: (body: AccessChanges, audience: string[] = []) =>
+    call<Record<string, unknown> & { id: string }>("POST", "/api/access/plans", { ...body, audience }),
   accessPlanCheck: (connIds: string[], plan: Record<string, unknown>) =>
-    call<{ plan: AccessPlanInfo; conn_id: string; items: AccessItem[] }>("POST", "/api/access/plans/check", { conn_ids: connIds, plan }),
+    call<{ plan: AccessPlanInfo; conn_id: string; items: AccessItem[]; approvals: PlanApprovals }>("POST", "/api/access/plans/check", { conn_ids: connIds, plan }),
+  accessPlanApprove: (connIds: string[], plan: Record<string, unknown>) =>
+    call<Record<string, unknown> & { id: string }>("POST", "/api/access/plans/approve", { conn_ids: connIds, plan }),
   accessPlanApply: (connIds: string[], plan: Record<string, unknown>) =>
     call<AccessItem[]>("POST", "/api/access/plans/apply", { conn_ids: connIds, plan, confirm: true }),
   configCompare: (left: string, right: string, profile: PolicyProfile | null = null) =>
@@ -341,13 +346,15 @@ export const api = {
     call<AccessCompareResult>("POST", "/api/policies/compare-access", { left, right }),
   destroy: (side: VaultSide, secrets: { path: string; expected_version: number | null }[]) =>
     call<DestroyOut>("POST", "/api/destroy", { side, secrets, confirm: true }),
-  planCreate: (left: VaultSide, right: VaultSide, changes: ApiChange[], note: string, profile: string | null, rewrites: Rewrite[] = []) =>
-    call<SyncPlan>("POST", "/api/plans", { left, right, changes, note, profile, rewrites }),
+  planCreate: (left: VaultSide, right: VaultSide, changes: ApiChange[], note: string, profile: string | null, rewrites: Rewrite[] = [],
+               audience: string[] = []) =>
+    call<SyncPlan>("POST", "/api/plans", { left, right, changes, note, profile, rewrites, audience }),
   planApprove: (plan: SyncPlan, left_conn_id: string, right_conn_id: string, values: Record<string, Record<string, string>> = {}) =>
     call<{ plan: SyncPlan }>("POST", "/api/plans/approve", { plan, left_conn_id, right_conn_id, values }),
   undoCreate: (writes: { conn_id: string; mount: string; path: string; action: "write" | "delete"; old_version: number | null; new_version: number | null }[],
                undoes?: string) => call<UndoPlan>("POST", "/api/undo", { writes, ...(undoes ? { undoes } : {}) }),
   undoCheck: (plan: UndoPlan, conn_ids: string[]) => call<UndoCheck>("POST", "/api/undo/check", { plan, conn_ids }),
+  undoApprove: (plan: UndoPlan, conn_ids: string[]) => call<UndoPlan>("POST", "/api/undo/approve", { plan, conn_ids }),
   undoApply: (plan: UndoPlan, conn_ids: string[]) => call<UndoApplyResult>("POST", "/api/undo/apply", { plan, conn_ids, confirm: true }),
   /** `local`: made by this installation, so typed values are checked against the creator's here */
   planVerify: (plan: unknown) => call<{ plan: SyncPlan; local: boolean }>("POST", "/api/plans/verify", { plan }),

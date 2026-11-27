@@ -4,6 +4,21 @@
   "type": "object",
   "additionalProperties": false,
   "definitions": {
+    "waiverList": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "owner", "reason", "expires"],
+        "properties": {
+          "path": {"type": "string", "minLength": 1},
+          "key": {"type": "string"},
+          "owner": {"type": "string", "minLength": 1},
+          "reason": {"type": "string", "minLength": 1},
+          "expires": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"}
+        }
+      }
+    },
     "secretKey": {
       "type": "object",
       "additionalProperties": false,
@@ -125,12 +140,18 @@
           "approvals": {
             "type": "integer",
             "minimum": 0,
-            "maximum": 1
+            "maximum": 5
+          },
+          "approverPolicies": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1},
+            "maxItems": 20
           },
           "exportMode": {
             "type": "string",
             "enum": ["any", "encrypted", "off"]
           },
+          "exportProtection": {"type": "array", "items": {"type": "string", "enum": ["key", "passphrase", "age", "teams"]}, "uniqueItems": true},
           "writePaths": {
             "type": "array",
             "items": {
@@ -195,7 +216,8 @@
       "properties": {
         "issuer": {"type": "string"},
         "ttlHours": {"type": "integer", "minimum": 1, "maximum": 2160},
-        "approvals": {"type": "integer", "minimum": 0, "maximum": 1},
+        "approvals": {"type": "integer", "minimum": 0, "maximum": 5},
+        "approverPolicies": {"type": "array", "items": {"type": "string", "minLength": 1}},
         "signingKeySecret": {"$ref": "#/definitions/secretKey"},
         "trustedKeys": {
           "type": "array",
@@ -238,21 +260,16 @@
         "baseline": {"type": "string"},
         "baselineConfigMap": {"$ref": "#/definitions/secretKey"},
         "failOn": {"enum": ["", "any", "new", "changed"]},
-        "waivers": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["path", "owner", "reason", "expires"],
-            "properties": {
-              "path": {"type": "string", "minLength": 1},
-              "key": {"type": "string"},
-              "owner": {"type": "string", "minLength": 1},
-              "reason": {"type": "string", "minLength": 1},
-              "expires": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"}
-            }
+        "waivers": {"$ref": "#/definitions/waiverList"},
+        "waiversSignature": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "issuer": {"type": "object", "additionalProperties": false, "properties": {"name": {"type": "string"}, "key_id": {"type": "string"}}},
+            "signature": {"type": "string"}
           }
         },
+        "requireSigned": {"type": "boolean"},
         "pushgateway": {
           "type": "object",
           "additionalProperties": false,
@@ -291,6 +308,7 @@
       "type": "string",
       "enum": ["any", "encrypted", "off"]
     },
+    "exportProtection": {"type": "array", "items": {"type": "string", "enum": ["key", "passphrase", "age", "teams"]}, "uniqueItems": true},
     "exportRecipients": {
       "type": "array",
       "items": {

@@ -5,6 +5,7 @@ import type { ScanTarget } from "./ExpiryView";
 import type { CompareSides } from "./PolicyCompare";
 import { AccessApply } from "./AccessApply";
 import { saveAccessPlan } from "../accessPlan";
+import { AudienceField, parseAudience } from "./AudienceField";
 import { ExplainResultView } from "./PoliciesView";
 import { AuthUsers } from "./AuthUsers";
 import { PolicySelect } from "./PolicySelect";
@@ -405,6 +406,7 @@ function CompareRoles({ sides }: { sides: CompareSides }) {
 function NewRole({ connId, mounts, canApply, label }: { connId: string; mounts: AuthMount[]; canApply: boolean; label: string }) {
   const [writing, setWriting] = useState(false);
   const [savedPlan, setSavedPlan] = useState<string | null>(null);
+  const [audience, setAudience] = useState(""); // the Lockstep servers that may apply a saved plan
   const [templates, setTemplates] = useState<RoleTemplate[]>([]);
   const [drafts, setDraftsState] = useState<RoleDraft[]>(() => load(DRAFTS_KEY, []));
   const [current, setCurrent] = useState(0);
@@ -479,7 +481,8 @@ function NewRole({ connId, mounts, canApply, label }: { connId: string; mounts: 
             <button type="button" className="btn primary small" disabled={busy} onClick={download}>{busy && <span className="spinner" />} Download for an admin…</button>
             {canApply && <button type="button" className="btn small" onClick={() => setWriting(true)}>Write to {label}…</button>}
             <button type="button" className="btn ghost small" title="A signed file with these roles, for someone with the rights to check and apply in Lockstep"
-                    onClick={async () => { try { setSavedPlan(await saveAccessPlan({ conn_id: connId, roles: drafts })); } catch (e) { setError((e as Error).message); } }}>Save as access plan</button>
+                    onClick={async () => { try { setSavedPlan(await saveAccessPlan({ conn_id: connId, roles: drafts }, parseAudience(audience))); } catch (e) { setError((e as Error).message); } }}>Save as access plan</button>
+            <AudienceField value={audience} onChange={setAudience} />
             {savedPlan && <div className="subtle" role="status">Saved access plan {savedPlan}.</div>}
           </div>
         )}

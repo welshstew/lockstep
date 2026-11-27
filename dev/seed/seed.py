@@ -677,6 +677,38 @@ def seed_environments(a: Vault, b: Vault, pki: dict) -> None:
         "queue": "dev.search.reindex", "workers": "2", "index": "products"})  # workers differs: drift
 
 
+def seed_release_baseline(a: Vault, pki: dict) -> None:
+    """The `apps-baseline` mount on Vault A: the last release, as it runs in prod, under the
+    application's old name. It's the baseline for the environment matrix: test (Vault A `apps`) and
+    dev (Vault B `apps`, after the ELP rename) are each compared with it under their own shared
+    profile ("Release ↔ test: apps", "Release ↔ dev: apps (ELP rename)"), which rewrite prod to the
+    environment and ignore what differs per environment by design.
+
+    What the matrix then shows: test matches the release, so dev's changes are the odd ones out
+    (batch_size, the new otlp_endpoint and ELP/alerts, legacy-syslog dropped, search-indexer's
+    workers); retention_days differs in both, because prod keeps logs longer on purpose."""
+    a.mount_kv("apps-baseline", description="Applications: the last release, as in prod (the environment matrix's baseline)")
+    a.kv_put("apps-baseline", "enterprise-logging-app/values", {
+        "log_level": "warn",
+        "retention_days": 90,  # prod keeps logs longer: differs from every environment on purpose
+        "batch_size": "500",
+        "ingest_endpoint": "https://ingest.prod.logging.example.internal",
+        "index_prefix": "enterprise-logging-app-prod",
+        "service_account": "svc-enterprise-logging-app@prod.example.internal",
+        "kafka_topic": "prod.enterprise-logging-app.events",
+        "db_url": "postgres://pg.prod.example.internal:5432/logging",
+        "api_token": "tok-prod-5c1d0e62",
+    })
+    a.kv_put("apps-baseline", "enterprise-logging-app/certs", {
+        "tls.crt": pem(pki["app"]), "tls.key": key_pem(pki["app_key"]), "ca.crt": pem(pki["root"])})
+    a.kv_put("apps-baseline", "enterprise-logging-app/legacy-syslog", {
+        "syslog_host": "syslog.prod.example.internal", "port": "514"})
+    a.kv_put("apps-baseline", "payments-gateway/config", {
+        "endpoint": "https://pay.prod.example.internal", "timeout_ms": "3000", "currency": "GBP"})
+    a.kv_put("apps-baseline", "search-indexer/config", {
+        "queue": "prod.search.reindex", "workers": "4", "index": "products"})
+
+
 def main() -> None:
     a = Vault("vault-a", os.environ["VAULT_A_ADDR"], os.environ["VAULT_A_TOKEN"])
     b = Vault("vault-b", os.environ["VAULT_B_ADDR"], os.environ["VAULT_B_TOKEN"])
@@ -697,6 +729,7 @@ def main() -> None:
     pki = build_pki()
     seed_data(a, b, pki)
     seed_environments(a, b, pki)
+    seed_release_baseline(a, pki)
     seed_value_tool_fixtures(a, b, pki)
     seed_password_finder(a, b, pki)
     print("seed complete")

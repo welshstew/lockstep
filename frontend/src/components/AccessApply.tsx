@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { saveAccessPlan } from "../accessPlan";
-import type { AccessChanges, AccessItem, AccessPlanInfo } from "../types";
+import { approvalsNeeded } from "../plans";
+import { AudienceField, parseAudience } from "./AudienceField";
+import type { AccessChanges, AccessItem, AccessPlanInfo, PlanApprovals } from "../types";
 
 const ACTION: Record<AccessItem["action"], [string, string]> = {
   new: ["new", "equal"], change: ["change", "different"], same: ["same", "unknown"], delete: ["delete", "error"], absent: ["not there", "unknown"],
@@ -27,12 +29,37 @@ export function AccessApply({ changes, label, onClose, plan, connIds = [], canAp
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<AccessPlanInfo | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
+  const [audience, setAudience] = useState(""); // the Lockstep servers that may apply a saved plan
   const [target, setTarget] = useState<string | null>(null);
+  const [current, setCurrent] = useState(plan);  // the plan, with any approval added here
+  const [approvals, setApprovals] = useState<PlanApprovals | null>(null);
   useEffect(() => { ref.current?.showModal(); }, []);
+  const check = (p: Record<string, unknown>) => api.accessPlanCheck(connIds, p)
+    .then((r) => { setInfo(r.plan); setItems(r.items); setTarget(r.conn_id); setApprovals(r.approvals); })
+    .catch((e) => setError(e.message));
   useEffect(() => {
-    if (plan) api.accessPlanCheck(connIds, plan).then((r) => { setInfo(r.plan); setItems(r.items); setTarget(r.conn_id); }).catch((e) => setError(e.message));
+    if (plan) check(plan);
     else if (changes) api.accessPreview(changes).then(setItems).catch((e) => setError(e.message));
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const unapproved = Boolean(approvals && approvals.approved_by.length < approvals.required);
+
+  async function approve() {
+    setBusy(true);
+    setError(null);
+    try {
+      const approved = await api.accessPlanApprove(target ? [target] : connIds, current!);
+      setCurrent(approved);
+      const url = URL.createObjectURL(new Blob([JSON.stringify(approved, null, 2) + "\n"], { type: "application/json" }));
+      const a = document.createElement("a");
+      a.href = url; a.download = `lockstep-access-plan-${approved.id}-approved.json`; a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      await check(approved);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
   const where = info ? info.vault + (info.namespace ? ` (namespace ${info.namespace})` : "") : label ?? "";
 
   const ready = (items ?? []).filter((i) => i.status === "ready");
@@ -44,7 +71,7 @@ export function AccessApply({ changes, label, onClose, plan, connIds = [], canAp
     setBusy(true);
     setError(null);
     try {
-      setApplied(plan ? await api.accessPlanApply(target ? [target] : connIds, plan)
+      setApplied(plan ? await api.accessPlanApply(target ? [target] : connIds, current!)
         : await api.accessApply(changes!, Object.fromEntries((items ?? []).map((i) => [i.id, i.hash]))));
     } catch (e) {
       setError((e as Error).message);
@@ -63,7 +90,14 @@ export function AccessApply({ changes, label, onClose, plan, connIds = [], canAp
         {error && <div className="notice error" role="alert">{error}</div>}
         {!items && !error && <div className="empty"><span className="spinner" /> Comparing with what’s in Vault…</div>}
         {info && <div className="subtle">Made by <strong>{info.created_by}</strong> on {new Date(info.created).toLocaleString()} for <strong>{where}</strong>.
-          Anything that changed in Vault since then is skipped.</div>}
+          Anything that changed in Vault since then is skipped.{info.audience?.length ? <> Only for <strong>{info.audience.join(", ")}</strong>.</> : null}</div>}
+        {approvals && !applied && (approvals.required > 0 || approvals.approved_by.length > 0) && (
+          <div className={`notice ${unapproved ? "warn" : "info"} plan-approvals`} role="status">
+            {approvals.approved_by.length > 0 ? <>Approved by {approvals.approved_by.join(", ")}. </> : <>Not approved yet. </>}
+            {approvalsNeeded(approvals)}
+            {approvals.problems.join(" ")}
+          </div>
+        )}
         {plan && !canApply && <div className="notice warn">Writing policies and roles is turned off on this Lockstep server (LOCKSTEP_POLICY_APPLY): you can check the plan, not apply it.</div>}
         {saved && <div className="notice info" role="status">Saved access plan {saved}. Anyone with the rights can open it in Policies → Open an access plan… on this Lockstep server, check it and apply it.</div>}
         <ul className="plan-list">
@@ -99,13 +133,18 @@ export function AccessApply({ changes, label, onClose, plan, connIds = [], canAp
                 Write {ready.length} change{ready.length === 1 ? "" : "s"} to <strong>{where}</strong></label>
             ))}
             <span className="spacer" />
+            {!plan && changes && items && !saved && <AudienceField value={audience} onChange={setAudience} />}
             {!plan && changes && items && (
               <button type="button" className="btn ghost" title="A signed file with these changes (no secrets), for someone with the rights to check and apply"
-                      onClick={async () => { try { setSaved(await saveAccessPlan(changes)); } catch (e) { setError((e as Error).message); } }}>Save as access plan</button>
+                      onClick={async () => { try { setSaved(await saveAccessPlan(changes, parseAudience(audience))); } catch (e) { setError((e as Error).message); } }}>Save as access plan</button>
+            )}
+            {plan && items && (approvals?.required ?? 0) > 0 && (
+              <button type="button" className="btn ghost" disabled={busy} onClick={approve}
+                      title="Add your approval to the plan and download it: four-eyes, before someone applies it">Approve</button>
             )}
             <button type="button" className="btn ghost" onClick={() => ref.current?.close()} disabled={busy}>Cancel</button>
             <button type="button" className={`btn ${deletes.length ? "danger-solid" : "primary"}`}
-                    disabled={busy || !canApply || !ready.length || (deletes.length ? typed !== phrase : !confirmed)} onClick={apply}>
+                    disabled={busy || !canApply || unapproved || !ready.length || (deletes.length ? typed !== phrase : !confirmed)} onClick={apply}>
               {busy && <span className="spinner" />} {deletes.length ? "Delete" : "Write"}
             </button>
           </>

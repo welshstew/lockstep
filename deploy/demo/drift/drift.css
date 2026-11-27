@@ -16,11 +16,31 @@
 .drift .status.new .dot { background: var(--right); }
 .drift .status.error .dot { background: var(--diff); }
 .drift .counts { margin: 0 0 12px; font-size: 14px; color: var(--text-2); }
-.drift .strip { display: flex; gap: 1px; height: 18px; margin: 0 0 12px; overflow: hidden; }
-.drift .cell { flex: 1 1 0; min-width: 1px; max-width: 8px; border-radius: 1px; background: var(--surface-2); }
+/* The last 12 hours: a fixed slot per run, so the strip keeps its length and slides along */
+.drift .strip { display: flex; gap: 1px; height: 22px; margin: 0; }
+.drift .cell { position: relative; flex: 1 1 0; min-width: 1px; border-radius: 1px; background: var(--surface-2); }
 .drift .cell.clean, .drift .cell.known { background: var(--equal); opacity: .55; }
 .drift .cell.new { background: var(--right); }
 .drift .cell.error { background: var(--diff); }
+.drift .cell:hover { opacity: 1; outline: 2px solid var(--text); outline-offset: 1px; z-index: 1; }
+/* The hover tip: when the run was and what it found (title too, for touch and screen readers) */
+.drift .cell:hover::after {
+  content: attr(data-tip); position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%);
+  white-space: nowrap; font-size: 12px; line-height: 1.3; padding: 5px 8px; border-radius: 6px;
+  background: var(--text); color: var(--bg); pointer-events: none; z-index: 2;
+}
+.drift .cell.l:hover::after { left: 0; transform: none; }
+.drift .cell.r:hover::after { left: auto; right: 0; transform: none; }
+.drift .axis { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-3); margin: 4px 0 12px; }
+.drift details.shot { margin: 10px 0 0; border-top: 1px solid var(--border); padding-top: 10px; }
+.drift details.shot summary { cursor: pointer; font-size: 14px; font-weight: 600; color: var(--text-2); }
+.drift details.shot summary:hover { color: var(--text); }
+.drift details.shot figure { margin: 10px 0 0; }
+.drift details.shot img { display: block; width: 100%; height: auto; border: 1px solid var(--border); border-radius: var(--radius); }
+.drift figure.wide { margin: 0; max-width: 1100px; }
+.drift figure.wide img { display: block; width: 100%; height: auto; border: 1px solid var(--border); border-radius: var(--radius); }
+.drift figure.wide figcaption { font-size: 14px; color: var(--text-2); margin: 10px 0 0; line-height: 1.6; max-width: 760px; }
+.drift details.shot figcaption { font-size: 13px; color: var(--text-3); margin: 6px 0 0; line-height: 1.5; }
 .drift table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 4px 0 10px; display: block; overflow-x: auto; }
 .drift caption { text-align: left; font-weight: 600; font-size: 14px; padding: 4px 0 6px; }
 .drift th, .drift td { text-align: left; padding: 5px 10px 5px 0; border-bottom: 1px solid var(--border); vertical-align: top; }
@@ -30,3 +50,7 @@
 .drift .fine { font-size: 13px; color: var(--text-3); margin: 6px 0 0; }
 .drift .how { font-size: 22px; margin: 48px 0 12px; }
 .drift pre { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; overflow-x: auto; font-size: 13px; line-height: 1.5; }
+.drift details.baseline { margin: 10px 0 0; border-top: 1px solid var(--border); padding-top: 10px; }
+.drift details.baseline summary { cursor: pointer; font-size: 14px; font-weight: 600; color: var(--text-2); }
+.drift details.baseline summary:hover { color: var(--text); }
+.drift details.baseline pre { max-height: 360px; overflow: auto; margin: 10px 0 6px; font-size: 12px; }

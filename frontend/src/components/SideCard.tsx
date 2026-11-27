@@ -22,7 +22,7 @@ interface Props {
 const NEW = "__new__";
 const PRESET = "preset:"; // "preset:<id>": sign in to that preset connection
 
-function expiry(c: Connection): string {
+export function expiry(c: Connection): string {
   if (!c.expires_at) return "no expiry";
   const mins = Math.round((c.expires_at * 1000 - Date.now()) / 60000);
   if (mins <= 0) return "expired";

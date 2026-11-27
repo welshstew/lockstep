@@ -12,12 +12,16 @@ findings with the baseline:
 
 `--fail-on any` fails on any finding (the default without a baseline), `new` on new ones (the
 default with one), `changed` on new or resolved ones. An expired waiver always fails the run.
+
+Baselines and waivers files can be signed with the plan key (lockstep.driftsign), so a change to
+what's accepted needs that key, not just write access to the repository.
 """
 
 from __future__ import annotations
 
 import datetime as dt
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -26,6 +30,9 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from .. import driftsign
+from ..config import Settings
+from ..plansign import Issuer, KeyError_, Keys, _keys, installation_name
 from ..rules import _glob
 from . import report as report_mod
 from .connect import CliError
@@ -68,6 +75,12 @@ class Baseline(BaseModel):
     right: BaselineSide
     profile: str | None = None
     drift: list[Finding] = []
+    issuer: Issuer | None = None  # who signed it (lockstep baseline update --sign)
+    signature: str | None = None
+
+    def body(self) -> dict:
+        """What the signature covers (with the issuer)."""
+        return self.model_dump(mode="json", exclude_none=True, exclude={"issuer", "signature"})
 
 
 class Waiver(BaseModel):
@@ -158,6 +171,31 @@ def baseline_of(rep: report_mod.Report) -> Baseline:
                     right=side(rep.right), profile=rep.profile, drift=findings(rep))
 
 
+def cli_keys(settings: Settings) -> Keys:
+    """The plan keys from LOCKSTEP_PLAN_SIGNING_KEY and LOCKSTEP_PLAN_TRUSTED_KEYS, for signing and checking."""
+    try:
+        return _keys(settings.plan_signing_key, tuple((t.name, t.key) for t in settings.plan_trusted_keys),
+                     installation_name(settings))
+    except KeyError_ as e:
+        raise CliError(f"Plan keys are misconfigured: {e}") from e
+
+
+def sign_baseline(b: Baseline, keys: Keys) -> Baseline:
+    try:
+        b.issuer, b.signature = driftsign.sign("baseline", b.body(), keys)
+    except driftsign.SignatureProblem as e:
+        raise CliError(str(e)) from e
+    return b
+
+
+def check_signed(kind: driftsign.Kind, body: dict, issuer: Issuer | None, signature: str | None, keys: Keys,
+                 path: str, require: bool) -> str | None:
+    try:
+        return driftsign.check(kind, body, issuer, signature, keys, path, require)
+    except driftsign.SignatureProblem as e:
+        raise CliError(str(e)) from e
+
+
 def dump_baseline(b: Baseline) -> str:
     """Stable, sorted JSON, so a baseline checked into Git diffs cleanly."""
     return json.dumps(b.model_dump(exclude_none=True), indent=2, ensure_ascii=False) + "\n"
@@ -198,7 +236,22 @@ def check_matches(b: Baseline, rep: report_mod.Report, path: str) -> None:
 # --------------------------------------------------------------------------- waivers
 
 
+@dataclass
+class WaiversFile:
+    waivers: list[Waiver]
+    issuer: Issuer | None = None
+    signature: str | None = None
+
+    def body(self) -> dict:
+        """What the signature covers (with the issuer): the waivers, not the file's layout or comments."""
+        return {"waivers": [w.model_dump(mode="json", exclude_none=True) for w in self.waivers]}
+
+
 def load_waivers(path: str) -> list[Waiver]:
+    return load_waivers_file(path).waivers
+
+
+def load_waivers_file(path: str) -> WaiversFile:
     p = Path(path)
     if not p.is_file():
         raise CliError(f"No waivers file at {path}.")
@@ -206,10 +259,16 @@ def load_waivers(path: str) -> list[Waiver]:
         raw = yaml.safe_load(p.read_text())
     except yaml.YAMLError as e:
         raise CliError(f"{path} isn't valid YAML: {e}") from e
+    issuer, signature = None, None
     if isinstance(raw, dict):
+        try:
+            issuer = Issuer.model_validate(raw["issuer"]) if raw.get("issuer") else None
+        except ValidationError as e:
+            raise CliError(f"{path}: its issuer isn't valid: {e}") from e
+        signature = str(raw["signature"]) if raw.get("signature") else None
         raw = raw.get("waivers")
     if raw is None:
-        return []
+        return WaiversFile([], issuer, signature)
     if not isinstance(raw, list):
         raise CliError(f"{path} should hold a list of waivers (or `waivers:` with one).")
     out, problems = [], []
@@ -221,7 +280,20 @@ def load_waivers(path: str) -> list[Waiver]:
             problems.append(f"  waiver {i + 1}: {fields}")
     if problems:
         raise CliError(f"{path} has mistakes:\n" + "\n".join(problems))
-    return out
+    return WaiversFile(out, issuer, signature)
+
+
+_SIGNED_LINES = re.compile(r"^(issuer|signature):.*(\n[ \t]+.*)*\n?", re.M)
+
+
+def signed_waivers_text(text: str, issuer: Issuer, signature: str) -> str:
+    """The waivers file with its issuer and signature at the end (replacing earlier ones). Comments and
+    layout stay; a bare list is put under `waivers:` first."""
+    text = _SIGNED_LINES.sub("", text).rstrip("\n") + "\n"
+    if not re.search(r"^waivers:", text, re.M):
+        text = "waivers:\n" + "".join(f"  {line}" if line.strip() else line for line in text.splitlines(True))
+    return (text + f"issuer: {json.dumps(issuer.model_dump())}\n"
+            f"signature: {json.dumps(signature)}\n")
 
 
 # --------------------------------------------------------------------------- check

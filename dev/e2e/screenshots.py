@@ -40,7 +40,7 @@ def sign_in(page: Page, mount: str, prefix: str = "") -> None:
     page.evaluate("localStorage.setItem('lockstep.view', 'compare')")
     page.evaluate("s => localStorage.setItem('lockstep.sides', JSON.stringify(s))",
                   [{"connId": a["id"], "mount": mount, "prefix": prefix}, {"connId": b["id"], "mount": mount, "prefix": prefix}])
-    page.reload()
+    page.goto(BASE)  # not reload: a #/browse link would open Browse
 
 
 def compare(page: Page, everything: bool = False) -> None:
@@ -87,7 +87,7 @@ def scenes(page: Page, theme: str) -> None:
     page.goto(BASE)
     for c in api(page, "GET", "/api/connections"):
         api(page, "DELETE", f"/api/connections/{c['id']}")
-    page.evaluate("localStorage.clear()")
+    page.evaluate("localStorage.clear(); localStorage.setItem('lockstep.view', 'compare')")  # the side cards
     page.reload()
     expect(page.get_by_text("This Vault offers").first).to_be_visible()
     shot(page, "01-connect", theme, page.locator(".sides"))
@@ -394,9 +394,9 @@ def scenes(page: Page, theme: str) -> None:
     page.evaluate("window.scrollTo(0, 0)")
     shot(page, "20-browse", theme)
     panel.get_by_role("region", name="Unsaved changes").get_by_role("button", name="Discard").click()
+    page.get_by_role("tab", name="Compare", exact=True).click()  # Browse has no side cards
     for side in ("left", "right"):
         page.get_by_role("button", name=f"Expand the {side} side").click()
-    page.get_by_role("tab", name="Compare", exact=True).click()
 
     tool_scenes(page, theme)
 

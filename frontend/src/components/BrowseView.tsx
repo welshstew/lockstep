@@ -6,9 +6,9 @@ import { MetadataEditor, randomValue, SharePanel, Snippets, toYaml, UnwrapDialog
 import { DestroyDialog } from "./DestroyDialog";
 import type { InspectTarget } from "./Inspector";
 import { formatValue, typeName } from "./ValueCell";
+import { browseUndoWrites, downloadUndo } from "../plans";
 
 export interface BrowseTarget {
-  side: "left" | "right";
   conn_id: string;
   mount: string;
   prefix: string;
@@ -19,11 +19,12 @@ export interface BrowseTarget {
   export?: "any" | "encrypted" | "off"; // exports allowed from here
 }
 
-type Go = (view: "compare" | "expiry" | "policies" | "policy-build" | "transfer", side: "left" | "right", folder: string) => void;
+type Go = (view: "compare" | "expiry" | "policies" | "policy-build" | "transfer", folder: string) => void;
 
 interface Props {
   config: AppConfig;
-  targets: BrowseTarget[];
+  /** The connection and mount chosen in the Connections list; null until both are */
+  target: BrowseTarget | null;
   reveal: boolean;
   onInspect: (t: InspectTarget[]) => void;
   onGo: Go;
@@ -32,7 +33,6 @@ interface Props {
 interface Draft { set: Record<string, unknown>; remove: string[]; isNew: boolean }
 interface Staged { edit: BrowseEdit; label: string }
 
-const SIDE_KEY = "lockstep.browse.side";
 const STAGE_KEY = "lockstep.browse.stage";
 const CLIPBOARD_CLEAR_MS = 30_000;
 
@@ -40,9 +40,10 @@ const clean = (p: string) => p.replace(/^\/+|\/+$/g, "");
 const parentOf = (p: string) => (p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "");
 const asText = (v: unknown) => (v === undefined ? "" : typeof v === "string" ? v : JSON.stringify(v, null, 2));
 
-function readHash(): { side: "left" | "right"; mount: string; path: string } | null {
-  const m = /^#\/browse\/(left|right)\/([^/]+)\/(.+)$/.exec(window.location.hash);
-  return m ? { side: m[1] as "left" | "right", mount: decodeURIComponent(m[2]), path: decodeURIComponent(m[3]) } : null;
+/** A link to a secret: #/browse/<mount>/<path>. Older links also named a side (left/ or right/ first). */
+export function readHash(): { mount: string; path: string } | null {
+  const m = /^#\/browse\/(?:(?:left|right)\/)?([^/]+)\/(.+)$/.exec(window.location.hash);
+  return m ? { mount: decodeURIComponent(m[1]), path: decodeURIComponent(m[2]) } : null;
 }
 
 function load<T>(key: string, fallback: T): T {
@@ -52,11 +53,9 @@ function save(key: string, v: unknown) {
   try { localStorage.setItem(key, JSON.stringify(v)); } catch { /* ignore */ }
 }
 
-/** Browse one side's KV v2 mount as a tree, and edit it with check-and-set. */
-export function BrowseView({ config, targets, reveal, onInspect, onGo }: Props) {
+/** Browse one connection's KV v2 mount as a tree, and edit it with check-and-set. */
+export function BrowseView({ config, target, reveal, onInspect, onGo }: Props) {
   const hash = useMemo(readHash, []);
-  const [sideId, setSideId] = useState<"left" | "right">(() => hash?.side ?? load(SIDE_KEY, "left"));
-  const target = targets.find((t) => t.side === sideId) ?? targets[0];
   const root = target ? clean(target.prefix) : "";
   const [folders, setFolders] = useState<Record<string, BrowseList | "loading" | { error: string }>>({});
   const [open, setOpen] = useState<Set<string>>(new Set([""]));
@@ -75,7 +74,6 @@ export function BrowseView({ config, targets, reveal, onInspect, onGo }: Props) 
   const key = target ? `${target.conn_id}|${target.mount}` : "";
 
   const setStage = (v: boolean) => { setStageState(v); save(STAGE_KEY, v); };
-  const pickSide = (s: "left" | "right") => { setSideId(s); save(SIDE_KEY, s); };
 
   const loadFolder = useCallback(async (folder: string, offset = 0) => {
     if (!target) return;
@@ -93,13 +91,13 @@ export function BrowseView({ config, targets, reveal, onInspect, onGo }: Props) 
     }
   }, [target?.conn_id, target?.mount]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // A new side or mount: start again at its prefix (or at the linked path)
+  // A new connection or mount: start again at its prefix (or at the linked path)
   useEffect(() => {
     setFolders({});
     setFound(null);
     setStaged([]);
     if (!target) return;
-    const linked = hash && hash.side === target.side && hash.mount === target.mount ? clean(hash.path) : null;
+    const linked = hash && hash.mount === target.mount ? clean(hash.path) : null;
     const opened = new Set([root]);
     if (linked) {
       const parts = linked.split("/");
@@ -113,7 +111,7 @@ export function BrowseView({ config, targets, reveal, onInspect, onGo }: Props) 
   const select = (path: string | null) => {
     setSelected(path);
     if (path && target) {
-      window.history.replaceState(null, "", `#/browse/${target.side}/${encodeURIComponent(target.mount)}/${path}`);
+      window.history.replaceState(null, "", `#/browse/${encodeURIComponent(target.mount)}/${path}`);
     } else {
       window.history.replaceState(null, "", window.location.pathname + window.location.search);
     }
@@ -150,8 +148,8 @@ export function BrowseView({ config, targets, reveal, onInspect, onGo }: Props) 
     }
   }
 
-  if (!targets.length) {
-    return <div className="notice info">Choose a connection and a KV v2 mount on a side to browse it.</div>;
+  if (!target) {
+    return <div className="notice info">Choose a connection and a KV v2 secret engine above to browse it.</div>;
   }
 
   const renderFolder = (folder: string, depth: number) => {
@@ -199,15 +197,7 @@ export function BrowseView({ config, targets, reveal, onInspect, onGo }: Props) 
   return (
     <section className="browse">
       <div className="browse-bar">
-        {targets.length > 1 ? (
-          <div className="segmented small" role="group" aria-label="Which side to browse">
-            {targets.map((t) => (
-              <button key={t.side} type="button" aria-pressed={t.side === target.side} onClick={() => pickSide(t.side)}>
-                <span className={`side-dot ${t.side}`} /> {t.label}
-              </button>
-            ))}
-          </div>
-        ) : <span className={`scope ${target.side}`}>{target.label}</span>}
+        <span className="scope left">{target.label}</span>
         <form className="browse-find" onSubmit={(e) => { e.preventDefault(); find(); }}>
           <input type="search" className="search" placeholder="Find secrets by name…" value={query} aria-label="Find secrets"
                  onChange={(e) => { setQuery(e.target.value); if (!e.target.value) setFound(null); }} />
@@ -331,6 +321,7 @@ function SecretPanel({ target, path, config, reveal, stage, onStage, onInspect, 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [undoable, setUndoable] = useState<BrowseEditResult[] | null>(null);  // the last save, for an undo plan
   const [diff, setDiff] = useState<BrowseDiff | null>(null);
   const [destroying, setDestroying] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
@@ -398,6 +389,7 @@ function SecretPanel({ target, path, config, reveal, stage, onStage, onInspect, 
       const [res] = await api.browseApply(target.conn_id, target.mount, [edit]);
       if (res.status === "applied") {
         setNotice(res.new_version ? `Saved as v${res.new_version}.` : `${label}: done.`);
+        setUndoable(browseUndoWrites(target.conn_id, target.mount, [res]).length ? [res] : null);
         setDraft({ set: {}, remove: [], isNew: false });
         setEditing({});
         setConfirm(null);
@@ -477,7 +469,14 @@ function SecretPanel({ target, path, config, reveal, stage, onStage, onInspect, 
         )}
       </header>
 
-      {notice && <div className="notice info" role="status">{notice} <button type="button" className="btn ghost small" onClick={() => setNotice(null)}>✕</button></div>}
+      {notice && <div className="notice info" role="status">{notice}
+        {undoable && <button type="button" className="btn ghost small" title="A signed file that puts back what this save changed, for you or someone else to apply in Sync plans"
+          onClick={async () => {
+            try { setNotice(`Undo plan saved as ${await downloadUndo(browseUndoWrites(target.conn_id, target.mount, undoable))}. Open it in Sync plans to apply it.`); }
+            catch (e) { setError((e as Error).message); }
+            setUndoable(null);
+          }}>Make an undo plan</button>}
+        <button type="button" className="btn ghost small" aria-label="Dismiss" onClick={() => { setNotice(null); setUndoable(null); }}>✕</button></div>}
       {error && <div className="notice error" role="alert">{error}</div>}
       {missing && !writable && <div className="notice info">No secret here.</div>}
       {missing && writable && <div className="notice info">A new secret: add its first keys below, then save.</div>}
@@ -557,7 +556,7 @@ function SecretPanel({ target, path, config, reveal, stage, onStage, onInspect, 
                               title="Copy to the clipboard (cleared after 30 seconds where the browser allows)">{copied === k ? "Copied" : "Copy"}</button>
                     )}
                     {!typed && !isNewKey && info?.caps.read !== false && (
-                      <button type="button" className="btn ghost small" onClick={() => onInspect([{ side: target.side, title: `${target.label} · ${path} · ${k}`, loc: loc(k) }])}>Inspect</button>
+                      <button type="button" className="btn ghost small" onClick={() => onInspect([{ side: "left", title: `${target.label} · ${path} · ${k}`, loc: loc(k) }])}>Inspect</button>
                     )}
                     {canWrite && !ed && !removed && (
                       <button type="button" className="btn ghost small" onClick={() => setEditing({ ...editing, [k]: typed
@@ -704,12 +703,12 @@ function SecretPanel({ target, path, config, reveal, stage, onStage, onInspect, 
       {info && (
         <footer className="panel-foot">
           <div className="row">
-            <button type="button" className="btn ghost small" onClick={() => onGo("compare", target.side, folder)}>Compare this folder…</button>
-            <button type="button" className="btn ghost small" onClick={() => onGo("expiry", target.side, folder)}>Scan for certificates</button>
-            <button type="button" className="btn ghost small" onClick={() => onGo("policies", target.side, folder)}>Why can I…?</button>
-            <button type="button" className="btn ghost small" onClick={() => onGo("policy-build", target.side, folder)}
+            <button type="button" className="btn ghost small" onClick={() => onGo("compare", folder)}>Compare this folder…</button>
+            <button type="button" className="btn ghost small" onClick={() => onGo("expiry", folder)}>Scan for certificates</button>
+            <button type="button" className="btn ghost small" onClick={() => onGo("policies", folder)}>Why can I…?</button>
+            <button type="button" className="btn ghost small" onClick={() => onGo("policy-build", folder)}
                     title="Start a policy draft that lets someone read this folder; adjust it in Policies › Build">Policy for this folder…</button>
-            {(target.export ?? config.export_mode) !== "off" && <button type="button" className="btn ghost small" onClick={() => onGo("transfer", target.side, folder)}>Export this folder…</button>}
+            {(target.export ?? config.export_mode) !== "off" && <button type="button" className="btn ghost small" onClick={() => onGo("transfer", folder)}>Export this folder…</button>}
             {info.state === "present" && info.caps.read !== false && (
               <button type="button" className="btn ghost small" aria-expanded={sharing} onClick={() => setSharing(!sharing)}>Share once…</button>
             )}
@@ -742,7 +741,7 @@ function SecretPanel({ target, path, config, reveal, stage, onStage, onInspect, 
       )}
 
       {destroying && info && (
-        <DestroyDialog side={target.side} sideLabel={target.label} vault={{ conn_id: target.conn_id, mount: target.mount, prefix: "" }}
+        <DestroyDialog sideLabel={target.label} vault={{ conn_id: target.conn_id, mount: target.mount, prefix: "" }}
                        secrets={[{ path, version: info.current_version }]}
                        onClose={(done) => { setDestroying(false); if (done) { onChanged(); onGone(); } }} />
       )}
@@ -757,7 +756,9 @@ function BrowseReview({ target, staged, reveal, onClose }: { target: BrowseTarge
   const [applied, setApplied] = useState<BrowseEditResult[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [undoFile, setUndoFile] = useState<string | null>(null);
   const edits = staged.map((s) => s.edit);
+  const undoWrites = applied ? browseUndoWrites(target.conn_id, target.mount, applied) : [];
 
   useEffect(() => { ref.current?.showModal(); }, []);
   useEffect(() => {
@@ -802,6 +803,12 @@ function BrowseReview({ target, staged, reveal, onClose }: { target: BrowseTarge
       </div>
       <footer className="review-foot">
         <span className="spacer" />
+        {applied && undoWrites.length > 0 && (
+          <button type="button" className="btn ghost" disabled={Boolean(undoFile)}
+                  title="A signed file that puts back what was saved, for you or someone else to apply in Sync plans"
+                  onClick={async () => { try { setUndoFile(await downloadUndo(undoWrites)); } catch (e) { setError((e as Error).message); } }}>
+            {undoFile ? `Undo plan saved as ${undoFile}` : "Make an undo plan"}</button>
+        )}
         {applied ? <button type="button" className="btn primary" onClick={() => ref.current?.close()}>Close</button> : (
           <>
             <button type="button" className="btn ghost" onClick={() => ref.current?.close()} disabled={busy}>Cancel</button>

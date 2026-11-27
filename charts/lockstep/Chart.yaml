@@ -2,8 +2,8 @@ apiVersion: v2
 name: lockstep
 description: Compare, inspect and sync KV secrets across HashiCorp Vault and OpenBao clusters.
 type: application
-version: 0.11.0
-appVersion: "0.11.0"
+version: 0.12.0
+appVersion: "0.12.0"
 kubeVersion: ">=1.27.0-0"
 keywords: [vault, hashicorp-vault, openbao, secrets, kv, compare, sync, certificates]
 icon: https://getlockstep.cloud/icon.svg
@@ -17,26 +17,20 @@ annotations:
   # The image this chart version runs: update with every release (scripts/check-version.sh checks it)
   artifacthub.io/images: |
     - name: lockstep
-      image: ghcr.io/welshstew/lockstep:0.11.0
+      image: ghcr.io/welshstew/lockstep:0.12.0
       platforms: [linux/amd64, linux/arm64]
   # What changed in this chart version, shown on Artifact Hub: rewrite for every release
   artifacthub.io/changes: |
-    - kind: changed
-      description: "Breaking: exportMode defaults to encrypted; set any (or a Vault's own exportMode) to allow plain exports"
     - kind: added
-      description: "A write policy per Vault (vaults[].writable, writePaths, denyPaths, allowDestroy, approvals, exportMode)"
+      description: "Several approvers: plans.approvals and vaults[].approvals go up to 5, counted by Vault entity"
     - kind: added
-      description: "Plans signed with an Ed25519 key travel between installations (plans.*), with four-eyes approvals and undo plans"
+      description: "Approver groups by Vault policy (plans.approverPolicies, vaults[].approverPolicies)"
     - kind: added
-      description: "driftCheck CronJob: scheduled drift checks with a baseline, waivers and Pushgateway gauges"
+      description: "exportProtection and vaults[].exportProtection limit how exports are encrypted (key, passphrase, age, teams)"
     - kind: added
-      description: "metrics.enabled and metrics.serviceMonitor: Prometheus metrics for the API, Vault calls and sign-ins"
+      description: "driftCheck.requireSigned and waiversSignature; the job gets plans.trustedKeys to check signed baselines and waivers"
     - kind: added
-      description: "Exports encrypted with a passphrase or a team's age keys (exportRecipients), and streamed for big mounts"
-    - kind: added
-      description: "An environment matrix, KV v1 (read-only), a namespace picker, and system settings in the configuration comparison"
-    - kind: added
-      description: "auditReveals, apiDocs, sign-in throttling, browser security headers and structured logging (logging.format)"
+      description: "App: Only for (plan audience) in the UI, a Matrix baseline from an export file with accepted drift, and a Connections list on Browse and Matrix"
   artifacthub.io/links: |
     - name: Website
       url: https://getlockstep.cloud

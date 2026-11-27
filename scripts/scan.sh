@@ -145,16 +145,16 @@ fi
 # ---------------------------------------------------------------- secrets
 log "gitleaks: git history"
 if [[ $NATIVE == 1 ]]; then
-  gitleaks git --no-banner --config .gitleaks.toml --redact --exit-code 0 \
+  gitleaks git --no-banner --config .gitleaks.toml --redact --log-opts=HEAD --exit-code 0 \
     --report-format sarif --report-path "$R/gitleaks.sarif" .
-  gitleaks git --no-banner --config .gitleaks.toml --redact --exit-code 0 \
+  gitleaks git --no-banner --config .gitleaks.toml --redact --log-opts=HEAD --exit-code 0 \
     --report-format json --report-path "$R/gitleaks.json" .
 else
   # The container runs as another user, so tell git the mounted repo is safe to read.
   "$ENGINE" run --rm -v "$PWD:/src:Z" -w /src --entrypoint sh "$GITLEAKS_IMG" -c "
     git config --global --add safe.directory /src &&
-    gitleaks git --no-banner --config .gitleaks.toml --redact --exit-code 0 --report-format sarif --report-path $R/gitleaks.sarif . &&
-    gitleaks git --no-banner --config .gitleaks.toml --redact --exit-code 0 --report-format json --report-path $R/gitleaks.json ."
+    gitleaks git --no-banner --config .gitleaks.toml --redact --log-opts=HEAD --exit-code 0 --report-format sarif --report-path $R/gitleaks.sarif . &&
+    gitleaks git --no-banner --config .gitleaks.toml --redact --log-opts=HEAD --exit-code 0 --report-format json --report-path $R/gitleaks.json ."
 fi
 
 # ---------------------------------------------------------------- gate

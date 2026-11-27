@@ -39,7 +39,8 @@ DOCS = ["usage", "cli", "authentication", "configuration", "kubernetes", "drift-
 # docs/guides/<name>.md published at /guides/<name>/: these first, in this order, then any others
 GUIDES = ["vault-secrets-in-development-environments", "compare-hashicorp-vault-clusters", "sync-vault-secrets-between-environments",
           "promote-vault-secrets-with-approvals", "detect-vault-secret-drift-in-ci", "export-import-vault-secrets", "migrate-vault-to-openbao",
-          "build-a-comparison-profile", "compare-environments-after-a-rename", "vault-jwt-login-from-ci"]
+          "build-a-comparison-profile", "compare-environments-after-a-rename", "vault-jwt-login-from-ci",
+          "run-the-lockstep-demo-locally"]
 
 
 class Page:
@@ -193,12 +194,24 @@ _LIST_ITEM = re.compile(r"^(\s*)([-*+]|\d+\.)\s")
 def _lists_after_text(text: str) -> str:
     """Read lists the way GitHub does. Python-Markdown needs a blank line before a list that
     follows a line of text (or the items run into the paragraph), and four spaces, not two, to
-    nest a list or a paragraph under an item. Outside code fences that aren't in a list."""
+    nest a list or a paragraph under an item. Outside code fences that aren't in a list. A code fence
+    inside a list item becomes an indented code block, which Python-Markdown nests in the item."""
     out: list[str] = []
     fence = in_list = False
+    nested = 0  # indent of a code fence inside a list item: its lines become an indented code block
     for line in text.split("\n"):
         indent = len(line) - len(line.lstrip(" "))
+        if nested:
+            if line.lstrip().startswith(("```", "~~~")):
+                fence, nested = False, 0
+                out.append("")
+            else:
+                out.append(" " * (2 * nested + 4) + line[nested:] if line.strip() else "")
+            continue
         if line.lstrip().startswith(("```", "~~~")):
+            if in_list and indent and not fence:
+                nested = indent  # Python-Markdown's fences don't work inside a list
+                continue
             fence = not fence
         elif not fence and line.strip() and indent == 0:
             item = bool(_LIST_ITEM.match(line))

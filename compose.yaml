@@ -11,8 +11,9 @@ name: lockstep
 
 x-vault: &vault
   # No Red Hat Hardened Image exists for Vault (or OpenBao). Dev stack only: in Kubernetes
-  # the tool connects to your existing Vaults.
-  image: docker.io/hashicorp/vault:1.21.4
+  # the tool connects to your existing Vaults. VAULT_IMAGE: another release, as the scheduled
+  # vault-release workflow does (it reads the pin below).
+  image: ${VAULT_IMAGE:-docker.io/hashicorp/vault:2.2.2@sha256:dfa48c2fa2b0099ccb47681ec5c4804bf5aec9d6879ecfee07ad4b92a5427ad6}
   cap_add: [IPC_LOCK]
   environment: &vault-env
     SKIP_SETCAP: "true"
@@ -38,16 +39,15 @@ services:
       VAULT_DEV_ROOT_TOKEN_ID: root-b
     ports: ["8201:8200"]
 
-  # The latest Vault release, for checking that Lockstep's policy matching agrees with it as
-  # well as with vault-a/vault-b's version (tests/test_policy_acl.py). Tests only.
-  # VAULT_LATEST_IMAGE: another release, as the scheduled vault-release workflow does.
-  vault-latest:
+  # A Vault 1.x release, so the matcher's 1.x evaluation rules (LEGACY in lockstep/policy/acl.py)
+  # are still checked against a real Vault (tests/test_policy_acl.py). Tests only.
+  vault-legacy:
     <<: *vault
-    image: ${VAULT_LATEST_IMAGE:-docker.io/hashicorp/vault:2.2.2}
+    image: docker.io/hashicorp/vault:1.21.4@sha256:4e33b126a59c0c333b76fb4e894722462659a6bec7c48c9ee8cea56fccfd2569
     profiles: [test]
     environment:
       <<: *vault-env
-      VAULT_DEV_ROOT_TOKEN_ID: root-latest
+      VAULT_DEV_ROOT_TOKEN_ID: root-legacy
 
   # OpenBao standing in for Vault B (make test-openbao): the same root token, so the seed and
   # tests run unchanged. VAULT_B_HOST=openbao points the app, seed and tests at it.
@@ -150,6 +150,19 @@ services:
           "rules": {"mappings": [{"left": "enterprise-logging-app/**", "right": "ELP/**"}],
                     "rewrites": [{"left": "enterprise-logging-app", "right": "elp"}, {"left": "test", "right": "dev"}],
                     "ignore_keys": [{"key": "api_token", "path": "**"}, {"key": "log_level", "path": "**"},
+                                    {"key": "tls.*", "path": "**/certs"}]}},
+         {"name": "Release ↔ test: apps",
+          "description": "The last release (apps-baseline in Vault A, prod values) against test (apps in Vault A). For the environment matrix: rewrites prod to test; tokens, log level and TLS material differ per environment by design",
+          "left_mount": "apps-baseline", "right_mount": "apps",
+          "rules": {"rewrites": [{"left": "prod", "right": "test"}],
+                    "ignore_keys": [{"key": "api_token", "path": "**"}, {"key": "log_level", "path": "**"},
+                                    {"key": "tls.*", "path": "**/certs"}]}},
+         {"name": "Release ↔ dev: apps (ELP rename)",
+          "description": "The last release (apps-baseline in Vault A, prod values) against dev (apps in Vault B), where enterprise-logging-app is now ELP. For the environment matrix: maps the folder, rewrites the name and prod to dev; tokens, log level and TLS material differ per environment by design",
+          "left_mount": "apps-baseline", "right_mount": "apps",
+          "rules": {"mappings": [{"left": "enterprise-logging-app/**", "right": "ELP/**"}],
+                    "rewrites": [{"left": "enterprise-logging-app", "right": "elp"}, {"left": "prod", "right": "dev"}],
+                    "ignore_keys": [{"key": "api_token", "path": "**"}, {"key": "log_level", "path": "**"},
                                     {"key": "tls.*", "path": "**/certs"}]}}]
       # Kubernetes auth: only usable when the token file exists, i.e. with --profile k8s.
       LOCKSTEP_K8S_AUTH_ENABLED: "true"
@@ -178,13 +191,13 @@ services:
     environment:
       VAULT_A_ADDR: http://vault-a:8200
       VAULT_B_ADDR: http://${VAULT_B_HOST:-vault-b}:8200
-      VAULT_LATEST_ADDR: http://vault-latest:8200
+      VAULT_LEGACY_ADDR: http://vault-legacy:8200
       LOCKSTEP_K8S_AUTH_ENABLED: "true"
     volumes:
       - k8s-sa:/var/run/secrets/kubernetes.io/serviceaccount:ro
     depends_on:
       seed: {condition: service_completed_successfully}
-      vault-latest: {condition: service_healthy}
+      vault-legacy: {condition: service_healthy}
 
   # README screenshots, generated from the running app: make screenshots
   screenshots:

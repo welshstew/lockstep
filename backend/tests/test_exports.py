@@ -517,3 +517,44 @@ def test_export_mode_per_preset_api(vaults):
         app.dependency_overrides[get_settings] = lambda: Settings(**(base | {"preset_connections": presets}))
         r = c.post("/api/exports", json={"side": side(b["id"]), "encrypt": True})
         assert r.status_code == 403 and "turned off for Vault B" in r.text
+
+
+def test_export_protection_combines_server_and_preset():
+    from lockstep import writepolicy
+    from lockstep.config import PresetConnection
+    from lockstep.session import Connection
+    s = Settings(session_key="x" * 32, preset_connections=[
+        PresetConnection(name="Dev", url="https://v.dev"),
+        PresetConnection(name="Prod", url="https://v.prod", export_protection=["teams"]),
+        PresetConnection(name="Prod team-a", url="https://v.prod", namespace="a", export_protection=["age", "key"])])
+    conn = lambda pid, url: Connection(name="c", url=url, token="t", auth_method="token", preset_id=pid)  # noqa: E731
+    every = ["key", "passphrase", "age", "teams"]
+    assert writepolicy.export_protection(s, conn(0, "https://v.dev")) == every
+    assert writepolicy.export_protection(s, conn(1, "https://v.prod")) == ["teams"]
+    assert writepolicy.export_protection(s, conn(2, "https://v.prod")) == ["key", "age", "teams"]  # age includes the teams
+    assert writepolicy.export_protection(s, conn(None, "https://v.prod")) == ["teams"]  # every preset there
+    narrowed = s.model_copy(update={"export_protection": ["age"]})
+    assert writepolicy.export_protection(narrowed, conn(0, "https://v.dev")) == ["age", "teams"]
+    assert writepolicy.export_protection(narrowed, conn(2, "https://v.prod")) == ["age", "teams"]
+    assert writepolicy.export_protection(s.model_copy(update={"export_protection": ["passphrase"]}), conn(1, "https://v.prod")) == []
+    assert Settings(session_key="x" * 32, export_protection="age, teams").export_protection == ["age", "teams"]  # env style
+
+
+def test_export_protection_is_enforced(vaults):
+    """Only a team's age keys allowed: a one-time key, a passphrase and pasted age keys are refused."""
+    from pyrage import x25519
+    team_key = str(x25519.Identity.generate().to_public())
+    other = str(x25519.Identity.generate().to_public())
+    app = create_app()
+    base = get_settings().model_dump()
+    app.dependency_overrides[get_settings] = lambda: Settings(**(base | {
+        "export_protection": ["teams"], "export_recipients": [{"name": "Platform", "recipients": [team_key]}]}))
+    with TestClient(app, headers={"X-Requested-With": "lockstep"}) as c:
+        assert c.get("/api/config").json()["export_protection"] == ["teams"]
+        cid = c.post("/api/connections", json={"preset_id": 1, "auth": {"method": "token", "token": "root-b"}}).json()["id"]
+        side = {"conn_id": cid, "mount": "app-config", "prefix": "payments"}
+        for how in ({}, {"passphrase": "a long enough passphrase"}, {"recipients": [other]}, {"teams": ["Platform"], "recipients": [other]}):
+            r = c.post("/api/exports", json={"side": side, "encrypt": True} | how)
+            assert r.status_code == 403 and "only allows exports protected with a team's age keys" in r.text, (how, r.text)
+        r = c.post("/api/exports", json={"side": side, "encrypt": True, "teams": ["Platform"]})
+        assert r.status_code == 200 and r.json()["scheme"] == "age" and r.json()["file"]["recipients"] == [team_key]

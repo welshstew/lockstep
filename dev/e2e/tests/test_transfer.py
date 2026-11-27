@@ -107,6 +107,9 @@ def test_export_compare_against_the_file_and_import(page, sandbox, vault_a, vaul
     prev.locator("label.confirm input").check()
     prev.get_by_role("button", name="Import").click()
     expect(imp.locator(".import-preview .notice")).to_contain_text("1 written")
+    with page.expect_download() as dl:
+        imp.get_by_role("button", name="Make an undo plan").click()
+    assert dl.value.suggested_filename.startswith("lockstep-undo-")
     assert vault_b.get("app-config", f"{sandbox}/test/app") == {"env": "application-test-env", "dba": "testDBA"}
 
 

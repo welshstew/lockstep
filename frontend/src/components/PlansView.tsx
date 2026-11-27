@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { api } from "../api";
-import { downloadReport, downloadUndoPlan, planFileName, saveFile, vaultLabel } from "../plans";
+import { approvalsNeeded, downloadReport, downloadUndoPlan, planFileName, saveFile, vaultLabel } from "../plans";
 import { absoluteTime } from "../time";
 import type { Connection, PlanApplyResult, PlanCheck, PlanCheckStatus, SyncPlan, UndoApplyResult, UndoCheck, UndoPlan } from "../types";
 
@@ -29,7 +29,8 @@ function looksLike(c: Connection | undefined, v: SyncPlan["left"]) {
 const UNDO_LABEL = { restore: "Put back", delete: "Delete (it was new)", undelete: "Undelete" } as const;
 
 /** An undo plan: put back what an apply changed. Checked and applied by the server. */
-function UndoPanel({ plan, connIds, readOnly }: { plan: UndoPlan; connIds: string[]; readOnly?: boolean }) {
+function UndoPanel({ plan: opened, connIds, readOnly }: { plan: UndoPlan; connIds: string[]; readOnly?: boolean }) {
+  const [plan, setPlan] = useState(opened);  // with any approval added here
   const [checked, setChecked] = useState<UndoCheck | null>(null);
   const [applied, setApplied] = useState<UndoApplyResult | null>(null);
   const [confirmed, setConfirmed] = useState(false);
@@ -43,6 +44,18 @@ function UndoPanel({ plan, connIds, readOnly }: { plan: UndoPlan; connIds: strin
       else setApplied(await api.undoApply(plan, connIds));
     } catch (e) { setError((e as Error).message); setChecked(null); } finally { setBusy(false); }
   };
+  const approve = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const approved = await api.undoApprove(plan, connIds);
+      setPlan(approved);
+      saveFile(JSON.stringify(approved, null, 2) + "\n", `lockstep-undo-plan-${approved.id.slice(0, 8)}-approved.json`, "application/json");
+      setChecked(await api.undoCheck(approved, connIds));
+    } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+  };
+  const ap = checked?.approvals;
+  const unapproved = Boolean(ap && ap.approved_by.length < ap.required);
   const rows = applied?.entries ?? checked?.entries;
   return (
     <>
@@ -75,6 +88,13 @@ function UndoPanel({ plan, connIds, readOnly }: { plan: UndoPlan; connIds: strin
           {(applied ?? checked)!.message}
         </div>
       )}
+      {ap && !applied && (ap.required > 0 || ap.approved_by.length > 0) && (
+        <div className={`notice ${unapproved ? "warn" : "info"} plan-approvals`} role="status">
+          {ap.approved_by.length > 0 ? <>Approved by {ap.approved_by.join(", ")}. </> : <>Not approved yet. </>}
+          {approvalsNeeded(ap)}
+          {ap.problems.join(" ")}
+        </div>
+      )}
       {!applied && (
         <div className="review-foot plan-actions">
           {checked?.status === "ready" && !readOnly && (
@@ -84,10 +104,14 @@ function UndoPanel({ plan, connIds, readOnly }: { plan: UndoPlan; connIds: strin
             </label>
           )}
           <span className="spacer" />
+          {checked && (checked.status === "ready" || checked.status === "denied") && (ap?.required ?? 0) > 0 && (
+            <button type="button" className="btn ghost" disabled={busy} onClick={approve}
+                    title="Add your approval to the undo plan and download it: four-eyes, before someone applies it">Approve</button>
+          )}
           <button type="button" className="btn ghost" disabled={busy || connIds.length === 0} onClick={() => run("check")}>
             {busy && !checked && <span className="spinner" />} {checked ? "Check again" : "Check undo plan"}
           </button>
-          {!readOnly && <button type="button" className="btn primary" disabled={checked?.status !== "ready" || !confirmed || busy} onClick={() => run("apply")}>
+          {!readOnly && <button type="button" className="btn primary" disabled={checked?.status !== "ready" || !confirmed || busy || unapproved} onClick={() => run("apply")}>
             Apply undo plan</button>}
         </div>
       )}
@@ -315,8 +339,7 @@ export function PlansView({ connections, leftConnId, rightConnId, readOnly }: Pr
               {checked.approvals.approved_by.length > 0
                 ? <>Approved by {checked.approvals.approved_by.join(", ")}. </>
                 : <>Not approved yet. </>}
-              {checked.approvals.required > 0 && checked.approvals.approved_by.length < checked.approvals.required &&
-                "This Lockstep server applies it only once someone other than its creator has checked it and chosen Approve. "}
+              {approvalsNeeded(checked.approvals)}
               {checked.approvals.problems.join(" ")}
             </div>
           )}

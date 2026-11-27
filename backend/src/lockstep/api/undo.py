@@ -27,7 +27,8 @@ from typing import Annotated, Any, Literal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, ValidationError
 
-from .. import plansign, writepolicy
+from .. import approvals, plansign, writepolicy
+from ..approvals import Approval, ApprovalsOut
 from ..config import Settings, get_settings
 from ..plansign import Issuer
 from ..session import Connection, SessionData, load_session
@@ -71,6 +72,7 @@ class UndoPlan(BaseModel):
     undoes: str | None = None  # the sync plan this undoes, if it was one
     entries: list[UndoEntry] = Field(min_length=1, max_length=MAX_ENTRIES)
     signature: str = ""
+    approvals: list[Approval] = []  # outside the plan's signature (each is signed on its own)
 
 
 class AppliedWrite(BaseModel):
@@ -109,6 +111,7 @@ class CheckOut(BaseModel):
     status: Literal["ready", "stale", "denied", "error"]
     message: str
     entries: list[EntryCheck]
+    approvals: ApprovalsOut | None = None
 
 
 class ApplyOut(BaseModel):
@@ -126,7 +129,7 @@ def _key(settings: Settings) -> bytes:
 
 
 def _canonical(data: dict) -> bytes:
-    body = {k: v for k, v in data.items() if k != "signature"}
+    body = {k: v for k, v in data.items() if k not in ("signature", "approvals")}
     return json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
 
 
@@ -209,6 +212,22 @@ def _summary(checks: list[EntryCheck]) -> tuple[str, str]:
     return "ready", f"All {len(checks)} secret(s) are as the apply left them, and their old versions are there."
 
 
+def _vault_key(e: UndoEntry) -> str:
+    return f"{e.vault.vault}|{'preset' if e.vault.preset else 'url'}|{(e.vault.namespace or '').strip('/')}"
+
+
+def _approvals(plan: UndoPlan, conns: list[Connection], settings: Settings) -> ApprovalsOut:
+    """Approvals are per Vault the undo plan writes: the creator's entity there, from its entries."""
+    first = {}
+    for e in plan.entries:
+        first.setdefault(_vault_key(e), e)
+    required = max(writepolicy.approvals_for(settings, _connection_for(e, conns, settings)) for e in first.values())
+    return approvals.count("undo", plan.id, plan.signature, plan.approvals,
+                           {k: e.vault.entity_id for k, e in first.items()},
+                           {k: _describe(e.vault) for k, e in first.items()}, required, settings,
+                           {k: writepolicy.approver_policies_for(settings, _connection_for(e, conns, settings)) for k, e in first.items()})
+
+
 # --------------------------------------------------------------------------- routes
 
 
@@ -244,9 +263,33 @@ async def create(body: CreateRequest, session: Sess, settings: Conf):
 @router.post("/check", response_model=CheckOut)
 async def check(body: PlanRequest, session: Sess, settings: Conf):
     plan = load(body.plan, settings)
-    checks = await _check(plan, [get_connection(session, c) for c in body.conn_ids], settings)
+    conns = [get_connection(session, c) for c in body.conn_ids]
+    checks = await _check(plan, conns, settings)
     status, message = _summary(checks)
-    return CheckOut(status=status, message=message, entries=checks)  # type: ignore[arg-type]
+    return CheckOut(status=status, message=message, entries=checks,  # type: ignore[arg-type]
+                    approvals=_approvals(plan, conns, settings))
+
+
+@router.post("/approve", response_model=UndoPlan)
+async def approve(body: PlanRequest, session: Sess, settings: Conf):
+    """Check the undo plan now and, if it can still be applied, add an approval from whoever is
+    signed in to the Vaults it writes (they needn't be allowed to write them)."""
+    plan = load(body.plan, settings)
+    conns = [get_connection(session, c) for c in body.conn_ids]
+    status, message = _summary(await _check(plan, conns, settings))
+    if status not in ("ready", "denied"):
+        raise HTTPException(409, detail={"message": "Only an undo plan that checks out can be approved. " + message})
+    first: dict[str, UndoEntry] = {}
+    for e in plan.entries:
+        first.setdefault(_vault_key(e), e)
+    a = approvals.approve("undo", plan.id, plan.signature,
+                          {k: _connection_for(e, conns, settings) for k, e in first.items()},
+                          {k: e.vault.entity_id for k, e in first.items()},
+                          {k: _describe(e.vault) for k, e in first.items()}, settings,
+                          {k: writepolicy.approver_policies_for(settings, _connection_for(e, conns, settings)) for k, e in first.items()},
+                          plan.approvals)
+    plan.approvals = [*plan.approvals, a]
+    return plan
 
 
 @router.post("/apply", response_model=ApplyOut)
@@ -260,6 +303,7 @@ async def apply(body: ApplyRequest, session: Sess, settings: Conf):
     status, message = _summary(checks)
     if status != "ready":
         raise HTTPException(409, detail={"message": message, "entries": [c.model_dump() for c in checks]})
+    approvals.require("undo", _approvals(plan, conns, settings))
     results: list[EntryCheck] = []
     stopped = False
     for e in plan.entries:  # one at a time, stopping at the first that isn't put back

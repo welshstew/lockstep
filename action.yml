@@ -57,6 +57,13 @@ inputs:
   fail-on:
     description: "any, new or changed (default: new with a baseline, any without)"
     required: false
+  trusted-keys:
+    description: "Public keys that may sign the baseline and waivers, as LOCKSTEP_PLAN_TRUSTED_KEYS JSON ([{name, key}]). Public: a variable, not a secret. A signed file is then checked, and an edited one fails the step"
+    required: false
+  require-signed:
+    description: "true: refuse a baseline or waivers file that isn't signed by one of trusted-keys"
+    required: false
+    default: "false"
   auth:
     description: "jwt: log in with this job's GitHub OIDC token (needs permissions: id-token: write). token: use left-token and right-token"
     required: false
@@ -168,6 +175,8 @@ runs:
         INPUT_BASELINE: ${{ inputs.baseline }}
         INPUT_WAIVERS: ${{ inputs.waivers }}
         INPUT_FAIL_ON: ${{ inputs.fail-on }}
+        INPUT_TRUSTED_KEYS: ${{ inputs.trusted-keys }}
+        INPUT_REQUIRE_SIGNED: ${{ inputs.require-signed }}
         INPUT_AUTH: ${{ inputs.auth }}
         INPUT_ROLE: ${{ inputs.role }}
         INPUT_LEFT_ROLE: ${{ inputs.left-role }}

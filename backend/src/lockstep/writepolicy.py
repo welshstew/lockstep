@@ -82,20 +82,49 @@ def export_mode(settings: Settings, conn: Connection) -> tuple[str, PresetConnec
     return min(modes, key=lambda m: _EXPORT_STRICTNESS[m[0]])
 
 
+PROTECTIONS = ("key", "passphrase", "age", "teams")
+
+
+def export_protection(settings: Settings, conn: Connection) -> list[str]:
+    """How an encrypted export from this connection may be protected: LOCKSTEP_EXPORT_PROTECTION,
+    narrowed by the preset's `export_protection` (by every preset at a typed-in address). Each
+    unset list allows every way; an empty result allows none."""
+    if conn.preset_id is not None and 0 <= conn.preset_id < len(settings.preset_connections):
+        presets = [settings.preset_connections[conn.preset_id]]
+    else:
+        presets = [p for p in settings.preset_connections if _norm(p.url) == _norm(conn.url)]
+    allowed = set(PROTECTIONS)
+    for rule in [settings.export_protection, *(p.export_protection for p in presets)]:
+        if rule:
+            # "age" allows the teams' keys too
+            allowed &= set(rule) | ({"teams"} if "age" in rule else set())
+    return [p for p in PROTECTIONS if p in allowed]
+
+
 def approvals_for(settings: Settings, conn: Connection) -> int:
-    """How many approvals a sync plan writing to this connection's Vault needs."""
+    """How many approvals a plan (sync, access or undo) writing to this connection's Vault needs."""
     p = preset_of(settings, conn)
     return max(settings.plan_approvals, p.approvals if p else 0)
 
 
-def needs_plan(settings: Settings, conn: Connection) -> str | None:
-    """Why a direct secret write here is refused: the preset says its secrets change only through
-    approved plans. None when direct writes are fine."""
+def approver_policies_for(settings: Settings, conn: Connection) -> list[str]:
+    """The Vault policies an approver must hold one of, on this connection's Vault (empty: anyone but the creator)."""
     p = preset_of(settings, conn)
-    if p and p.approvals:
-        return (f"Secrets on {p.name} change only through approved plans on this Lockstep server: save the "
-                "changes as a plan, and have someone else approve it.")
-    return None
+    return sorted(set(settings.plan_approver_policies) | set(p.approver_policies if p else []))
+
+
+def needs_plan(settings: Settings, conn: Connection, what: str = "secrets") -> str | None:
+    """Why a direct write here is refused: the preset says this Vault changes only through approved
+    plans. `what`: "secrets" (sync plans) or "access" (policies, roles and settings: access plans).
+    None when direct writes are fine."""
+    p = preset_of(settings, conn)
+    if not (p and p.approvals):
+        return None
+    if what == "access":
+        return (f"Policies, roles and settings on {p.name} change only through approved access plans on this Lockstep "
+                "server: save the changes as an access plan, and have someone else approve it.")
+    return (f"Secrets on {p.name} change only through approved plans on this Lockstep server: save the "
+            "changes as a plan, and have someone else approve it.")
 
 
 def check(settings: Settings, conn: Connection, paths: list[str] | str, action: str = "write", event: str = "write") -> None:

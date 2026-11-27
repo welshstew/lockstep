@@ -1,5 +1,7 @@
 # Public demo deployment
 
+To run the demo on your own machine instead, see [Running the demo locally](guides/run-the-lockstep-demo-locally.md).
+
 `deploy/demo/compose.yaml` runs a self-contained public demo on any Docker host: two
 throwaway dev-mode Vaults and two OpenBaos, Dex for OIDC sign-in, the seed jobs and Lockstep, behind Caddy
 with automatic HTTPS (Let's Encrypt), plus a landing page and visit statistics. Only Caddy
@@ -77,7 +79,7 @@ callback's `code` and `state` are removed from logged URLs. Totals survive log r
 The `drift-check` service shows the drift check working on the demo's own data, at `https://<domain>/drift/`. Every 5 minutes it runs `lockstep compare` on four seeded pairs (Vault A and B, OpenBao A and B, each on `app-config` and `apps` under the shared profiles), signed in as the read-only user `bob`. It writes a static page, with no scripts, into the `drift-data` volume, which Caddy serves.
 
 - **Baselines:** the seed writes a marker to the `seed-marks` volume after each hourly reset (`SEED_MARKER`). Within 15 seconds the job records a new baseline from the fresh data, so a run fails only on drift a visitor made since the reset.
-- **The page** has one card per pair: the latest status (no drift, known drift only, new drift, couldn't run), the counts, a strip of the last 24 hours, and a table of the new drift with paths, keys and reasons. It never shows values, so it has no password.
+- **The page** has one card per pair: the latest status (no drift, known drift only, new drift, couldn't run), the counts, a strip of the last 12 hours (a fixed slot per run; point at one for when it ran and what it found), a table of the new drift with paths, keys and reasons, the pair's baseline, `base.json`, to expand or download, and a screenshot of the same comparison in Lockstep. It never shows values, so it has no password. It refreshes itself after each run.
 - **Code:** `deploy/demo/drift/drift.py` and `drift.css`. It runs in the Lockstep image, read-only, with a 192 MB memory limit. Each compare has a 2-minute timeout. `DRIFT_INTERVAL` sets the time between runs, in seconds (300 by default).
 
 ## Operating it

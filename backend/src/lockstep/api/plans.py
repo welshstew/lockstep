@@ -38,7 +38,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field, PrivateAttr, ValidationError
 
-from .. import plansign
+from .. import approvals, plansign
+from ..approvals import Approval, ApprovalsOut
 from ..config import Settings, get_settings
 from ..plansign import Issuer
 from ..rules import Rewrite
@@ -71,16 +72,6 @@ class PlanVault(BaseModel):
     identity: str = ""  # who the creator was signed in as on this side (informational)
     entity_id: str = ""  # the creator's Vault entity ID and token accessor on this side (from lookup-self,
     accessor: str = ""   # which a token can't choose): to check against Vault's audit log
-
-
-class Approval(BaseModel):
-    """Someone other than the creator checked the plan and approved it. Signed separately, so an
-    approval never changes what the plan does."""
-    by: str  # display name
-    entities: dict[str, str]  # side -> the approver's Vault entity ID there (the sides the plan writes)
-    at: str
-    issuer: Issuer | None = None  # the installation that signed the approval
-    signature: str = ""
 
 
 class PlanKey(BaseModel):
@@ -164,12 +155,6 @@ class ChangeCheck(BaseModel):
     problems: list[str]
 
 
-class ApprovalsOut(BaseModel):
-    required: int  # how many this installation asks for, for the Vaults the plan writes
-    approved_by: list[str]  # the approvals that count
-    problems: list[str] = []  # approvals that don't count, and why
-
-
 class CheckOut(BaseModel):
     status: Literal["ready", "stale", "denied", "error"]
     message: str
@@ -195,41 +180,18 @@ def _canonical(data: dict) -> bytes:
     return json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
 
 
-def _approval_key(settings: Settings) -> bytes:
-    return hashlib.sha256(b"lockstep-plan-approval-v1\0" + settings.session_key.encode()).digest()
-
-
-def _approval_bytes(plan: Plan, a: Approval) -> bytes:
-    body = {"plan": plan.id, "plan_signature": plan.signature, "by": a.by, "entities": a.entities, "at": a.at,
-            "issuer": a.issuer.model_dump() if a.issuer else None}
-    return json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
-
-
 def _written_sides(plan: Plan) -> list[str]:
     return sorted({"right" if c.direction == "left_to_right" else "left" for c in plan.changes})
 
 
 def _approvals(plan: Plan, conns: dict[str, Connection], settings: Settings) -> ApprovalsOut:
-    """How many approvals the plan needs here, and which of its approvals count: signed by a trusted
-    installation, for this plan, and by someone whose Vault entity differs from the creator's on
-    every side the plan writes."""
+    """How many approvals the plan needs here, and which of its approvals count."""
     sides = _written_sides(plan)
     required = max(writepolicy.approvals_for(settings, conns[s]) for s in sides)
-    ok, problems = [], []
-    for a in plan.approvals:
-        try:
-            plansign.verify(_approval_bytes(plan, a), a.signature, a.issuer, settings, _approval_key(settings))
-        except HTTPException:
-            problems.append(f"The approval by {a.by} isn't valid here (edited, or signed by a server this one doesn't trust).")
-            continue
-        same = [s for s in sides if not a.entities.get(s) or a.entities.get(s) == getattr(plan, s).entity_id]
-        if same:
-            problems.append(f"The approval by {a.by} doesn't count: they made the plan, or had no Vault identity, on "
-                            f"{', '.join(_describe(getattr(plan, s)) for s in same)}.")
-            continue
-        if a.by not in ok:
-            ok.append(a.by)
-    return ApprovalsOut(required=required, approved_by=ok, problems=problems)
+    return approvals.count("sync", plan.id, plan.signature, plan.approvals,
+                           {s: getattr(plan, s).entity_id for s in sides},
+                           {s: _describe(getattr(plan, s)) for s in sides}, required, settings,
+                           {s: writepolicy.approver_policies_for(settings, conns[s]) for s in sides})
 
 
 def sign(plan: Plan, settings: Settings) -> Plan:
@@ -528,22 +490,11 @@ async def approve(body: CheckRequest, session: Sess, settings: Conf):
         raise HTTPException(409, detail={"message": "Only a plan that checks out can be approved. " + checked.message})
     conns = _conns(body, session)
     sides = _written_sides(plan)
-    for s in sides:
-        if not conns[s].entity_id:
-            raise HTTPException(400, detail={"message": (
-                f"Approving needs a Vault identity (an entity) on {_describe(getattr(plan, s))}: sign in as a person "
-                "(userpass, LDAP, OIDC…), not with a root or orphan token.")})
-        if conns[s].entity_id == getattr(plan, s).entity_id:
-            raise HTTPException(409, detail={"message": "You made this plan: someone else has to approve it."})
-    k = plansign.keys(settings)
-    a = Approval(by=conns[sides[0]].display_name or conns[sides[0]].auth_method,
-                 entities={s: conns[s].entity_id for s in sides}, at=plansign.now_iso(),
-                 issuer=Issuer(name=k.name, key_id=k.own_id))
-    a.signature = plansign.sign(_approval_bytes(plan, a), settings, _approval_key(settings))
+    a = approvals.approve("sync", plan.id, plan.signature, {s: conns[s] for s in sides},
+                          {s: getattr(plan, s).entity_id for s in sides},
+                          {s: _describe(getattr(plan, s)) for s in sides}, settings,
+                          {s: writepolicy.approver_policies_for(settings, conns[s]) for s in sides}, plan.approvals)
     plan.approvals = [*plan.approvals, a]
-    audit.info(json.dumps({"ts": a.at, "event": "plan.approve", "outcome": "approved", "plan_id": plan.id,
-                           "actor": {"identity": a.by, "entities": a.entities,
-                                     "accessors": {s: conns[s].accessor for s in sides}}}, sort_keys=True))
     return ApproveOut(plan=plan)
 
 
@@ -557,12 +508,7 @@ async def apply(body: ApplyPlanRequest, session: Sess, settings: Conf):
     checked = await _check(plan, req, session, settings)
     if checked.status != "ready":
         raise HTTPException(409, detail={"message": checked.message, "check": checked.model_dump()})
-    ap = _approvals(plan, _conns(body, session), settings)
-    if len(ap.approved_by) < ap.required:
-        raise HTTPException(409, detail={"message": (
-            "This plan needs an approval from someone other than its creator before it's applied here: they open it in "
-            "Sync plans, check it and choose Approve." + (" " + " ".join(ap.problems) if ap.problems else "")),
-            "approvals": ap.model_dump()})
+    approvals.require("sync", _approvals(plan, _conns(body, session), settings))
     async with _Ctx(req, session, settings) as ctx:
         ctx.via_plan = True
         out = await apply_changes(ctx, req.changes, plan_id=plan.id, strict=True)

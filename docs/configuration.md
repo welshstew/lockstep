@@ -39,7 +39,8 @@ All configuration comes from environment variables prefixed `LOCKSTEP_`. Lists a
 | `LOCKSTEP_SIGNIN_WINDOW_SECONDS` | `300` | The window for `LOCKSTEP_SIGNIN_MAX_FAILURES` |
 | `LOCKSTEP_ALLOW_CLIPBOARD` | `true` | Offer **Copy** next to shown values in Browse (cleared from the clipboard after 30 seconds where the browser allows). `false` removes the button; it can't stop someone selecting a value they can see. Chart value `allowClipboard` |
 | `LOCKSTEP_ALLOW_DESTROY` | `true` | Offer [**Destroy**](usage.md#destroy-secrets), which permanently deletes every version and the metadata of secrets. Vault's policies still decide who may (`delete` on `<mount>/metadata/…`); `false` turns it off for everyone |
-| `LOCKSTEP_EXPORT_MODE` | `encrypted` | [Secret-engine exports](usage.md#6-export-and-import), which hold values: `encrypted` allows only exports encrypted with a one-time key, `any` lets users choose encrypted or plain, `off` turns exporting off. A preset's `export` replaces it for that Vault ([below](#write-policy-per-vault)). Importing isn't affected: it writes with the user's own token. Before 0.11.0 the default was `any` |
+| `LOCKSTEP_EXPORT_MODE` | `encrypted` | [Secret-engine exports](usage.md#6-export-and-import), which hold values: `encrypted` allows only encrypted exports (how: `LOCKSTEP_EXPORT_PROTECTION`), `any` lets users choose encrypted or plain, `off` turns exporting off. A preset's `export` replaces it for that Vault ([below](#write-policy-per-vault)). Importing isn't affected: it writes with the user's own token. Before 0.11.0 the default was `any` |
+| `LOCKSTEP_EXPORT_PROTECTION` | any way | How an encrypted export may be protected, comma-separated: `key` (a one-time key), `passphrase`, `age` (any age public keys, the teams' included) and `teams` (only the age keys of the `LOCKSTEP_EXPORT_RECIPIENTS` teams). `teams` keeps exports readable only by the people the admin chose; `age,passphrase` rules out the one-time key. The Export panel offers only what's allowed, and the server refuses the rest. A preset's `export_protection` narrows it for that Vault. Plain exports are `LOCKSTEP_EXPORT_MODE`'s business. Chart: `exportProtection` |
 | `LOCKSTEP_EXPORT_RECIPIENTS` | none | Teams an export can be encrypted to, as JSON: `[{"name": "Platform", "recipients": ["age1…", "age1…"]}]`. Users tick a team in the Export panel and its members open the file with their own age identity, in Lockstep or with `age -d`. Keys are checked at startup. Users can also paste age keys themselves. Chart value `exportRecipients` |
 
 ### Write policy per Vault
@@ -59,8 +60,10 @@ Each preset can limit what Lockstep writes to that Vault, so one installation ca
 | `allow_destroy` | `LOCKSTEP_ALLOW_DESTROY` | `false` turns **Destroy** off for this Vault only |
 | `write_paths` | everything | Writes only to paths that match one of these |
 | `deny_paths` | nothing | Never write to paths that match one of these, even inside `write_paths` |
-| `approvals` | `0` | `1`: secrets on this Vault change only through [sync plans someone else approved](#four-eyes-approvals). Copies, Browse edits, imports and destroys there are refused. Policy and role writes aren't affected |
+| `approvals` | `0` | `1` to `5`: this Vault changes only through [plans that many other people approved](#four-eyes-approvals). Copies, Browse edits, imports and destroys there are refused, and so are writes from the Policies tab |
+| `approver_policies` | `[]` | Only someone holding one of these Vault policies on this Vault can [approve](#four-eyes-approvals) plans writing to it |
 | `export` | `LOCKSTEP_EXPORT_MODE` | Exports from this Vault: `encrypted`, `any` or `off`. It replaces the server's setting, so it can be stricter (`"export": "off"` for Prod) or looser (`"export": "any"` for a dev Vault on a server that otherwise only allows encrypted exports) |
+| `export_protection` | `LOCKSTEP_EXPORT_PROTECTION` | How an encrypted export from this Vault may be protected (`key`, `passphrase`, `age`, `teams`), on top of the server's setting: `["teams"]` for Prod means only a team's age keys. Chart: `vaults[].exportProtection` |
 
 - **Paths** are what a write changes, as Vault names it. For a KV secret that's `<mount>/<path>`, without `data/`, such as `app-config/billing/db`. Anything else uses its API path: `sys/policies/acl/<name>` (policy applies, and the policy *Try* creates for a moment), `auth/<mount>/role/<name>`, `auth/<mount>/users/<name>`, `identity/group/name/<name>`, `sys/mounts/<mount>/tune`, `<mount>/issue/<role>` (PKI), `<mount>/creds/<role>` (database credentials) and `sys/leases/revoke/<lease ID>`. `*` matches one path segment and `**` any number, and `a/**` covers `a` itself.
 - **Enforcement:** the API refuses what the rules forbid, whatever the user's Vault policies allow. Copies, sync plans and imports mark each refused secret *invalid* with the reason, while destroys and single writes answer 403. The rules come on top of Vault's policies, which still decide everything else: every write uses the user's own token.
@@ -68,7 +71,7 @@ Each preset can limit what Lockstep writes to that Vault, so one installation ca
 - **Audit log:** each refusal is logged as a `write.refused` event with the path, who asked and why.
 - **Same address:** the rules follow the Vault's address. A user who types a preset's address by hand, or opens a namespace from a preset connection, gets that preset's rules. When several presets share an address, the strictest applies.
 
-`LOCKSTEP_READ_ONLY` still makes the whole installation look-only. Chart: `vaults[].writable`, `allowDestroy`, `writePaths`, `denyPaths`, `approvals` and `exportMode`.
+`LOCKSTEP_READ_ONLY` still makes the whole installation look-only. Chart: `vaults[].writable`, `allowDestroy`, `writePaths`, `denyPaths`, `approvals`, `approverPolicies` and `exportMode`.
 
 ### Browser security headers
 
@@ -89,7 +92,7 @@ Every response carries `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-r
 The server log goes to **stderr**. Each line has a UTC timestamp, the level, the logger and a request ID:
 
 ```
-2026-11-25T17:00:47.668Z INFO    lockstep [-] Lockstep 0.11.0 starting; log level info, format text
+2026-11-25T17:00:47.668Z INFO    lockstep [-] Lockstep 0.12.0 starting; log level info, format text
 2026-11-25T17:00:47.668Z INFO    lockstep [-] preset Vault 0: Vault A at http://vault-a:8200
 2026-11-25T17:01:03.120Z INFO    lockstep.auth [c1e02a51] sign-in to Vault A as alice (userpass) failed: Vault said 400: invalid username or password
 2026-11-25T17:01:03.121Z INFO    lockstep.http [c1e02a51] POST /api/connections 401 18ms client 203.0.113.7
@@ -109,14 +112,14 @@ Sync plans and access plans (policies, roles, tuning) are signed files. By defau
 | Variable | Default | |
 |---|---|---|
 | `LOCKSTEP_PLAN_SIGNING_KEY` | none | This installation's Ed25519 private key (base64 of the 32 raw bytes, or PEM). Plans made here are signed with it. Chart: `plans.signingKeySecret` |
-| `LOCKSTEP_PLAN_TRUSTED_KEYS` | `[]` | JSON list of the installations whose plans this one applies: `[{"name": "dev-lockstep", "key": "<base64 public key>"}]`. An installation always trusts its own key. Chart: `plans.trustedKeys` |
+| `LOCKSTEP_PLAN_TRUSTED_KEYS` | `[]` | JSON list of the installations whose plans this one applies, and whose signed drift baselines it accepts in the Matrix: `[{"name": "dev-lockstep", "key": "<base64 public key>"}]`. An installation always trusts its own key. Chart: `plans.trustedKeys` |
 | `LOCKSTEP_PLAN_ISSUER` | `LOCKSTEP_PUBLIC_URL`'s host | This installation's name in the plans it makes, and the name a plan's `audience` has to list to be applied here. Chart: `plans.issuer` |
 | `LOCKSTEP_PLAN_TTL_HOURS` | `168` | How long a new plan can be applied (7 days). Chart: `plans.ttlHours` |
 
 1. `lockstep plan-key` prints a new key pair. Put the private key in a secret store, and set it as `LOCKSTEP_PLAN_SIGNING_KEY` on the installation that makes plans.
 2. On each installation that applies them, add the public key to `LOCKSTEP_PLAN_TRUSTED_KEYS`, under the name the making installation signs as. `GET /api/plans/key` shows an installation's name, key ID and public key.
 
-Every new plan records its `issuer` (name and key ID), `not_before` and `expires_at`, and optionally an `audience`. A plan signed by a key the applying installation doesn't trust, one that has expired, or one whose audience doesn't name the applying installation is refused with the reason. Clocks may differ by 5 minutes.
+Every new plan records its `issuer` (name and key ID), `not_before` and `expires_at`, and optionally an `audience`: the installations that may apply it (**Only for**, when saving a sync or access plan). A plan signed by a key the applying installation doesn't trust, one that has expired, or one whose audience doesn't name the applying installation is refused with the reason. Clocks may differ by 5 minutes.
 
 - **Rotating the key:** keep the old public key in the trusted list until the plans made with it have expired.
 - **Typed values:** a plan keeps a check code for each value typed by hand, which only the installation that made it can verify. On another installation, the person applying types each value twice instead.
@@ -124,18 +127,20 @@ Every new plan records its `issuer` (name and key ID), `not_before` and `expires
 
 ## Four-eyes approvals
 
-A light check against mistakes, not a compliance control: before a sync plan is applied, someone other than the person who made it checks it and approves it.
+A light check against mistakes, not a compliance control: before a plan is applied, someone other than the person who made it checks it and approves it. This covers every kind of plan: sync plans, access plans (policies, roles, groups, tuning, engine objects) and undo plans.
 
 | Setting | |
 |---|---|
-| `LOCKSTEP_PLAN_APPROVALS=1` | Every sync plan applied on this installation needs one approval. Copies made without a plan still work. Chart: `plans.approvals` |
-| a preset's `"approvals": 1` | Plans writing to that Vault need one approval, and its secrets change **only** through plans: direct copies, Browse edits, imports and destroys there are refused, so the approval can't be gone round. The review dialog says so, and **Save as plan** still works. Chart: `vaults[].approvals` |
+| `LOCKSTEP_PLAN_APPROVALS=1` | Every plan applied on this installation needs one approval: sync, access and undo plans. `2` to `5` asks for that many, from different people. Changes made without a plan still work. Chart: `plans.approvals` |
+| `LOCKSTEP_PLAN_APPROVER_POLICIES=lockstep-approver` | Only someone holding one of these Vault policies (comma-separated) can approve, on each Vault the plan writes. Chart: `plans.approverPolicies` |
+| a preset's `"approvals": 1` | Plans writing to that Vault need one approval (or up to 5), and it changes **only** through plans, so the approval can't be gone round. Direct copies, Browse edits, imports and destroys are refused (save them as a sync plan), and so are policy, role, group, tuning and engine writes from the Policies tab (save them as an access plan). The review says so, and saving as a plan still works. Leases, database and PKI credentials, AppRole secret IDs, userpass users and *Try* aren't affected. Chart: `vaults[].approvals` |
+| a preset's `"approver_policies": ["lockstep-approver"]` | Approvers of plans writing to that Vault must hold one of these policies there, on top of `LOCKSTEP_PLAN_APPROVER_POLICIES`. Chart: `vaults[].approverPolicies` |
 
-- **Approving:** the approver opens the plan in **Sync plans**, signs in to the Vaults it names (write access isn't needed), runs **Check plan** and chooses **Approve**. Lockstep adds a signed approval to the file and downloads it (`…-approved.json`) to pass on. The plan's own signature is unchanged, so an approval can't change what the plan does.
-- **Who counts:** someone whose Vault **entity** differs from the creator's on every Vault the plan writes. Entities are compared, not display names, and approving needs a sign-in with an entity (userpass, LDAP, OIDC…), not a root token. The person applying may be the approver.
+- **Approving:** the approver opens the plan (a sync or undo plan in **Sync plans**, an access plan with **Policies → Open an access plan…**), signs in to the Vaults it names (write access isn't needed), checks it and chooses **Approve**. Lockstep adds a signed approval to the file and downloads it (`…-approved.json`) to pass on. The plan's own signature is unchanged, so an approval can't change what the plan does.
+- **Who counts:** someone whose Vault **entity** differs from the creator's on every Vault the plan writes. Entities are compared, not display names, and approving needs a sign-in with an entity (userpass, LDAP, OIDC…), not a root token. The person applying may be the approver. Where several approvals are needed, each comes from a different entity: approving twice is refused, and a repeated approval counts once.
+- **Approver groups:** with approver policies set, an approval counts only from someone whose token held one of them when they approved, on each Vault the plan writes. That includes policies granted through a Vault identity group, so the usual setup is a `lockstep-approver` policy (it can be empty) attached to an `approvers` group. The policies are recorded in the signed approval, so an installation the plan travels to checks the same thing. Someone without one is refused when they choose **Approve**, and an approval given where none was required doesn't count where one is.
 - **Applying** is refused until there are enough approvals, with the reason. An approval that was edited, or signed by an installation this one doesn't trust, doesn't count. Approvals are signed like plans, so they travel between installations the same way.
-- **The audit log** records `plan.approve` with the approver's entity IDs and accessors.
-- **Not included:** approver groups, several approvers, and approvals for access plans and undo plans.
+- **The audit log** records `plan.approve` with the kind of plan (`sync`, `access` or `undo`) and the approver's entity IDs and accessors.
 
 ## Metrics
 

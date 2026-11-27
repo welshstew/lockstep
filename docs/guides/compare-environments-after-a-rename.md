@@ -132,6 +132,33 @@ lockstep compare --left-addr https://vault-test.example.com --right-addr https:/
 
 The report lists the rewrites it used, and `lockstep apply` applies them to copied values the same way the web UI does. To share the profile with everyone using Lockstep, add it to the server's `LOCKSTEP_PROFILES` (or the Helm chart's `profiles`, with `rewrites` under `rules`). See [configuration](../configuration.md).
 
+## Every environment against the release: the matrix
+
+A pair answers "what differs between test and dev". Before a release you also want to know how each environment has moved away from what's in production. The demo has that too: Vault A's `apps-baseline` mount holds the last release as it runs in prod, under the old name. Two more shared profiles line it up with each environment:
+- **Release ↔ test: apps** rewrites `prod` ⇄ `test`.
+- **Release ↔ dev: apps (ELP rename)** maps `enterprise-logging-app/**` ⇄ `ELP/**`, and rewrites the name and `prod` ⇄ `dev`.
+
+Both ignore the tokens, the log level and the TLS material, as before.
+
+1. On **Compare**, choose **Vault A** and `apps-baseline` on the left: it's the baseline. Choose **Vault B** and `apps` on the right.
+2. Open **Matrix**. The baseline starts as the left side's (you can change it there). Name it `release`. The right side is the first environment: name it `dev` and pick the profile **Release ↔ dev: apps (ELP rename)**.
+3. **Add environment**, name it `test`, choose Vault A's `apps` mount and the profile **Release ↔ test: apps**.
+4. **Compare all**.
+
+```
+                                                  dev      test
+  enterprise-logging-app/alerts                   extra    ·
+  enterprise-logging-app/legacy-syslog            missing  =
+  enterprise-logging-app/values · batch_size      ≠        =
+  enterprise-logging-app/values · otlp_endpoint   extra    ·
+  search-indexer/config · workers                 ≠        =
+  enterprise-logging-app/values · retention_days  ≠        ≠
+```
+
+Test still matches the release, so dev's changes are the odd ones out and come first: the new alerts and OTLP endpoint, the bigger batch size and the dropped syslog. `search-indexer`'s workers differ in dev too, which is drift rather than a change to ship. `retention_days` differs everywhere, because prod keeps logs longer on purpose, so it comes last. The rename doesn't appear at all: `ELP/alerts` is listed under the baseline's name.
+
+The same matrix runs from the command line with [`dev/matrix/apps.yaml`](https://github.com/welshstew/lockstep/blob/main/dev/matrix/apps.yaml) (`lockstep matrix dev/matrix/apps.yaml`). See [environment matrix](../cli.md#environment-matrix).
+
 ## Another example: prod against staging
 
 The `app-config` mount on the demo has a second layout that profiles are made for: `services/<name>/prod/…` in Vault A and `services/<name>/staging/…` in Vault B. Two shared profiles handle it in two different ways:

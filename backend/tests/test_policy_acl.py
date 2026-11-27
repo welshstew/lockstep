@@ -194,26 +194,27 @@ def _check_against(addr: str, token: str, trials: int, vocab, depth: int, seed: 
             v.delete(f"sys/policies/acl/{n}")
 
 
-LATEST = os.environ.get("VAULT_LATEST_ADDR")
+LEGACY_ADDR = os.environ.get("VAULT_LEGACY_ADDR")
 # The scheduled vault-release workflow explores more: other seeds each run, and more trials
 FUZZ_SEED = int(os.environ.get("FUZZ_SEED", "0"))
 FUZZ_SCALE = max(1, int(os.environ.get("FUZZ_SCALE", "1")))
 
 
-def _latest_up() -> bool:
-    if not LATEST:
+def _legacy_up() -> bool:
+    if not LEGACY_ADDR:
         return False
     try:
-        return httpx.get(f"{LATEST}/v1/sys/health", timeout=2).status_code == 200
+        return httpx.get(f"{LEGACY_ADDR}/v1/sys/health", timeout=2).status_code == 200
     except httpx.HTTPError:
         return False
 
 
-@pytest.mark.skipif(not _latest_up(), reason="no latest Vault (VAULT_LATEST_ADDR; the compose test profile starts one)")
+@pytest.mark.skipif(not _legacy_up(), reason="no Vault 1.x (VAULT_LEGACY_ADDR; the compose test profile starts one)")
 @pytest.mark.parametrize("vocab,depth,trials,seed", [(SEGMENTS, 4, 150, 20261121), (MIXED, 3, 60, 20261122)])
-def test_matching_agrees_with_the_latest_vault(vocab, depth, trials, seed):
-    """The same checks against the newest Vault release, whose evaluation rules changed in 2.2.2."""
-    _check_against(LATEST, "root-latest", trials * FUZZ_SCALE, vocab, depth, seed + FUZZ_SEED)
+def test_matching_agrees_with_a_vault_1x(vocab, depth, trials, seed):
+    """The same checks against Vault 1.21, whose evaluation rules (before 2.2.2) Lockstep still follows
+    for Vaults that report a 1.x version."""
+    _check_against(LEGACY_ADDR, "root-legacy", trials * FUZZ_SCALE, vocab, depth, seed + FUZZ_SEED)
 
 
 # Vault A and Vault B: under `make test-openbao` (and the weekly openbao workflow) Vault B is OpenBao

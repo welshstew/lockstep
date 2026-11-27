@@ -14,6 +14,7 @@ regexes = [
   # The apps mount's per-environment tokens (dev/seed/seed.py: the ELP rename example)
   '''tok-test-8f2a1c90''',
   '''tok-dev-3b9e7741''',
+  '''tok-prod-5c1d0e62''',
   # The wrong password in backend/tests/test_logging.py, used to check it never reaches the log
   '''wrong-pass-123''',
   # The fake legacy key in backend/tests/test_comparators.py: headers and a 4-character body, no key

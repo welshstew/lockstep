@@ -26,7 +26,7 @@ Vault's policies decide what each person may do. On top of them, each Vault offe
  {"name": "Dev", "url": "https://vault.dev.example.com", "write_paths": ["app-config/**"]}]
 ```
 
-- **`"approvals": 1`** on Prod means secrets there change **only** through approved sync plans. Direct copies, Browse edits, imports and destroys are refused, so the approval can't be gone round. The review still offers **Save as plan**.
+- **`"approvals": 1`** on Prod means it changes **only** through approved plans. Direct copies, Browse edits, imports and destroys are refused, and so are policy and role writes from the Policies tab, so the approval can't be gone round. The reviews still offer **Save as plan** and **Save as access plan**.
 - **`writable: false`** makes a Vault compare-only. **`write_paths`** and **`deny_paths`** limit writes to some paths (`*` is one path segment, `**` any number), and **`allow_destroy: false`** turns off Destroy there.
 - Typing a preset's address by hand doesn't get round its rules: they follow the Vault's address, and where several presets share one, the strictest wins.
 
@@ -66,7 +66,8 @@ Turn approvals on for the Vaults that need them (`"approvals": 1` on the preset,
 
 The reviewer opens the plan in **Sync plans**, signs in to both Vaults (read access is enough), and chooses **Check plan**. Lockstep reads both sides now and shows exactly what would change. If it looks right, **Approve** adds a signed approval to the file and downloads `…-approved.json` to pass on.
 
-- **Who counts:** someone whose Vault entity differs from the plan's creator on every Vault the plan writes. Entities are compared, not display names, so signing in under another name doesn't help. A root token has no entity and can't approve.
+- **Who counts:** someone whose Vault entity differs from the plan's creator on every Vault the plan writes. Entities are compared, not display names, so signing in under another name doesn't help.
+- **How many, and who:** `"approvals": 2` (up to 5) asks for that many different people. `"approver_policies": ["lockstep-approver"]` on the preset, or `LOCKSTEP_PLAN_APPROVER_POLICIES`, lets only people holding one of those Vault policies approve. Attach the policy to a Vault identity group (say `prod-approvers`) and group membership decides who can approve. A root token has no entity and can't approve.
 - **An approval can't change the plan.** It sits outside the plan's signature, which stays as it was, and an edited approval doesn't count.
 - The audit log records `plan.approve` with the approver's entity IDs. See [four-eyes approvals](../configuration.md#four-eyes-approvals).
 
@@ -82,11 +83,15 @@ The prod operator opens the approved file in **Sync plans**, signs in to both Va
 
 Under the plan's result, **Make an undo plan** downloads a signed file that puts back what the apply did. It holds no values either: it records the version each secret had before, and Lockstep reads that version back from Vault's history when you apply it.
 
-Open it in **Sync plans**, **Check undo plan**, then **Apply undo plan**. A secret someone has written since the apply, or whose old version has been deleted or destroyed, is left alone and reported. See [undo an apply](../usage.md#undo-an-apply).
+Open it in **Sync plans**, **Check undo plan**, then **Apply undo plan**. Where approvals are required, an undo plan needs one too: someone else checks it and chooses **Approve**, as for the plan it undoes. A secret someone has written since the apply, or whose old version has been deleted or destroyed, is left alone and reported. See [undo an apply](../usage.md#undo-an-apply).
+
+## Policies and roles too
+
+The same flow works for access: someone prepares policy or role changes in **Policies** and chooses **Save as access plan**, a reviewer opens it with **Policies → Open an access plan…** and chooses **Approve**, and an admin applies the approved file. On a Vault with `"approvals": 1`, that's the only way policies and roles change from Lockstep.
 
 ## What this isn't
 
-Approvals are a check against mistakes, not a compliance control: one other person, no approver groups, and access plans (policies, roles) and undo plans don't take approvals yet. For a full change-management process, keep the plan's Markdown report in your ticket or pull request, and use Vault's own audit log alongside Lockstep's.
+Approvals are a check against mistakes, not a compliance control: up to five other people, chosen by Vault policy. For a full change-management process, keep the plan's Markdown report in your ticket or pull request, and use Vault's own audit log alongside Lockstep's.
 
 ## Next steps
 
