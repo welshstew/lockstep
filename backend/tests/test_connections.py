@@ -119,7 +119,8 @@ def test_renew_token(client, vaults):
     first = body["expires_at"]
     r = client.post(f"/api/connections/{body['id']}/renew")
     assert r.status_code == 200, r.text
-    assert r.json()["expires_at"] >= first and r.json()["capped"] is False
+    # Vault reports TTLs in whole seconds, so the renewed expiry can land a second before the first
+    assert r.json()["expires_at"] >= first - 2 and r.json()["capped"] is False
     # a token whose max TTL is its TTL can't gain time, so Vault caps the renewal
     r = httpx.post(f"{vaults[0]}/v1/auth/token/create", headers={"X-Vault-Token": "root-a"},
                    json={"ttl": "1h", "explicit_max_ttl": "1h", "policies": ["default"], "no_parent": True})

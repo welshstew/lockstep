@@ -238,7 +238,8 @@ def test_export_mode_setting(vaults, mode, encrypt, status):
     base = get_settings().model_dump()
     app.dependency_overrides[get_settings] = lambda: Settings(**(base | {"export_mode": mode}))
     with TestClient(app, headers={"X-Requested-With": "lockstep"}) as c:
-        cid = c.post("/api/connections", json={"preset_id": 0, "auth": {"method": "token", "token": "root-a"}}).json()["id"]
+        # Vault B: its preset has no export setting of its own, so the server's applies
+        cid = c.post("/api/connections", json={"preset_id": 1, "auth": {"method": "token", "token": "root-b"}}).json()["id"]
         assert c.get("/api/config").json()["export_mode"] == mode
         r = c.post("/api/exports", json={"side": {"conn_id": cid, "mount": "app-config", "prefix": "payments"},
                                          "encrypt": encrypt})
@@ -475,3 +476,44 @@ def test_cli_export_plain_to_stdout_and_schemas(cli_env, monkeypatch, capsys):
     for kind, fn in (("export", ex.schema), ("import-rules", ex.rules_schema)):
         assert main(["schema", kind]) == 0
         assert json.loads(capsys.readouterr().out) == fn()
+
+
+def test_export_mode_per_preset():
+    from lockstep import writepolicy
+    from lockstep.config import PresetConnection
+    from lockstep.session import Connection
+    s = Settings(session_key="x" * 32, preset_connections=[
+        PresetConnection(name="Dev", url="https://v.dev", export="any"),
+        PresetConnection(name="Prod", url="https://v.prod", export="off"),
+        PresetConnection(name="Prod team-a", url="https://v.prod", namespace="a"),
+        PresetConnection(name="Staging", url="https://v.stg")])
+    conn = lambda pid, url: Connection(name="c", url=url, token="t", auth_method="token", preset_id=pid)  # noqa: E731
+    assert s.export_mode == "encrypted"  # the default since 0.11.0
+    assert writepolicy.export_mode(s, conn(0, "https://v.dev")) == ("any", s.preset_connections[0])
+    assert writepolicy.export_mode(s, conn(1, "https://v.prod"))[0] == "off"
+    assert writepolicy.export_mode(s, conn(2, "https://v.prod")) == ("encrypted", None)  # its own preset says nothing
+    assert writepolicy.export_mode(s, conn(3, "https://v.stg")) == ("encrypted", None)
+    # A typed-in address: the strictest preset there; an unknown address: the server's setting
+    assert writepolicy.export_mode(s, conn(None, "https://V.prod/"))[0] == "off"
+    assert writepolicy.export_mode(s, conn(None, "https://v.dev"))[0] == "any"
+    assert writepolicy.export_mode(s.model_copy(update={"export_mode": "any"}), conn(None, "https://elsewhere")) == ("any", None)
+
+
+def test_export_mode_per_preset_api(vaults):
+    """Vault A (export: any in the test settings) allows plain exports; Vault B follows the
+    server's default and allows encrypted ones only; a preset with export: off refuses."""
+    app = create_app()
+    base = get_settings().model_dump()
+    presets = [p | ({"export": "off"} if i == 1 else {}) for i, p in enumerate(base["preset_connections"])]
+    with TestClient(app, headers={"X-Requested-With": "lockstep"}) as c:
+        a = c.post("/api/connections", json={"preset_id": 0, "auth": {"method": "token", "token": "root-a"}}).json()
+        b = c.post("/api/connections", json={"preset_id": 1, "auth": {"method": "token", "token": "root-b"}}).json()
+        assert (a["export"], b["export"]) == ("any", "encrypted")
+        side = lambda cid: {"conn_id": cid, "mount": "app-config", "prefix": "payments"}  # noqa: E731
+        assert c.post("/api/exports", json={"side": side(a["id"]), "encrypt": False}).status_code == 200
+        r = c.post("/api/exports", json={"side": side(b["id"]), "encrypt": False})
+        assert r.status_code == 403 and "only allows encrypted exports" in r.text
+        assert c.post("/api/exports", json={"side": side(b["id"]), "encrypt": True}).status_code == 200
+        app.dependency_overrides[get_settings] = lambda: Settings(**(base | {"preset_connections": presets}))
+        r = c.post("/api/exports", json={"side": side(b["id"]), "encrypt": True})
+        assert r.status_code == 403 and "turned off for Vault B" in r.text

@@ -82,7 +82,7 @@ For **JWT**, get an ID token from Dex directly: `curl -s -u vault:vault-dev-secr
 | `team-a-only` | A | one-sided mount |
 | `app-config-staging` | B | for comparing two mounts in the same Vault |
 | `apps` | A and B | environments that don't line up: Vault A plays test and Vault B dev, after `enterprise-logging-app` was renamed `ELP` in dev. Values name their environment and the app, credentials and the log level differ by design, and a few real changes remain. Shared profile **Test ↔ dev: apps (ELP rename)**; [guide](guides/compare-environments-after-a-rename.md) |
-| `legacy-kv` | A and B | KV v1; must be ignored |
+| `legacy-kv` | A and B | KV v1: offered only in Compare, read-only; must never be written |
 
 ## Tests
 
@@ -106,6 +106,8 @@ cd frontend && npm install && npm run dev     # http://localhost:5173, proxies /
 
 - **Engine roles** read back with fields the other product doesn't have (PKI on OpenBao: `not_before_bound`, `not_after_bound`; on Vault: `serial_number_source`), and PKI `signature_bits` is `0` ("automatic") on OpenBao but the resolved `256` on Vault. **Configuration** sets these aside instead of counting them as differences, and lists them as "not compared".
 - **Kubernetes auth** on OpenBao requires `kubernetes_ca_cert` when `disable_local_ca_jwt` is set.
+
+**Read-only preset:** the app also offers **Vault B (read-only)**, the same Vault B with `"writable": false` ([write policy per Vault](configuration.md#write-policy-per-vault)): it compares and browses, and nothing is written to it. `tests/test_writepolicy.py` (browser) uses it. **Vault B (with approval)** has `"approvals": 1`: secrets change there only through plans someone else approved (`tests/test_approvals.py`). **Exports:** Vault A has `"export": "any"`, so plain exports can be tried from it; the other presets follow the default and allow encrypted exports only.
 
 **Namespaces:** OpenBao has them (Vault Community doesn't), so the seed gives any server that supports them `team-a`, `team-a/apps`, and `team-b` (side A) or `team-c` (side B). Each has an `app-config` KV mount with drift between the sides, the policies `ns-admin` and `ns-readonly`, and userpass `alice` (admin) and `bob` (read-only), password `password`. Sign in with the connect form's **Namespace** field. `tests/test_namespaces.py` (backend and browser) runs only against a server with namespaces, so `make test-openbao` covers it.
 

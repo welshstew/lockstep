@@ -10,12 +10,13 @@ from pydantic import BaseModel, Field
 
 from typing import Literal
 
-from .. import engine, profile_suggest
+from .. import engine, profile_suggest, writepolicy
 from ..config import Settings, get_settings
 from ..diff import SecretDiff
 from ..exports import ExportDoc, FileVault
 from ..rules import Rules
 from ..session import Connection, SessionData, load_session
+from ..reveal import Shown, reveal
 from ..vault import VaultClient, VaultError
 from .connections import client_for, get_connection, vault_http_error
 
@@ -72,6 +73,8 @@ class CompareRequest(BaseModel):
 
 class SideSummary(BaseModel):
     kind: Literal["vault", "file"] = "vault"
+    kv_version: str = "2"  # "1": a KV v1 mount, compared but never written
+    writes: Literal["all", "some", "none"] = "all"  # the preset's write policy for this side
     conn_id: str
     mount: str
     prefix: str
@@ -106,18 +109,23 @@ async def compare(body: CompareRequest, session: Sess, settings: Conf):
         try:
             result = await engine.compare(lv, lmount, lprefix, rv, rmount, rprefix, body.rules,
                                           max_secrets=settings.max_tree_secrets, custom_metadata=body.custom_metadata)
+            versions = [await v.kv_version(m) if isinstance(v, VaultClient) else "2"
+                        for v, m in ((lv, lmount), (rv, rmount))]
         except VaultError as e:
             raise vault_http_error(e) from e
 
-    def summary(conn_id, mount, prefix, tree):
-        return SideSummary(kind="file" if conn_id == "file" else "vault", conn_id=conn_id, mount=mount,
+    def summary(conn_id, mount, prefix, tree, kv_version):
+        conn = lconn if conn_id == lconn.id else rconn
+        writes = "none" if conn_id == "file" else writepolicy.summary(settings, conn)[0]
+        return SideSummary(kind="file" if conn_id == "file" else "vault", kv_version=kv_version, writes=writes,
+                           conn_id=conn_id, mount=mount,
                            prefix=prefix.rstrip("/"),
                            denied=[d[len(prefix):] for d in tree.denied], truncated=tree.truncated,
                            secret_count=len(tree.secrets))
 
     return CompareOut(
-        left=summary(lconn.id, lmount, lprefix, result.left_tree),
-        right=summary(rconn.id, rmount, rprefix, result.right_tree),
+        left=summary(lconn.id, lmount, lprefix, result.left_tree, versions[0]),
+        right=summary(rconn.id, rmount, rprefix, result.right_tree, versions[1]),
         secrets=result.secrets,
         summary=result.summary,
     )
@@ -138,21 +146,41 @@ class SuggestedRewrite(BaseModel):
     reason: str
 
 
+class SuggestedUnordered(BaseModel):
+    key: str
+    separator: str | None
+    keys: int
+    secrets: list[str]
+    reason: str
+
+
+class SuggestedVolatile(BaseModel):
+    key: str
+    pattern: str
+    what: str
+    keys: int
+    secrets: list[str]
+    reason: str
+
+
 class SuggestOut(BaseModel):
     left_paths: list[str]  # every secret path on each side, relative to the prefix (for explaining rules)
     right_paths: list[str]
     truncated: bool
     mappings: list[SuggestedMapping]
     rewrites: list[SuggestedRewrite]
+    unordered: list[SuggestedUnordered] = []
+    volatile: list[SuggestedVolatile] = []
     before: dict[str, int]  # the comparison's counts with the rules as they are
     after: dict[str, int]  # ... and with every suggestion added
 
 
 @router.post("/compare/suggest", response_model=SuggestOut)
 async def suggest(body: CompareRequest, session: Sess, settings: Conf):
-    """Read both sides and suggest profile rules: path mappings from the folder trees, and value
-    rewrites for words that differ between environments. Returns paths, words that appear in
-    paths or are environment names, and counts; never values."""
+    """Read both sides and suggest profile rules: path mappings from the folder trees, value
+    rewrites for words that differ between environments, lists whose order differs, and values
+    that differ only in a timestamp, date or UUID. Returns paths, key names, words that appear in
+    paths or are environment names, fixed patterns, and counts; never values."""
     lconn = side_connection(body.left, session)
     rconn = side_connection(body.right, session)
     lmount, lprefix = body.left.norm()
@@ -161,7 +189,9 @@ async def suggest(body: CompareRequest, session: Sess, settings: Conf):
     run = lambda lv, rv, r, observe=None: engine.compare(  # noqa: E731
         lv, lmount, lprefix, rv, rmount, rprefix, r, max_secrets=settings.max_tree_secrets, observe=observe)
 
-    async with side_client(body.left, lconn, settings) as lv, side_client(body.right, rconn, settings) as rv:
+    async with side_client(body.left, lconn, settings) as lclient, side_client(body.right, rconn, settings) as rclient:
+        # Up to three passes below: read every secret once, then answer the later ones from memory
+        lv, rv = engine.ReadOnce(lclient), engine.ReadOnce(rclient)
         try:
             first = await run(lv, rv, rules)
             lpaths = {s[len(lprefix):] for s in first.left_tree.secrets}
@@ -173,19 +203,29 @@ async def suggest(body: CompareRequest, session: Sess, settings: Conf):
             values = profile_suggest.ValuePairs()
             second = await run(lv, rv, mapped, values.observe)
             rws = profile_suggest.suggest_rewrites(values, mapped, lpaths | rpaths)
+            rewritten = Rules.model_validate({**mapped.model_dump(), "rewrites": [
+                *mapped.model_dump()["rewrites"], *({"left": r.left, "right": r.right} for r in rws)]})
+            unord, vol = profile_suggest.suggest_value_rules(values, rewritten)
             values.items.clear()  # drop the values now
             after = second
-            if rws:
-                full = Rules.model_validate({**mapped.model_dump(), "rewrites": [
-                    *mapped.model_dump()["rewrites"], *({"left": r.left, "right": r.right} for r in rws)]})
+            if rws or unord or vol:
+                d = rewritten.model_dump()
+                full = Rules.model_validate({**d,
+                    "unordered_keys": [*d["unordered_keys"], *({"key": u.key, "separator": u.separator} for u in unord)],
+                    "volatile": [*d["volatile"], *({"key": v.key, "pattern": v.pattern} for v in vol)]})
                 after = await run(lv, rv, full)
         except VaultError as e:
             raise vault_http_error(e) from e
+        finally:
+            lv.clear()
+            rv.clear()
 
     return SuggestOut(left_paths=sorted(lpaths), right_paths=sorted(rpaths),
                       truncated=first.left_tree.truncated or first.right_tree.truncated,
                       mappings=[SuggestedMapping(**m.__dict__) for m in maps],
                       rewrites=[SuggestedRewrite(**r.__dict__) for r in rws],
+                      unordered=[SuggestedUnordered(**u.__dict__) for u in unord],
+                      volatile=[SuggestedVolatile(**v.__dict__) for v in vol],
                       before=first.summary, after=after.summary)
 
 
@@ -265,4 +305,5 @@ async def read_secret(conn_id: str, session: Sess, settings: Conf,
             raise vault_http_error(e) from e
     if s.state == "absent":
         raise HTTPException(404, detail={"message": f"No secret at {mount}/{path}"})
+    reveal(settings, "compare.show", [Shown(conn, mount.strip("/"), path.strip("/"), list(s.data or {}), s.version)])
     return SecretOut(path=path.strip("/"), state=s.state, version=s.version, updated=s.updated, data=s.data)

@@ -52,7 +52,7 @@ def test_type_difference_and_last_changed(page):
     set_reveal(page, True)
     r = expand(page, "types/mixed")
     port = key_row(r, "port")
-    expect(port.locator(".key-name")).to_contain_text("type differs: number vs string")
+    expect(port.locator(".key-reason")).to_have_text("different type: number on the left, text on the right")
     expect(port.locator(".type-tag").first).to_have_text("number")
     expect(port.locator(".type-tag").last).to_have_text("string")
     expect(port.locator(".val-meta").first).to_contain_text(re.compile(r"changed .* · v\d+"))
@@ -237,7 +237,7 @@ def test_override_values_on_both_sides(page, sandbox, vault_a, vault_b):
     dialog = page.locator("dialog.review")
     expect(dialog.locator(".plan .badge", has_text="Will be written")).to_have_count(2)
     expect(dialog.locator(".plan .muted", has_text="Typed values")).to_have_count(2)
-    expect(dialog.get_by_role("button", name="Save as plan")).to_be_disabled()  # until typed values are acknowledged
+    expect(dialog).to_contain_text("whoever applies it types them again")  # typed values never go in a plan file
     expect(dialog).not_to_contain_text("rotated-pw")  # values stay hidden in the review without Show values
     dialog.locator("label.confirm input").check()
     dialog.get_by_role("button", name="Apply").click()
@@ -266,3 +266,77 @@ def test_compare_custom_metadata_when_asked(page, sandbox, vault_a, vault_b):
     expect(row(page, "svc").locator(".badge").last).to_have_text("Different")
     r = expand(page, "svc")
     expect(r.get_by_label("Custom metadata differences")).to_contain_text("owner team-a → team-b")
+
+
+def test_connection_list_offers_every_preset(page):
+    """Once a side is signed in, its Connection list still offers every preset Vault (on the
+    demo, the OpenBaos too), and picking one opens the sign-in form on it."""
+    from conftest import field
+    sign_in_userpass(page, "left", "alice", vault="Vault A")
+    card = side(page, "left")
+    conn = card.get_by_role("combobox").first
+    offered = conn.locator("optgroup[label='Sign in to'] option").all_inner_texts()
+    assert offered == ["Vault A…", "Vault B…", "Vault B (read-only)…", "Vault B (with approval)…"]
+    conn.select_option(label="Vault B…")
+    expect(field(card, "Vault").locator("select")).to_have_value("1")
+    card.get_by_role("button", name="Cancel").click()
+    expect(card.locator(".conn-chip")).to_contain_text("userpass-alice")  # back to the signed-in connection
+
+
+def test_results_say_where_inside_a_value_it_differs(page, sandbox, vault_a, vault_b):
+    """A JSON value that differs in one nested field: Results name the field and say why,
+    without showing values."""
+    vault_a.put("app-config", f"{sandbox}/svc", {"config": '{"db": {"host": "a.internal", "port": 5432}}', "mode": "Prod"})
+    vault_b.put("app-config", f"{sandbox}/svc", {"config": '{"db": {"host": "b.internal", "port": 5432}}', "mode": "prod"})
+    connect_both(page, prefix=sandbox)
+    compare(page)
+    r = expand(page, "svc")
+    expect(r.locator(".key-row", has_text="config").locator(".key-reason")).to_have_text("different at db.host")
+    expect(r.locator(".key-row", has_text="mode").locator(".key-reason")).to_have_text("differs only in upper and lower case")
+    expect(r).not_to_contain_text("a.internal")  # values stay hidden until revealed
+
+
+# A throwaway self-signed certificate (no key anywhere), for comparing encodings
+E2E_CERT = """-----BEGIN CERTIFICATE-----
+MIIBGDCBv6ADAgECAgEBMAoGCCqGSM49BAMCMBYxFDASBgNVBAMMC2UyZS5leGFt
+cGxlMB4XDTI2MDEwMTAwMDAwMFoXDTM1MTIzMDAwMDAwMFowFjEUMBIGA1UEAwwL
+ZTJlLmV4YW1wbGUwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAASOuaZ/4fXL/YPn
+J55WU06po0Ce/zaOHpB3RduUCis4ch33op6VnkpUg1D6GzX1YMsAD+xqpz27GVWf
+P+CxaaRWMAoGCCqGSM49BAMCA0gAMEUCIHLTk0/Xo+3rjJjfW99lJ4H2W3LCOfqh
+JVtuF1r6Im2tAiEA6P3dMrZa+hMv1VmXKTx+v0u9j7l6mXmIDgiXIHQmmls=
+-----END CERTIFICATE-----
+"""
+
+
+def test_same_certificate_written_differently_is_equal_and_says_why(page, sandbox, vault_a, vault_b):
+    vault_a.put("app-config", f"{sandbox}/tls", {"cert": E2E_CERT, "mode": "a"})
+    vault_b.put("app-config", f"{sandbox}/tls", {"cert": E2E_CERT.replace("\n", "\r\n"), "mode": "b"})
+    connect_both(page, prefix=sandbox)
+    compare(page)
+    r = expand(page, "tls")
+    expect(r.locator(".key-row", has_text="cert").locator(".key-reason")).to_have_text(
+        "equal as certificates (same fingerprint; line endings differ)")
+
+
+def _jks_with_key(encrypted: bytes) -> str:
+    """A JKS keystore (as base64) with one key entry: E2E_CERT and a stand-in for its encrypted key."""
+    import base64
+    import hashlib
+    import struct
+    der = base64.b64decode("".join(E2E_CERT.strip().splitlines()[1:-1]))
+    utf = lambda s: struct.pack(">H", len(s)) + s.encode()  # noqa: E731
+    body = (struct.pack(">III", 0xFEEDFEED, 2, 1) + struct.pack(">I", 1) + utf("app") + struct.pack(">Q", 1)
+            + struct.pack(">I", len(encrypted)) + encrypted + struct.pack(">I", 1) + utf("X.509")
+            + struct.pack(">I", len(der)) + der)
+    return base64.b64encode(body + hashlib.sha1(b"Mighty Aphrodite" + body).digest()).decode()  # nosec B324
+
+
+def test_keystore_that_cant_be_opened_is_not_compared(page, sandbox, vault_a, vault_b):
+    vault_a.put("app-config", f"{sandbox}/java", {"keystore.jks": _jks_with_key(b"\x30\x03\x02\x01\x01"), "mode": "x"})
+    vault_b.put("app-config", f"{sandbox}/java", {"keystore.jks": _jks_with_key(b"\x30\x03\x02\x01\x02"), "mode": "x"})
+    connect_both(page, prefix=sandbox)
+    compare(page)
+    expect(page.locator(".chip", has_text="Not compared")).to_be_visible()
+    r = expand(page, "java")
+    expect(r.locator(".secret-head")).to_contain_text("Not compared")
+    expect(key_row(r, "keystore.jks").locator(".key-reason")).to_contain_text("can't be checked without the password")

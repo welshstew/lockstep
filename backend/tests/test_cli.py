@@ -236,6 +236,80 @@ def test_compare_in_sync_exits_zero(env, capsys):
     assert "1 secrets: 1 equal." in capsys.readouterr().out
 
 
+def test_compare_exits_one_when_a_key_is_not_compared(env, capsys):
+    from test_comparators import locked_p12, make_cert
+
+    c, key = make_cert()
+    env.a.put(f"{env.prefix}/ks/app", {"store": locked_p12(key, c, b"pw-1")})
+    env.b.put(f"{env.prefix}/ks/app", {"store": locked_p12(key, c, b"pw-1")})
+    rc = main(["compare", *env.args, "--prefix", f"{env.prefix}/ks"])
+    assert rc == 1  # a drift check mustn't pass on a keystore it couldn't open
+    assert "not compared" in capsys.readouterr().out
+
+
+def test_drift_check_with_a_baseline(env, capsys):
+    import json
+    import xml.etree.ElementTree as ET
+
+    assert main(["baseline", "update", "drift.json", *env.args]) == 0
+    assert "Baseline written to drift.json: 4 differences accepted." in capsys.readouterr().out
+    base = json.loads((env.dir / "drift.json").read_text())
+    assert {(f["path"], f.get("key")) for f in base["drift"]} == {("db", "password"), ("db", "port"), ("db", "extra"), ("new", None)}
+    assert "keep me" not in (env.dir / "drift.json").read_text()
+
+    rc = main(["compare", *env.args, "--baseline", "drift.json", "-o", "r.sarif", "-o", "t.xml", "-o", "pr.md"])
+    out = capsys.readouterr().out
+    assert rc == 0, out  # nothing new
+    assert "Drift: 0 new, 4 known (in the baseline), 0 resolved." in out
+    assert "Report written to r.sarif." in out and "lockstep apply r.sarif" not in out
+    assert all(r["level"] == "note" for r in json.loads((env.dir / "r.sarif").read_text())["runs"][0]["results"])
+    assert ET.parse(env.dir / "t.xml").getroot().get("failures") == "0"
+    assert "no new drift" in (env.dir / "pr.md").read_text()
+
+    env.b.put(f"{env.prefix}/eq/same", {"x": "2"})  # new drift
+    rc = main(["compare", *env.args, "--baseline", "drift.json", "-o", "r.yaml"])
+    out = capsys.readouterr().out
+    assert rc == 1 and "  new       eq/same key x: different" in out
+    rep = yaml.safe_load((env.dir / "r.yaml").read_text())
+    assert rep["drift_check"]["new"] == 1 and rep["drift_check"]["failed"] is True
+
+    (env.dir / "waivers.yaml").write_text(
+        "- {path: eq/*, key: x, owner: team-a, reason: staging tries a new value, expires: 2099-01-01}\n")
+    assert main(["compare", *env.args, "--baseline", "drift.json", "--waivers", "waivers.yaml", "-q"]) == 0
+    assert main(["compare", *env.args, "--baseline", "drift.json", "--fail-on", "any", "-q",
+                 "--waivers", "waivers.yaml"]) == 1  # the known drift counts again
+
+
+def test_compare_pushes_metrics(env, capsys, monkeypatch):
+    from lockstep.cli import pushgateway
+
+    pushes = []
+    monkeypatch.setattr(pushgateway, "push", lambda *a, **kw: pushes.append((a, kw)))
+    assert main(["compare", *env.args, "--pushgateway", "http://pg:9091", "-o", "drift.prom"]) == 1
+    (base, job, labels, body), kw = pushes[0]
+    assert (base, job, kw) == ("http://pg:9091", "lockstep", {})
+    assert labels == {"left": "A", "right": "B", "mount": MOUNT, "prefix": env.prefix}
+    assert 'lockstep_drift_keys{status="different"} 2' in body and "lockstep_compare_success 1" in body
+    assert 'left="A"' in (env.dir / "drift.prom").read_text()  # a textfile carries its labels
+    assert "Metrics pushed to the Pushgateway (job lockstep)." in capsys.readouterr().out
+
+    pushes.clear()
+    monkeypatch.setenv("LOCKSTEP_RIGHT_TOKEN", "not-a-token")
+    assert main(["compare", *env.args, "--pushgateway", "http://pg:9091"]) == 2  # couldn't compare
+    (_, _, labels, body), kw = pushes[0]
+    assert kw == {"replace": False} and "lockstep_compare_success 0" in body and "drift_keys" not in body
+
+
+def test_drift_check_mistakes(env, capsys):
+    assert main(["compare", *env.args, "--fail-on", "new"]) == 2
+    assert "--fail-on new needs --baseline" in capsys.readouterr().err
+    assert main(["compare", *env.args, "--baseline", "nope.json"]) == 2
+    assert "lockstep baseline update nope.json" in capsys.readouterr().err
+    assert main(["baseline", "update", "drift.json", *env.args, "-q"]) == 0
+    assert main(["compare", *env.args, "--prefix", f"{env.prefix}/eq", "--baseline", "drift.json"]) == 2
+    assert "Use the baseline for these locations" in capsys.readouterr().err
+
+
 def test_compare_needs_a_token(env, monkeypatch, capsys):
     monkeypatch.delenv("LOCKSTEP_RIGHT_TOKEN")
     monkeypatch.setenv("HOME", str(env.dir))  # no ~/.vault-token

@@ -1,6 +1,6 @@
 [project]
 name = "lockstep"
-version = "0.10.1"
+version = "0.11.0"
 description = "Compare and sync KV v2 secrets across HashiCorp Vault mounts and clusters"
 requires-python = ">=3.13"
 license = "MIT"
@@ -10,6 +10,7 @@ dependencies = [
   "pydantic-settings==2.16.2",
   "httpx==0.28.1",
   "cryptography==50.0.2",
+  "pyrage==1.4.0",
   "pyyaml==6.0.3",
 ]
 

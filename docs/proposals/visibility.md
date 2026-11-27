@@ -44,7 +44,7 @@ Spread these over a couple of weeks. Each needs a reason to look: a new guide, t
 
 | # | Task | Who | Status |
 |---|---|---|---|
-| 13 | **Demo check before any launch:** a short load test on demo.getlockstep.cloud, and check the hourly reset and session limits hold up. | Claude runs it, with Stuart's go-ahead | To do |
+| 13 | **Demo check before any launch:** a short load test on demo.getlockstep.cloud, and check the hourly reset and session limits hold up. | Claude runs it, with Stuart's go-ahead | ✅ Done 2026-11-24. **Load:** 5 to 30 simultaneous visitors, about 4,400 requests, no errors. The app levels off at about 20 requests/s and slows rather than fails (p95 3 s at 30 visitors); the static site stays at about 180 ms. **Limits** hold: at most 6 connections per session, no custom Vault addresses, 4 MB bodies, read-only `bob`. **The hourly reset** removed a marker secret. Since then a per-address limit (180 requests/minute) stops one client using up the app |
 | 14 | **Show HN:** "Show HN: Lockstep – diff and sync secrets between Vault clusters". Link the live demo, and post on a weekday morning, US time. Stay around to answer comments. | Claude drafts, Stuart posts | To do |
 | 15 | **Reddit:** one post per subreddit, each written for that audience. r/devops, r/kubernetes, r/selfhosted (the demo), r/hashicorp, and the OpenBao community. | Claude drafts, Stuart posts | To do |
 | 16 | **Newsletters:** DevOps Weekly, SRE Weekly, KubeWeekly, Console.dev, TLDR DevOps. Each has a submission form or address. | Claude drafts a blurb, Stuart submits | To do |

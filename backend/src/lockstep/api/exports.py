@@ -18,22 +18,26 @@ deleted) and every write is audit-logged without values, exactly like copies.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import time
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field, ValidationError
 
 from .. import exports as ex
+from .. import kvdump, writepolicy
 from ..config import Settings, get_settings
 from ..session import SessionData, load_session
+from ..reveal import reveal
 from ..vault import VaultError
 from .compare import FileSide, Side
 from .connections import client_for, get_connection, vault_http_error
 from .guard import require_writable
-from .sync import ApplyOut, Change, ChangePlan, _Ctx, apply_changes, evaluate
+from .sync import ApplyOut, Change, ChangePlan, _Ctx, apply_changes, evaluate, shown_in
 
 router = APIRouter(tags=["exports"])
 audit = logging.getLogger("lockstep.audit")
@@ -57,54 +61,196 @@ class ExportRequest(BaseModel):
     side: Side
     rules: ex.ExportRules = Field(default_factory=ex.ExportRules)
     encrypt: bool = True
+    # How to encrypt (with encrypt=true): a passphrase, or age public keys (pasted, or the teams
+    # in LOCKSTEP_EXPORT_RECIPIENTS by name). Neither: a one-time key.
+    passphrase: str | None = Field(default=None, max_length=1024)
+    recipients: list[str] = Field(default_factory=list, max_length=ex.MAX_RECIPIENTS)
+    teams: list[str] = Field(default_factory=list, max_length=20)
 
 
 class ExportOut(BaseModel):
     filename: str
     file: dict[str, Any]  # the file's JSON (an encrypted envelope, or the plain export)
+    scheme: Literal["key", "passphrase", "age", "none"] = "key"
     key: str | None  # the one-time key: shown once, never stored
     secrets: int
     keys: int
     skipped: ex.ExportSkipped
 
 
+def _check(body: ExportRequest, session: SessionData, settings: Settings):
+    """The connection and age keys for an export, after the export policy and the protection asked for."""
+    conn = get_connection(session, body.side.conn_id)
+    recipients = _recipients(body, settings) if body.encrypt else []
+    if body.encrypt and body.passphrase is not None:
+        if recipients:
+            raise HTTPException(400, detail={"message": "Choose a passphrase or age keys, not both."})
+        try:
+            ex.check_passphrase(body.passphrase)
+        except ex.ExportError as e:
+            raise HTTPException(400, detail={"message": str(e)}) from e
+    mode, preset = writepolicy.export_mode(settings, conn)
+    where = f" for {preset.name}" if preset else ""
+    if mode == "off":
+        raise HTTPException(403, detail={"message": f"Exporting is turned off{where} on this Lockstep server."})
+    if mode == "encrypted" and not body.encrypt:
+        raise HTTPException(403, detail={"message": f"This Lockstep server only allows encrypted exports{where}."})
+    return conn, recipients
+
+
+def _scheme(body: ExportRequest, recipients: list[str]) -> str:
+    return "none" if not body.encrypt else "age" if recipients else "passphrase" if body.passphrase is not None else "key"
+
+
+def _source(conn, mount: str) -> ex.ExportSource:
+    return ex.ExportSource(vault=conn.name, url=None if conn.preset_id is not None else conn.url,
+                           namespace=conn.namespace, mount=mount, identity=conn.display_name or conn.auth_method)
+
+
+def _seal(packed: ex.Packed, scheme: str, body: ExportRequest, recipients: list[str]) -> tuple[dict, str | None]:
+    if scheme == "age":
+        return ex.seal_age(packed, recipients).dump(), None
+    if scheme == "passphrase":
+        return ex.seal_passphrase(packed, body.passphrase or "").dump(), None
+    env, key = ex.seal_key(packed)
+    return env.dump(), key
+
+
+def _audit(conn, mount: str, prefix: str, body: ExportRequest, scheme: str, recipients: list[str],
+           secrets: int, keys: int, outcome: str = "created") -> None:
+    audit.info(json.dumps({
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "event": "export", "outcome": outcome,
+        "actor": {"identity": conn.display_name, "auth": conn.auth_method, "entity_id": conn.entity_id, "accessor": conn.accessor},
+        "source": {"vault": conn.name, "url": conn.url, "mount": mount, "prefix": prefix.rstrip("/")},
+        "encrypted": body.encrypt, "scheme": scheme, "secrets": secrets, "keys": keys,
+        **({"recipients": recipients, "teams": body.teams} if scheme == "age" else {}),
+        "rules": body.rules.model_dump(mode="json"),
+    }, sort_keys=True))
+
+
 @router.post("/api/exports", response_model=ExportOut)
 async def create_export(body: ExportRequest, session: Sess, settings: Conf):
-    if settings.export_mode == "off":
-        raise HTTPException(403, detail={"message": "Exporting is turned off on this server."})
-    if settings.export_mode == "encrypted" and not body.encrypt:
-        raise HTTPException(403, detail={"message": "This server only allows encrypted exports."})
-    conn = get_connection(session, body.side.conn_id)
+    """The export in one response. /api/exports/stream sends the same, without holding it in memory."""
+    conn, recipients = _check(body, session, settings)
+    scheme = _scheme(body, recipients)
     mount, prefix = body.side.norm()
-    source = ex.ExportSource(vault=conn.name, url=None if conn.preset_id is not None else conn.url,
-                             namespace=conn.namespace, mount=mount, identity=conn.display_name or conn.auth_method)
     async with client_for(conn, settings) as v:
         try:
-            doc = await ex.build(v, mount=mount, prefix=prefix, rules=body.rules, source=source,
+            doc = await ex.build(v, mount=mount, prefix=prefix, rules=body.rules, source=_source(conn, mount),
                                  max_secrets=settings.max_tree_secrets, tool=_tool())
         except VaultError as e:
             raise vault_http_error(e) from e
     key = None
-    if body.encrypt:
-        env, key = await asyncio.to_thread(ex.encrypt, doc)
-        file = env.dump()
-    else:
+    if scheme == "none":
         file = doc.dump()
+    else:
+        try:
+            file, key = await asyncio.to_thread(_seal, ex.pack(doc), scheme, body, recipients)
+        except ex.ExportError as e:
+            raise HTTPException(400, detail={"message": str(e)}) from e
     n_keys = sum(len(s.data or {}) for s in doc.secrets)
-    audit.info(json.dumps({
-        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "event": "export", "outcome": "created",
-        "actor": {"identity": conn.display_name, "auth": conn.auth_method},
-        "source": {"vault": conn.name, "url": conn.url, "mount": mount, "prefix": prefix.rstrip("/")},
-        "encrypted": body.encrypt, "secrets": len(doc.secrets), "keys": n_keys,
-        "rules": body.rules.model_dump(mode="json"),
-    }, sort_keys=True))
-    return ExportOut(filename=ex.file_name(doc, body.encrypt), file=file, key=key, secrets=len(doc.secrets),
-                     keys=n_keys, skipped=doc.skipped)
+    _audit(conn, mount, prefix, body, scheme, recipients, len(doc.secrets), n_keys)
+    return ExportOut(filename=ex.file_name(doc, body.encrypt), file=file, scheme=scheme, key=key,
+                     secrets=len(doc.secrets), keys=n_keys, skipped=doc.skipped)
+
+
+@router.post("/api/exports/stream")
+async def stream_export(body: ExportRequest, session: Sess, settings: Conf):
+    """The export as NDJSON, for big mounts: progress lines ({"progress": {"done", "total"}}), then
+    {"result": <as /api/exports>} (or {"error": …}). A plain export streams straight into the result
+    line as secrets are read; an encrypted one holds only the compressed export until it's sealed.
+    Either way the server never holds the export as a document, and bytes keep flowing for proxies."""
+    conn, recipients = _check(body, session, settings)
+    scheme = _scheme(body, recipients)
+    mount, prefix = body.side.norm()
+    stack = contextlib.AsyncExitStack()
+    v = await stack.enter_async_context(client_for(conn, settings))
+    try:  # listing errors become a normal HTTP error, not a stream
+        base = ex._norm(prefix)
+        tree = await v.kv_tree(mount, f"{base}/" if base else "", max_secrets=settings.max_tree_secrets)
+    except VaultError as e:
+        await stack.aclose()
+        raise vault_http_error(e) from e
+    except BaseException:
+        await stack.aclose()
+        raise
+
+    queue: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=64)
+
+    async def put(b: bytes) -> None:
+        await queue.put(b)
+
+    async def progress(done: int, total: int) -> None:
+        await queue.put(json.dumps({"progress": {"done": done, "total": total}}).encode() + b"\n")
+
+    def summary(built: ex.Built, key: str | None) -> dict:
+        return {"filename": ex.file_name(built, body.encrypt), "scheme": scheme, "key": key,
+                "secrets": built.secrets, "keys": built.keys, "skipped": built.skipped.model_dump(mode="json")}
+
+    state = {"outcome": "interrupted", "secrets": 0, "keys": 0}
+
+    async def produce() -> None:
+        common = dict(mount=mount, prefix=prefix, rules=body.rules, source=_source(conn, mount),
+                      max_secrets=settings.max_tree_secrets, tool=_tool(), tree=tree)
+        try:
+            if scheme == "none":
+                await put(b'{"result":{"file":')
+                built = await ex.stream(v, write=put, **common)
+                await put(b"," + json.dumps(summary(built, None))[1:].encode() + b"}\n")
+            else:
+                packer = ex.Packer()
+                built = await ex.stream(v, write=packer.write, progress=progress, **common)
+                try:
+                    file, key = await asyncio.to_thread(_seal, packer.done(built), scheme, body, recipients)
+                except ex.ExportError as e:
+                    await put(json.dumps({"error": {"status": 400, "message": str(e)}}).encode() + b"\n")
+                    state["outcome"] = "failed"
+                    return
+                await put(json.dumps({"result": {"file": file, **summary(built, key)}}).encode() + b"\n")
+            state.update(outcome="created", secrets=built.secrets, keys=built.keys)
+        except VaultError as e:
+            state["outcome"] = "failed"
+            await put(json.dumps({"error": {"status": 502, "message": f"The export failed: {e}"}}).encode() + b"\n")
+        finally:
+            await queue.put(None)
+
+    async def body_iter():
+        task = asyncio.create_task(produce())
+        try:
+            while (chunk := await queue.get()) is not None:
+                yield chunk
+            await task
+        finally:
+            if not task.done():
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await task
+            await stack.aclose()
+            _audit(conn, mount, prefix, body, scheme, recipients, state["secrets"], state["keys"], state["outcome"])
+
+    return StreamingResponse(body_iter(), media_type="application/x-ndjson",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+def _recipients(body: ExportRequest, settings: Settings) -> list[str]:
+    """The age public keys to encrypt to: the named teams' and the pasted ones, checked."""
+    teams = {t.name: t for t in settings.export_recipients}
+    unknown = [n for n in body.teams if n not in teams]
+    if unknown:
+        raise HTTPException(400, detail={"message": f"No team called {unknown[0]} on this Lockstep server."})
+    keys = [k for n in body.teams for k in teams[n].recipients] + list(body.recipients)
+    if not keys:
+        return []
+    try:
+        return ex.parse_recipients(keys)
+    except ex.ExportError as e:
+        raise HTTPException(400, detail={"message": str(e)}) from e
 
 
 class OpenRequest(BaseModel):
     file: dict[str, Any]
-    key: str | None = Field(default=None, max_length=200)
+    # The one-time key, the passphrase, or an age identity (or a whole age key file)
+    key: str | None = Field(default=None, max_length=8000)
 
 
 class OpenOut(BaseModel):
@@ -118,8 +264,32 @@ async def open_export(body: OpenRequest):
         doc = await asyncio.to_thread(ex.load, body.file, body.key)
     except ex.ExportError as e:
         raise HTTPException(400, detail={"message": str(e),
-                                         "needs_key": body.file.get("format") == ex.ENCRYPTED_FORMAT}) from e
+                                         "needs_key": body.file.get("format") == ex.ENCRYPTED_FORMAT,
+                                         "scheme": body.file.get("scheme", "key")}) from e
     return OpenOut(export=doc, encrypted=body.file.get("format") == ex.ENCRYPTED_FORMAT)
+
+
+class KvGetFile(BaseModel):
+    name: str = Field(min_length=1, max_length=1000)  # the file name, or its path in a folder
+    content: Any
+
+
+class KvGetRequest(BaseModel):
+    files: list[KvGetFile] = Field(min_length=1, max_length=kvdump.MAX_FILES)
+    name: str = Field(default="vault kv get", max_length=200)  # shown as where the export came from
+
+
+@router.post("/api/exports/from-kv-get", response_model=OpenOut)
+async def from_kv_get(body: KvGetRequest):
+    """Read `vault kv get -format=json` output (one file, a folder's files, or an object of
+    path: output) as an export, to compare against or import. Nothing is kept."""
+    try:
+        doc = await asyncio.to_thread(kvdump.convert, [(f.name, f.content) for f in body.files], body.name, _tool())
+    except ex.ExportError as e:
+        raise HTTPException(400, detail={"message": str(e)}) from e
+    except ValidationError as e:
+        raise HTTPException(400, detail={"message": f"Couldn't read it: {e.errors()[0]['msg']}"}) from e
+    return OpenOut(export=doc, encrypted=False)
 
 
 # --------------------------------------------------------------------------- import
@@ -245,6 +415,8 @@ async def import_preview(body: ImportPreviewRequest, session: Sess, settings: Co
             raise HTTPException(400, detail={"message": str(e)}) from e
         except VaultError as e:
             raise vault_http_error(e) from e
+        if body.reveal:  # the target's current values (the file's were already the user's)
+            reveal(settings, "import.preview", shown_in(ctx, plans, ("target",)))
     return ImportPreviewOut(prepared=_summary(prep), plans=plans, warnings=warnings)
 
 

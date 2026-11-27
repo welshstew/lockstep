@@ -7,6 +7,7 @@ import { ToolsView } from "./components/ToolsView";
 import { MfaPrompt } from "./components/MfaPrompt";
 import { applyTheme, loadTheme, type Theme } from "./theme";
 import { type BrowseTarget, BrowseView } from "./components/BrowseView";
+import { MatrixView } from "./components/MatrixView";
 import { PlansView } from "./components/PlansView";
 import { Results } from "./components/Results";
 import { type InspectTarget, Inspector, type TrustCandidate } from "./components/Inspector";
@@ -94,11 +95,11 @@ export function App() {
   const [changeset, setChangeset] = useState<Changeset>({});
   const [reviewing, setReviewing] = useState(false);
   const [inspecting, setInspecting] = useState<InspectTarget[] | null>(null);
-  const [view, setView] = useState<"browse" | "compare" | "expiry" | "plans" | "transfer" | "policies" | "config" | "tools">(() => {
+  const [view, setView] = useState<"browse" | "compare" | "matrix" | "expiry" | "plans" | "transfer" | "policies" | "config" | "tools">(() => {
     if (window.location.hash.startsWith("#/browse/")) return "browse";
     try {
       const v = localStorage.getItem("lockstep.view");
-      return v === "compare" || v === "expiry" || v === "plans" || v === "transfer" || v === "policies" || v === "config" || v === "tools" ? v : "browse";
+      return v === "compare" || v === "matrix" || v === "expiry" || v === "plans" || v === "transfer" || v === "policies" || v === "config" || v === "tools" ? v : "browse";
     } catch { return "browse"; }
   });
   // Export files opened in this page: in memory only (they hold values), gone on reload
@@ -109,7 +110,8 @@ export function App() {
     const f = fileOf(s);
     return f ? { export: f.doc, name: f.name, prefix: s.prefix } : { conn_id: s.connId!, mount: s.mount!, prefix: s.prefix };
   };
-  const vaultRef = (s: SideSelection) => (fileOf(s) || !s.connId || !s.mount ? undefined : { conn_id: s.connId, mount: s.mount, prefix: s.prefix });
+  const vaultRef = (s: SideSelection) => (fileOf(s) || !s.connId || !s.mount || s.kvVersion === "1"
+    || connections.find((c) => c.id === s.connId)?.destroy === false ? undefined : { conn_id: s.connId, mount: s.mount, prefix: s.prefix });
   useEffect(() => { try { localStorage.setItem("lockstep.view", view); } catch { /* ignore */ } }, [view]);
   const [sharedProfiles, setSharedProfiles] = useState<Profile[]>([]);
   const [personal, setPersonal] = useState<Profile[]>(loadPersonal);
@@ -146,8 +148,8 @@ export function App() {
     if (p && (p.left_mount || p.right_mount)) {
       // Apply the profile's mounts and prefixes to sides that already have a connection.
       setSides(([l, r]) => [
-        l.connId && p.left_mount ? { ...l, mount: p.left_mount, prefix: p.left_prefix ?? "" } : l,
-        r.connId && p.right_mount ? { ...r, mount: p.right_mount, prefix: p.right_prefix ?? "" } : r,
+        l.connId && p.left_mount ? { ...l, mount: p.left_mount, prefix: p.left_prefix ?? "", kvVersion: undefined } : l,
+        r.connId && p.right_mount ? { ...r, mount: p.right_mount, prefix: p.right_prefix ?? "", kvVersion: undefined } : r,
       ]);
     }
   }
@@ -225,8 +227,14 @@ export function App() {
     setChangeset({});
     try {
       const rules = draftRules ? mergeRules(activeProfile?.rules, draft) : activeProfile?.rules ?? null;
-      setResult(await api.compare(sideRef(l), sideRef(r), rules, withMetadata));
+      const res = await api.compare(sideRef(l), sideRef(r), rules, withMetadata);
+      setResult(res);
       setResultRules(rules);
+      // The comparison knows each mount's KV version (a profile may have picked the mount)
+      setSides(([a, b]) => [
+        a.connId === l.connId && a.mount === l.mount ? { ...a, kvVersion: res.left.kv_version } : a,
+        b.connId === r.connId && b.mount === r.mount ? { ...b, kvVersion: res.right.kv_version } : b,
+      ]);
     } catch (e) {
       setError((e as Error).message);
       setResult(null);
@@ -253,6 +261,7 @@ export function App() {
         <nav className="tabs" role="tablist" aria-label="View">
           <button type="button" role="tab" aria-selected={view === "browse"} onClick={() => setView("browse")}>Browse</button>
           <button type="button" role="tab" aria-selected={view === "compare"} onClick={() => setView("compare")}>Compare</button>
+          <button type="button" role="tab" aria-selected={view === "matrix"} onClick={() => setView("matrix")}>Matrix</button>
           <button type="button" role="tab" aria-selected={view === "expiry"} onClick={() => setView("expiry")}>Certificate expiry</button>
           <button type="button" role="tab" aria-selected={view === "plans"} onClick={() => setView("plans")}>Sync plans</button>
           <button type="button" role="tab" aria-selected={view === "transfer"} onClick={() => setView("transfer")}>Export &amp; import</button>
@@ -292,6 +301,9 @@ export function App() {
       </div>
 
 
+      {view !== "compare" && view !== "matrix" && view !== "tools" && view !== "config" && sides.some((s) => s.kvVersion === "1") && (
+        <div className="notice info kv1-note">A side is a KV v1 mount: this tab needs a KV v2 mount, so it leaves that side out. KV v1 mounts are only compared, in Compare.</div>
+      )}
       {view === "tools" ? (
         <ToolsView sides={Object.fromEntries(sides.flatMap((s, i) => {
           const c = !s.fileId && connections.find((x) => x.id === s.connId);
@@ -304,8 +316,11 @@ export function App() {
         }))} />
       ) : view === "browse" ? (
         <BrowseView config={config} reveal={reveal} onInspect={setInspecting}
-          targets={sides.flatMap((s, i): BrowseTarget[] => (s.connId && s.mount && !s.fileId
+          targets={sides.flatMap((s, i): BrowseTarget[] => (s.connId && s.mount && !s.fileId && s.kvVersion !== "1"
             ? [{ side: i === 0 ? "left" : "right", conn_id: s.connId, mount: s.mount, prefix: s.prefix, label: label(s),
+                 writes: connections.find((c) => c.id === s.connId)?.writes,
+                 destroy: connections.find((c) => c.id === s.connId)?.destroy,
+                 export: connections.find((c) => c.id === s.connId)?.export,
                  url: connections.find((c) => c.id === s.connId)?.url
                    ?? config.presets.find((p) => p.id === connections.find((c) => c.id === s.connId)?.preset_id)?.browser_url }] : []))}
           onGo={(to, side, folder) => {
@@ -325,7 +340,7 @@ export function App() {
           }} />
       ) : view === "policies" ? (
         <PoliciesView canApply={!!config.policy_apply} userWrite={!!config.user_write}
-          targets={sides.flatMap((s, i): ScanTarget[] => (s.connId && s.mount && !s.fileId
+          targets={sides.flatMap((s, i): ScanTarget[] => (s.connId && s.mount && !s.fileId && s.kvVersion !== "1"
             ? [{ side: i === 0 ? "left" : "right", conn_id: s.connId, mount: s.mount, prefix: s.prefix, label: label(s) }] : []))}
           sides={Object.fromEntries(sides.flatMap((s, i) => {
             const c = !s.fileId && connections.find((x) => x.id === s.connId);
@@ -334,13 +349,23 @@ export function App() {
       ) : view === "transfer" ? (
         <TransferView config={config} reveal={reveal} files={files} onFile={addFile}
                       sides={sides.map((s, i) => ({ side: i === 0 ? "left" as const : "right" as const, label: label(s),
-                        ref: s.connId && s.mount && !s.fileId ? { conn_id: s.connId, mount: s.mount, prefix: s.prefix } : null }))}
+                        ref: s.connId && s.mount && !s.fileId && s.kvVersion !== "1" ? { conn_id: s.connId, mount: s.mount, prefix: s.prefix } : null,
+                        exportMode: connections.find((c) => c.id === s.connId)?.export }))}
                       profiles={[...sharedProfiles, ...personal]} />
+      ) : view === "matrix" ? (
+        <MatrixView connections={connections} baseline={sides[0]} baselineLabel={label(sides[0])} right={sides[1]}
+                    shared={sharedProfiles} personal={personal}
+                    onOpenPair={(env) => {
+                      if (env.profile) selectProfile(env.profile); else selectProfile(null);
+                      setSides(([l]) => [l, { connId: env.connId, mount: env.mount, prefix: env.prefix }]);
+                      setChangeset({});
+                      setView("compare");
+                    }} />
       ) : view === "plans" ? (
         <PlansView connections={connections} leftConnId={sides[0].connId} rightConnId={sides[1].connId} readOnly={!!config.read_only} />
       ) : view === "expiry" ? (
         <ExpiryView
-          targets={sides.flatMap((s, i): ScanTarget[] => (s.connId && s.mount
+          targets={sides.flatMap((s, i): ScanTarget[] => (s.connId && s.mount && s.kvVersion !== "1"
             ? [{ side: i === 0 ? "left" : "right", conn_id: s.connId, mount: s.mount, prefix: s.prefix, label: label(s) }] : []))}
           onInspect={setInspecting} readOnly={!!config.read_only} />
       ) : (<>

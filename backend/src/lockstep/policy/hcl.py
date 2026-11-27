@@ -13,7 +13,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-CAPABILITIES = ("create", "read", "update", "patch", "delete", "list", "sudo", "deny", "subscribe", "recover")
+CAPABILITIES = ("create", "read", "update", "patch", "delete", "list", "sudo", "deny", "subscribe", "recover",
+                "scan")  # scan: OpenBao
 # The legacy `policy = "..."` field, as Vault expands it
 LEGACY = {
     "deny": ["deny"],

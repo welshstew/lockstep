@@ -21,6 +21,7 @@ ssh "$TARGET" "mkdir -p '$DIR' && chmod 700 '$DIR'"
 rsync -az --delete \
   --exclude .git --exclude .env --exclude dex.yaml --exclude node_modules --exclude frontend/dist \
   --exclude .venv --exclude .venv-site --exclude reports --exclude '__pycache__' --exclude .pytest_cache \
+  --exclude /private \
   ./ "$TARGET:$DIR/"
 
 ssh "$TARGET" DIR="$DIR" DOMAIN="$DOMAIN" bash -s <<'REMOTE'

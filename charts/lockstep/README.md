@@ -3,7 +3,7 @@
 Deploys [Lockstep](../../README.md): compare, inspect and sync KV secrets across HashiCorp Vault clusters.
 
 ```sh
-helm upgrade --install lockstep oci://ghcr.io/welshstew/charts/lockstep --version 0.10.1 \
+helm upgrade --install lockstep oci://ghcr.io/welshstew/charts/lockstep --version 0.11.0 \
   -n lockstep --create-namespace -f my-values.yaml
 helm test lockstep -n lockstep
 ```
@@ -44,17 +44,38 @@ vaults:
 | `session.cookieSecure` | `true` | Keep `true` behind TLS. `false` only for plain-HTTP testing (e.g. `kubectl port-forward`) |
 | `vaults` | `[]` | Vaults offered in the UI: `name`, `url` (how pods reach Vault), optional `browserUrl`, `namespace` |
 | `allowCustomConnections` | `false` | Let users type any Vault address (the pods will call it) |
-| `customUrlPatterns` | `[]` | Regexes a custom address must fully match |
+| `customUrlPatterns` | `[]` | Regexes a custom address's origin (`scheme://host[:port]`) must fully match |
+| `customAllowPrivate` | `false` | Let custom addresses resolve to private, loopback or link-local addresses (an internal Vault). Off, they must be public |
 | `maxTreeSecrets` | `5000` | Per side, most secrets listed in one comparison |
 | `policyPatterns` | `[]` | Shared suggestion patterns for **Build & suggest**: `name`, `layout` (`{app}/{env}/**`), `values`, `policies` (`name`, `rules` of `where`/`can`), `compare` |
 | `configProfiles` | `[]` | Shared configuration profiles for the Configuration tab: `name`, `mappings` (mount paths, `left`/`right` with `*`), `rewrites` (`find`/`replace` on the left side's values), `ignore` (paths) |
 | `policyProfiles` | `[]` | Shared policy profiles for comparing policies across Vaults: `name`, `mappings` (`left`/`right` with `*`), `rewrites` (`find`/`replace`), `ignore` |
 | `policyApply` | `on` | Write ACL policies and auth roles from the Policies tab; `off` where Terraform owns them |
+| `auditReveals` | `off` | Audit-log a `secret.reveal` event whenever a response carries secret values (who, where, key names; never values) |
+| `apiDocs` | `on` | The interactive API documentation (Swagger UI at `/api/docs`, and `/api/openapi.json`). `off` hides both |
 | `userWrite` | `off` | Create userpass users and reset their passwords from Policies › Roles (for development Vaults) |
 | `readOnly` | `false` | Look-only Lockstep: every write is hidden and refused |
 | `allowClipboard` | `true` | Offer **Copy** next to shown values in Browse |
+| `logging.level` | `info` | Server log level: `debug`, `info`, `warning`, `error`. `debug` adds every call to a Vault |
+| `logging.format` | `text` | `text` or `json` (one object per line, for log collectors) |
+| `metrics.enabled` | `false` | Prometheus metrics at `/metrics`: requests, Vault calls, sign-ins, 429s. No paths or users in labels |
+| `metrics.tokenSecret.name` / `.key` | `""` / `token` | A Secret with a bearer token Prometheus must send |
+| `metrics.serviceMonitor.enabled` / `.interval` / `.labels` | `false` / `30s` / `{}` | A ServiceMonitor for the Prometheus Operator (needs its CRDs) |
+| `driftCheck.enabled` | `false` | A CronJob that runs `lockstep compare` on a schedule and fails on drift. See [drift monitoring](../../docs/drift-monitoring.md) |
+| `driftCheck.schedule` / `.suspend` | `17 * * * *` / `false` | |
+| `driftCheck.left` / `.right` | | `addr`, `mount`, `prefix`, `namespace`, `name` (metrics label), and `role` + `authMount` (kubernetes auth as the job's service account) or `tokenSecret.name`/`.key` (a Secret with a Vault token) |
+| `driftCheck.profile` | `""` | A name from `profiles` |
+| `driftCheck.baseline` / `.baselineConfigMap.name` / `.key` | `""` | Accepted drift from `lockstep baseline update`: the JSON itself, or your ConfigMap (one or the other) |
+| `driftCheck.failOn` | `""` | `any`, `new` or `changed` (default: `new` with a baseline, `any` without) |
+| `driftCheck.waivers` | `[]` | `path`, `key`, `owner`, `reason`, `expires` (`YYYY-MM-DD`); an expired waiver fails the run |
+| `driftCheck.pushgateway.url` / `.job` | `""` / `lockstep` | Push the drift gauges to a Prometheus Pushgateway |
+| `driftCheck.extraArgs` | `[]` | More `lockstep compare` options |
+| `driftCheck.serviceAccount.create` / `.name` / `.annotations` | `true` / `<release>-drift-check` / `{}` | The job's own service account: bind your Vault role to it |
+| `driftCheck.egress` | `[]` | With `networkPolicy.enabled`: egress rules for the job beyond DNS and `vaultEgress`, e.g. to the Pushgateway |
+| `driftCheck.resources`, `.concurrencyPolicy`, `.activeDeadlineSeconds`, `.successfulJobsHistoryLimit`, `.failedJobsHistoryLimit` | see `values.yaml` | |
 | `allowDestroy` | `true` | Offer **Destroy** (every version and the metadata of a secret, can't be undone). Vault policies still decide who may |
-| `exportMode` | `any` | Secret-engine exports (they hold values): `any`, `encrypted` (only with a one-time key) or `off` |
+| `exportMode` | `encrypted` | Secret-engine exports (they hold values): `encrypted` (only with a one-time key), `any` (users choose encrypted or plain) or `off`. A Vault's own `exportMode` under `vaults` replaces it for that Vault |
+| `exportRecipients` | `[]` | Teams an export can be encrypted to: `name` and `recipients` (age public keys) |
 | `vaultTls.verify` | `true` | |
 | `vaultTls.caBundle.configMap` / `.secret` | `""` | A PEM CA bundle for private-CA Vaults (one or the other) |
 | `vaultTls.caBundle.key` | `ca.crt` | Key in that ConfigMap or Secret |

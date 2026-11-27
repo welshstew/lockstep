@@ -20,3 +20,12 @@ profiles:
       mappings: [{left: "services/*/prod/**", right: "services/*/staging/**"}]
       ignoreKeys: [{key: host, path: "services/**"}]
       ignorePaths: ["legacy/**", "retired/**"]
+metrics:
+  enabled: true
+driftCheck:                         # suspended: make helm-test starts one run by hand
+  enabled: true
+  suspend: true
+  left: {addr: "http://vault-a:8200", mount: app-config, prefix: services, name: vault-a, role: lockstep-helm-drift}
+  right: {addr: "http://vault-b:8200", mount: app-config, prefix: services, name: vault-b, role: lockstep-helm-drift}
+  waivers:
+    - {path: "nothing/*", owner: platform, reason: an unused waiver is named in the log, expires: "2099-01-01"}

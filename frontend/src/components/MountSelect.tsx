@@ -5,12 +5,15 @@ import type { MountsResponse } from "../types";
 interface Props {
   connId: string;
   mount: string | null;
-  onChange: (mount: string | null) => void;
+  /** The mount and its KV version ("1" or "2") */
+  onChange: (mount: string | null, version?: string) => void;
+  /** Offer KV v1 mounts too (read-only: for comparing) */
+  kv1?: boolean;
 }
 
 const MANUAL = "__manual__";
 
-export function MountSelect({ connId, mount, onChange }: Props) {
+export function MountSelect({ connId, mount, onChange, kv1 = false }: Props) {
   const [data, setData] = useState<MountsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [manual, setManual] = useState(false);
@@ -22,11 +25,11 @@ export function MountSelect({ connId, mount, onChange }: Props) {
     let live = true;
     setData(null);
     setError(null);
-    api.mounts(connId)
+    api.mounts(connId, kv1)
       .then((d) => { if (live) setData(d); })
       .catch((e) => { if (live) { setError(e.message); setManual(true); } });
     return () => { live = false; };
-  }, [connId]);
+  }, [connId, kv1]);
 
   const listed = data?.mounts.some((m) => m.path === mount) ?? false;
   const selectValue = manual || (mount && !listed) ? MANUAL : mount ?? "";
@@ -37,8 +40,8 @@ export function MountSelect({ connId, mount, onChange }: Props) {
     setChecking(true);
     setManualError(null);
     try {
-      const m = await api.describeMount(connId, path);
-      onChange(m.path);
+      const m = await api.describeMount(connId, path, kv1);
+      onChange(m.path, m.version);
     } catch (e) {
       setManualError((e as Error).message);
     } finally {
@@ -49,7 +52,7 @@ export function MountSelect({ connId, mount, onChange }: Props) {
   return (
     <>
       <label className="field">
-        <span>KV v2 secret engine</span>
+        <span>{kv1 ? "KV secret engine" : "KV v2 secret engine"}</span>
         <select
           value={selectValue}
           disabled={!data && !error}
@@ -59,13 +62,15 @@ export function MountSelect({ connId, mount, onChange }: Props) {
               setManualPath(mount ?? "");
             } else {
               setManual(false);
-              onChange(e.target.value || null);
+              onChange(e.target.value || null, data?.mounts.find((m) => m.path === e.target.value)?.version);
             }
           }}
         >
           <option value="">{data || error ? "Choose a mount…" : "Loading mounts…"}</option>
           {data?.mounts.map((m) => (
-            <option key={m.path} value={m.path}>{m.path}/{m.description ? ` · ${m.description}` : ""}</option>
+            <option key={m.path} value={m.path}>
+              {m.path}/{m.version === "1" ? " · KV v1, read-only" : ""}{m.description ? ` · ${m.description}` : ""}
+            </option>
           ))}
           <option value={MANUAL}>{mount && !listed && !manual ? `${mount}/ (entered manually)` : "Enter a path manually…"}</option>
         </select>

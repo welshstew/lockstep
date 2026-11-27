@@ -11,7 +11,7 @@ Lockstep is one stateless container, so any number of replicas can serve any req
 ## With Helm (recommended)
 
 ```sh
-helm upgrade --install lockstep oci://ghcr.io/welshstew/charts/lockstep --version 0.10.1 \
+helm upgrade --install lockstep oci://ghcr.io/welshstew/charts/lockstep --version 0.11.0 \
   -n lockstep --create-namespace -f my-values.yaml
 helm test lockstep -n lockstep
 ```
@@ -35,8 +35,8 @@ The [chart README](../charts/lockstep/README.md) has every value and more exampl
 
 1. **Image:** by default the chart runs the release image `ghcr.io/welshstew/lockstep:<appVersion>`. Pin `image.digest` for an immutable deployment, or set `image.repository` to a mirror or your own build. Verify a release image before you trust it:
    ```sh
-   cosign verify ghcr.io/welshstew/lockstep:0.10.1 \
-     --certificate-identity https://github.com/welshstew/lockstep/.github/workflows/release.yml@refs/tags/v0.10.1 \
+   cosign verify ghcr.io/welshstew/lockstep:0.11.0 \
+     --certificate-identity https://github.com/welshstew/lockstep/.github/workflows/release.yml@refs/tags/v0.11.0 \
      --certificate-oidc-issuer https://token.actions.githubusercontent.com
    ```
 2. **Vaults:** list them in `vaults`. `allowCustomConnections` is **off** in the chart, so the pods only call Vaults you list.
@@ -48,9 +48,15 @@ The [chart README](../charts/lockstep/README.md) has every value and more exampl
 8. **Restrict access** to the UI (ingress authentication, `networkPolicy`). That matters most with Kubernetes auth on, since reaching the UI is enough to use the service account.
 9. **Session key:** the chart generates one and keeps it across upgrades. To manage it yourself (e.g. from an external secret store), set `session.existingSecret`. Every replica must use the same key; changing it signs everyone out.
 
+## Drift checks and metrics
+
+`driftCheck.enabled` adds a CronJob that compares two locations on a schedule and fails on new drift, and `metrics.enabled` serves Prometheus metrics. See [drift monitoring](drift-monitoring.md).
+
 ## Audit log
 
 Copies are logged to **stdout** as one JSON object per line (`"event": "sync.apply"`): identities and their auth methods, Vault, mount, path, keys, versions, outcome. Values are never logged. Ship container logs to your log platform and filter on that event. See [usage](usage.md#audit-log) for the format.
+
+The server log (requests, sign-ins, Vault errors) goes to **stderr** with timestamps and request IDs. Set `logging.format: json` for a log collector, and `logging.level: debug` to see every call Lockstep makes to a Vault. See [configuration](configuration.md#logging).
 
 ## Without Helm
 

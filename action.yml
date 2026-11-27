@@ -1,0 +1,212 @@
+name: Lockstep drift check
+description: Compare secrets between two Vault or OpenBao locations, fail on new drift, and report it as SARIF and a PR comment. Never shows values.
+author: Lockstep
+branding:
+  icon: git-pull-request
+  color: blue
+
+inputs:
+  left-addr:
+    description: "The first Vault's address, e.g. https://vault.prod.example.com"
+    required: true
+  right-addr:
+    description: "The second Vault's address (default: the same Vault, to compare two mounts or prefixes)"
+    required: false
+  left-namespace:
+    description: "Namespace on the left Vault (Vault Enterprise, OpenBao)"
+    required: false
+  right-namespace:
+    description: "Namespace on the right Vault"
+    required: false
+  mount:
+    description: "KV v2 mount on both sides (or left-mount and right-mount)"
+    required: false
+  left-mount:
+    description: "KV v2 mount on the left"
+    required: false
+  right-mount:
+    description: "KV v2 mount on the right"
+    required: false
+  prefix:
+    description: "Only compare under this path on both sides (or left-prefix and right-prefix)"
+    required: false
+  left-prefix:
+    description: "Path prefix on the left"
+    required: false
+  right-prefix:
+    description: "Path prefix on the right"
+    required: false
+  left-name:
+    description: "Label for the left side in reports (default: its host)"
+    required: false
+  right-name:
+    description: "Label for the right side in reports"
+    required: false
+  profile:
+    description: "A comparison profile file (YAML or JSON, e.g. exported from the web UI), in the repository"
+    required: false
+  profile-name:
+    description: "Which profile, when the file holds several"
+    required: false
+  baseline:
+    description: "A baseline file from `lockstep baseline update` in the repository. With it, only new drift fails"
+    required: false
+  waivers:
+    description: "A waivers file (path, key, owner, reason, expires); an expired waiver fails the check"
+    required: false
+  fail-on:
+    description: "any, new or changed (default: new with a baseline, any without)"
+    required: false
+  auth:
+    description: "jwt: log in with this job's GitHub OIDC token (needs permissions: id-token: write). token: use left-token and right-token"
+    required: false
+    default: jwt
+  role:
+    description: "Vault JWT auth role on both sides (default: the mount's default_role)"
+    required: false
+  left-role:
+    description: "JWT role on the left, if it differs from role"
+    required: false
+  right-role:
+    description: "JWT role on the right, if it differs from role"
+    required: false
+  jwt-mount:
+    description: "Path of the JWT auth method"
+    required: false
+    default: jwt
+  right-jwt-mount:
+    description: "Path of the JWT auth method on the right, if it differs"
+    required: false
+  audience:
+    description: "Audience of the OIDC token; must be in the Vault role's bound_audiences"
+    required: false
+    default: vault
+  left-token:
+    description: "auth: token: a Vault token for the left side (pass a secret)"
+    required: false
+  right-token:
+    description: "auth: token: a Vault token for the right side (default: left-token for another Vault)"
+    required: false
+  ca-cert:
+    description: "A CA bundle file for Vaults with a private CA"
+    required: false
+  include-custom-metadata:
+    description: "Also compare each secret's custom metadata"
+    required: false
+    default: "false"
+  sarif:
+    description: "Upload the SARIF report to GitHub code scanning (needs permissions: security-events: write)"
+    required: false
+    default: "true"
+  comment:
+    description: "Comment the summary on the pull request, and update it on later runs (needs permissions: pull-requests: write)"
+    required: false
+    default: "true"
+  fail-on-drift:
+    description: "Fail the step when the check finds drift. \"false\" only reports it"
+    required: false
+    default: "true"
+  report-dir:
+    description: "Where the reports go (drift.yaml, drift.json, drift.sarif, drift.md)"
+    required: false
+    default: lockstep-report
+  python-version:
+    description: "Python to install Lockstep with (3.13 or newer)"
+    required: false
+    default: "3.13"
+  github-token:
+    description: "Token for the pull request comment"
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  exit-code:
+    description: "0: no drift that fails the check, 1: drift, 2: couldn't compare"
+    value: ${{ steps.compare.outputs.exit-code }}
+  new:
+    description: "How many differences fail the check (new, not waived)"
+    value: ${{ steps.compare.outputs.new }}
+  report-dir:
+    description: "The directory with the reports"
+    value: ${{ steps.compare.outputs.report-dir }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v6
+      with:
+        python-version: ${{ inputs.python-version }}
+        update-environment: false
+      id: python
+
+    - name: Install Lockstep
+      shell: bash
+      env:
+        PYTHON: ${{ steps.python.outputs.python-path }}
+      run: |
+        "$PYTHON" -m venv "$RUNNER_TEMP/lockstep"
+        "$RUNNER_TEMP/lockstep/bin/pip" install --quiet --disable-pip-version-check "$GITHUB_ACTION_PATH/backend"
+
+    - name: Compare
+      id: compare
+      shell: bash
+      env:
+        INPUT_LEFT_ADDR: ${{ inputs.left-addr }}
+        INPUT_RIGHT_ADDR: ${{ inputs.right-addr }}
+        INPUT_LEFT_NAMESPACE: ${{ inputs.left-namespace }}
+        INPUT_RIGHT_NAMESPACE: ${{ inputs.right-namespace }}
+        INPUT_MOUNT: ${{ inputs.mount }}
+        INPUT_LEFT_MOUNT: ${{ inputs.left-mount }}
+        INPUT_RIGHT_MOUNT: ${{ inputs.right-mount }}
+        INPUT_PREFIX: ${{ inputs.prefix }}
+        INPUT_LEFT_PREFIX: ${{ inputs.left-prefix }}
+        INPUT_RIGHT_PREFIX: ${{ inputs.right-prefix }}
+        INPUT_LEFT_NAME: ${{ inputs.left-name }}
+        INPUT_RIGHT_NAME: ${{ inputs.right-name }}
+        INPUT_PROFILE: ${{ inputs.profile }}
+        INPUT_PROFILE_NAME: ${{ inputs.profile-name }}
+        INPUT_BASELINE: ${{ inputs.baseline }}
+        INPUT_WAIVERS: ${{ inputs.waivers }}
+        INPUT_FAIL_ON: ${{ inputs.fail-on }}
+        INPUT_AUTH: ${{ inputs.auth }}
+        INPUT_ROLE: ${{ inputs.role }}
+        INPUT_LEFT_ROLE: ${{ inputs.left-role }}
+        INPUT_RIGHT_ROLE: ${{ inputs.right-role }}
+        INPUT_JWT_MOUNT: ${{ inputs.jwt-mount }}
+        INPUT_RIGHT_JWT_MOUNT: ${{ inputs.right-jwt-mount }}
+        INPUT_AUDIENCE: ${{ inputs.audience }}
+        INPUT_LEFT_TOKEN: ${{ inputs.left-token }}
+        INPUT_RIGHT_TOKEN: ${{ inputs.right-token }}
+        INPUT_CA_CERT: ${{ inputs.ca-cert }}
+        INPUT_INCLUDE_CUSTOM_METADATA: ${{ inputs.include-custom-metadata }}
+        INPUT_REPORT_DIR: ${{ inputs.report-dir }}
+      run: '"$RUNNER_TEMP/lockstep/bin/python" -m lockstep.cli.github_action run'
+
+    - name: Upload SARIF
+      if: always() && inputs.sarif == 'true' && (steps.compare.outputs.exit-code == '0' || steps.compare.outputs.exit-code == '1')
+      continue-on-error: true
+      uses: github/codeql-action/upload-sarif@v4
+      with:
+        sarif_file: ${{ inputs.report-dir }}/drift.sarif
+        category: lockstep-${{ steps.compare.outputs.comment-key }}
+
+    - name: Comment on the pull request
+      if: always() && inputs.comment == 'true' && github.event_name == 'pull_request' && (steps.compare.outputs.exit-code == '0' || steps.compare.outputs.exit-code == '1')
+      shell: bash
+      env:
+        INPUT_GITHUB_TOKEN: ${{ inputs.github-token }}
+        INPUT_REPORT_DIR: ${{ inputs.report-dir }}
+        INPUT_COMMENT_KEY: ${{ steps.compare.outputs.comment-key }}
+      run: '"$RUNNER_TEMP/lockstep/bin/python" -m lockstep.cli.github_action comment'
+
+    - name: Result
+      shell: bash
+      env:
+        CODE: ${{ steps.compare.outputs.exit-code }}
+        FAIL_ON_DRIFT: ${{ inputs.fail-on-drift }}
+      run: |
+        case "$CODE" in
+          0) echo "No drift that fails the check." ;;
+          1) if [ "$FAIL_ON_DRIFT" = "true" ]; then exit 1; fi; echo "Drift found (fail-on-drift is false)." ;;
+          *) echo "The comparison couldn't run (exit ${CODE:-?}); see the Compare step."; exit 2 ;;
+        esac

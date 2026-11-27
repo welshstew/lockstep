@@ -30,9 +30,11 @@ from pydantic import BaseModel, Field, model_validator
 
 from ..config import Settings, get_settings
 from ..session import Connection, SessionData, load_session
+from ..reveal import Shown, reveal
 from ..vault import VaultClient, VaultError
 from .connections import client_for, get_connection, vault_http_error
 from .guard import require_writable
+from .. import writepolicy
 from .sync import MAX_SET_BYTES, MAX_SET_KEYS
 from ..vault import _q
 
@@ -180,6 +182,7 @@ async def secret_values(session: Sess, settings: Conf, conn_id: str = Query(), m
             raise vault_http_error(e) from e
     if s.state != "present":
         raise HTTPException(404, detail={"message": "That version has no data (deleted, destroyed or missing)"})
+    reveal(settings, "browse.show", [Shown(conn, _clean(mount), _clean(path), list(s.data or {}), s.version)])
     return {"path": _clean(path), "version": s.version, "data": s.data}
 
 
@@ -233,6 +236,8 @@ async def diff_versions(body: DiffRequest, session: Sess, settings: Conf):
                   else "same" if _canon(da[k]) == _canon(db[k]) else "changed")
         keys.append({"key": k, "change": change,
                      **({"a": da.get(k), "b": db.get(k)} if body.reveal else {})})
+    if body.reveal:
+        reveal(settings, "browse.diff", [Shown(conn, mount, path, list(da), body.a), Shown(conn, mount, path, list(db), body.b)])
     return {"a": body.a, "b": body.b, "keys": keys}
 
 
@@ -406,6 +411,12 @@ async def _run(body: EditRequest, session: SessionData, settings: Settings, writ
     async with client_for(conn, settings) as v:
         for e in body.edits:  # one at a time: predictable order and audit trail
             res, data = await _plan(v, mount, e, body.reveal and not write, settings)
+            action = "destroy" if e.action == "destroy" else "write"
+            if res.status == "ready" and (why := writepolicy.refusal(settings, conn, f"{mount}/{e.path}", action)
+                                          or writepolicy.needs_plan(settings, conn)):
+                res.status, res.message = "invalid", why
+                if write:
+                    writepolicy.log_refusal(conn, f"{mount}/{e.path}", action, f"browse.{e.action}", why)
             if write and res.status == "ready":
                 try:
                     if res.action == "delete":
@@ -445,7 +456,7 @@ def _audit(conn: Connection, mount: str, res: EditResult) -> None:
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "event": f"browse.{res.action}",
         "outcome": res.status,
-        "actor": {"identity": conn.display_name, "auth": conn.auth_method},
+        "actor": {"identity": conn.display_name, "auth": conn.auth_method, "entity_id": conn.entity_id, "accessor": conn.accessor},
         "target": {"vault": conn.name, "url": conn.url, "mount": mount, "path": res.path,
                    "old_version": res.old_version, "new_version": res.new_version},
         "keys": [k.key for k in res.keys if k.action != "unchanged"],  # names only, never values
@@ -456,7 +467,12 @@ def _audit(conn: Connection, mount: str, res: EditResult) -> None:
 
 @router.post("/preview", response_model=list[EditResult])
 async def preview(body: EditRequest, session: Sess, settings: Conf):
-    return await _run(body, session, settings, write=False)
+    out = await _run(body, session, settings, write=False)
+    if body.reveal:  # the current values being replaced (new ones were typed by the user)
+        conn = get_connection(session, body.conn_id)
+        reveal(settings, "browse.preview", [Shown(conn, _clean(body.mount), r.path,
+                                                  [k.key for k in r.keys if k.old is not None], r.old_version) for r in out])
+    return out
 
 
 @router.post("/apply", response_model=list[EditResult])
@@ -506,6 +522,10 @@ async def write_metadata(body: MetadataRequest, session: Sess, settings: Conf):
     require_writable(settings)
     conn = get_connection(session, body.conn_id)
     mount, path = _clean(body.mount), _clean(body.path)
+    writepolicy.check(settings, conn, f"{mount}/{path}", event="browse.metadata")
+    if why := writepolicy.needs_plan(settings, conn):
+        writepolicy.log_refusal(conn, f"{mount}/{path}", "write", "browse.metadata", why)
+        raise HTTPException(403, detail={"message": why, "write_policy": True})
     fields = {k: getattr(body, k) for k in META_FIELDS if getattr(body, k) is not None}
     if not fields:
         raise HTTPException(400, detail={"message": "Nothing to change"})
@@ -516,7 +536,7 @@ async def write_metadata(body: MetadataRequest, session: Sess, settings: Conf):
             if body.expected_hash and _meta_hash(meta) != body.expected_hash:
                 res.status, res.message = "conflict", "The metadata changed since you loaded it. Reload it and try again."
             else:
-                await v.request("POST", f"{mount}/metadata/{_q(path)}", json=fields)
+                await v.kv_metadata_write(mount, path, fields)
                 res.status = "applied"
         except VaultError as e:
             res.status, res.message = ("denied" if e.denied else "error"), e.message
@@ -561,7 +581,7 @@ async def share(body: ShareRequest, session: Sess, settings: Conf):
             raise vault_http_error(e) from e
     audit.info(json.dumps({
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "event": "browse.share", "outcome": "applied",
-        "actor": {"identity": conn.display_name, "auth": conn.auth_method},
+        "actor": {"identity": conn.display_name, "auth": conn.auth_method, "entity_id": conn.entity_id, "accessor": conn.accessor},
         "target": {"vault": conn.name, "url": conn.url, "mount": mount, "path": path, "version": s.version},
         "keys": sorted(data), "ttl": body.ttl, "wrapping_accessor": wrapped.get("accessor"),
     }, sort_keys=True))
@@ -589,4 +609,6 @@ async def unwrap(body: UnwrapRequest, session: Sess, settings: Conf):
                 raise HTTPException(400, detail={"message": "That token isn't valid: it was used already, expired, "
                                                             "or belongs to another Vault."}) from e
             raise vault_http_error(e) from e
+    reveal(settings, "unwrap", [Shown(conn, "", f"(wrapped by {info.get('creation_path') or 'unknown'})",
+                                      list(data or {}) if isinstance(data, dict) else ["(response)"])])
     return {"info": info, "data": data}

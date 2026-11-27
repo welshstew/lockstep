@@ -80,7 +80,9 @@ class ExplainOut(BaseModel):
     mode: Literal["policies", "vault"]  # "vault": cells come from Vault itself (sys/capabilities-self)
     root: bool
     vault_version: str | None = None  # the Vault's version, which decides some matching details
+    product: str | None = None  # Vault, Vault Enterprise or OpenBao
     evaluation: str = ""  # which evaluation rules were used
+    evaluation_known: bool = True  # False: the server's rules couldn't be told; the Vault matrix is the check
     columns: list[dict]
     rules: list[dict]
     rows: list[dict]
@@ -179,8 +181,21 @@ async def _read_all(v: VaultClient, side: str, missing: list[str]) -> tuple[dict
 async def run_compare(lv: VaultClient, rv: VaultClient, profile: PolicyProfile | None) -> dict:
     """Read every policy on both sides, pair them and compare. Used by the API and the CLI."""
     missing: list[str] = []
-    (ltexts, lerr, lside), (rtexts, rerr, rside) = await asyncio.gather(
-        _read_all(lv, "left", missing), _read_all(rv, "right", missing))
+    left, right = await asyncio.gather(_read_all(lv, "left", missing), _read_all(rv, "right", missing))
+    return compare_sets(left, right, profile, missing)
+
+
+async def read_all(v: VaultClient, side: str, missing: list[str]):
+    """Every policy's text on one Vault: (texts, errors, side summary)."""
+    return await _read_all(v, side, missing)
+
+
+def compare_sets(left: tuple[dict[str, str | None], dict[str, str], SidePolicies],
+                 right: tuple[dict[str, str | None], dict[str, str], SidePolicies],
+                 profile: PolicyProfile | None, missing: list[str] | None = None) -> dict:
+    """Pair and compare two sets of policy texts, from Vaults or from files."""
+    (ltexts, lerr, lside), (rtexts, rerr, rside) = left, right
+    missing = missing if missing is not None else []
     pairs = []
     for ln, rn, mapped, note in pair_names(list(ltexts), list(rtexts), profile):
         if (ln and ln in lerr) or (rn and rn in rerr):
@@ -400,7 +415,7 @@ async def run_explain(v: VaultClient, mount: str, prefix: str, *, names: list[st
     m = await v.describe_mount(mount)
     if m is None:
         raise ExplainError(400, f"'{mount}' is not a KV v2 mount")
-    vault_version = await v.server_version()
+    product, vault_version = await v.server_info()
 
     wanted: list[tuple[str, str]] = [(n, "vault") for n in dict.fromkeys(names)]
     who = None
@@ -447,13 +462,13 @@ async def run_explain(v: VaultClient, mount: str, prefix: str, *, names: list[st
         missing.append(f"list on {mount}/metadata/ for {len(tree.denied)} folder(s): their secrets aren't shown")
 
     result = explain(parsed if not root else [*parsed, Policy("root", [])], mount, tree.secrets,
-                     behaviour_for(vault_version))
+                     behaviour_for(vault_version, product))
     mode = "policies"
     if token and any(s.origin == "token" and s.error for s in sources) and not names and not pasted:
         # Can't see all of the token's policies: ask Vault for the answer instead
         await _from_vault(v, mount, result)
         mode = "vault"
-    return dict(mount=mount, prefix=prefix, policies=sources, missing=missing, vault_version=vault_version,
+    return dict(mount=mount, prefix=prefix, policies=sources, missing=missing, vault_version=vault_version, product=product,
                 complete=not any(s.error for s in sources) or mode == "vault", mode=mode,
                 denied=tree.denied, truncated=tree.truncated,
                 identity={"label": who["label"], "sources": who["sources"]} if who else None, **result)

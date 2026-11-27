@@ -7,13 +7,18 @@ An export is a JSON document (`lockstep.secret-export`, version 1): where it cam
 rules it was made with, and every secret's data with its version. It holds secret values, so
 it is normally encrypted:
 
-    lockstep.secret-export.encrypted   AES-256-GCM with a random 256-bit one-time key,
-                                       zlib-compressed. The key is shown to the user once
-                                       ("lsk1." + base64url) and never stored.
+    lockstep.secret-export.encrypted   one of three schemes:
+      key         (version 1) AES-256-GCM with a random 256-bit one-time key, zlib-compressed.
+                  The key is shown to the user once ("lsk1." + base64url) and never stored.
+      passphrase  (version 2) the same, with the key derived from a passphrase by Argon2id;
+                  the salt and cost are in the header.
+      age         (version 2) an armored age file (age-encryption.org) of the plain export,
+                  for the age public keys in `recipients`: `age -d` opens it without Lockstep.
 
 The envelope's small header (vault name, mount, prefix, secret count, time) is readable,
-so people can tell files apart, and is bound to the ciphertext as associated data, so it
-can't be altered without the key noticing. Everything else is inside the ciphertext.
+so people can tell files apart. With a key or a passphrase it is bound to the ciphertext as
+associated data, so it can't be altered without the key noticing. age has no associated
+data, so the decrypted export must match the header instead.
 
 Import rules are applied to an export before it's compared or written: ignore paths and
 keys first (globs over the exported paths), then transforms in order.
@@ -25,16 +30,21 @@ import asyncio
 import base64
 import binascii
 import fnmatch
+import io
 import json
 import os
 import re
 import time
 import zlib
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+import pyrage
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.argon2 import Argon2id
+from pyrage import x25519
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from .rules import IgnoreKey, compile_glob
@@ -46,6 +56,12 @@ SCHEMA_URL = "https://getlockstep.cloud/schemas/lockstep-export-v1.json"
 RULES_SCHEMA_URL = "https://getlockstep.cloud/schemas/lockstep-import-rules-v1.json"
 KEY_PREFIX = "lsk1."
 MAX_TRANSFORMS = 50
+# Argon2id for passphrases: RFC 9106's second recommendation (64 MiB, 3 passes, 4 lanes). A file
+# may ask for more, up to these limits, so a crafted file can't make the server use a lot of memory.
+KDF_MEMORY_KIB, KDF_ITERATIONS, KDF_LANES = 64 * 1024, 3, 4
+MAX_KDF_MEMORY_KIB = 256 * 1024
+MIN_PASSPHRASE = 12
+MAX_RECIPIENTS = 50
 
 
 class ExportError(ValueError):
@@ -146,28 +162,59 @@ class EncryptedSource(BaseModel):
     secrets: int
 
 
+class Kdf(BaseModel):
+    """How a passphrase becomes the key (RFC 9106 Argon2id)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: Literal["argon2id"] = "argon2id"
+    salt: str = Field(description="base64, 16 bytes")
+    memory_kib: int = Field(ge=8 * 1024, le=MAX_KDF_MEMORY_KIB)
+    iterations: int = Field(ge=1, le=10)
+    lanes: int = Field(ge=1, le=16)
+
+
 class EncryptedExport(BaseModel):
-    """An encrypted export: open it with the one-time key shown when it was made."""
+    """An encrypted export: open it with the one-time key shown when it was made, the
+    passphrase it was made with, or an age identity for one of its recipients."""
 
     model_config = ConfigDict(title="Lockstep secret-engine export (encrypted)", extra="forbid")
 
     schema_: str | None = Field(default=SCHEMA_URL, alias="$schema")
     format: Literal["lockstep.secret-export.encrypted"] = ENCRYPTED_FORMAT
-    version: Literal[1] = 1
+    version: Literal[1, 2] = 1  # 1: a one-time key; 2: a passphrase or age
     created_at: str
-    cipher: Literal["AES-256-GCM"] = "AES-256-GCM"
-    compression: Literal["zlib"] = "zlib"
+    scheme: Literal["key", "passphrase", "age"] = "key"
+    cipher: Literal["AES-256-GCM", "age"] = "AES-256-GCM"
+    compression: Literal["zlib", "none"] = "zlib"
+    kdf: Kdf | None = Field(default=None, description="scheme passphrase: how the key is derived")
+    recipients: list[str] = Field(default_factory=list, description="scheme age: the age public keys it's for")
     source: EncryptedSource
-    nonce: str = Field(description="base64, 12 bytes")
-    ciphertext: str = Field(description="base64: the zlib-compressed export document, encrypted")
+    nonce: str = Field(default="", description="base64, 12 bytes (not used by age)")
+    ciphertext: str = Field(description="base64: the zlib-compressed export, encrypted; for age, an armored age file "
+                                         "of the plain export")
+
+    @model_validator(mode="after")
+    def _consistent(self):
+        ok = {"key": (1, "AES-256-GCM", "zlib"), "passphrase": (2, "AES-256-GCM", "zlib"), "age": (2, "age", "none")}
+        if (self.version, self.cipher, self.compression) != ok[self.scheme]:
+            raise ValueError(f"version, cipher and compression don't fit the {self.scheme} scheme")
+        if (self.kdf is not None) != (self.scheme == "passphrase") or bool(self.recipients) != (self.scheme == "age"):
+            raise ValueError(f"kdf and recipients don't fit the {self.scheme} scheme")
+        return self
 
     def header(self) -> bytes:
-        """The associated data: everything except the nonce and ciphertext (and $schema)."""
-        h = self.model_dump(mode="json", exclude={"nonce", "ciphertext", "schema_"})
+        """The associated data: everything except the nonce and ciphertext (and $schema). The
+        version 1 header is exactly what it always was, so old files still open."""
+        exclude = {"nonce", "ciphertext", "schema_"}
+        if self.scheme == "key":
+            exclude |= {"scheme", "kdf", "recipients"}
+        h = self.model_dump(mode="json", exclude=exclude)
         return json.dumps(h, sort_keys=True, separators=(",", ":")).encode()
 
     def dump(self) -> dict:
-        return self.model_dump(mode="json", by_alias=True)
+        exclude = {"key": {"scheme", "kdf", "recipients"}, "passphrase": {"recipients"}, "age": {"nonce", "kdf"}}
+        return self.model_dump(mode="json", by_alias=True, exclude=exclude[self.scheme])
 
 
 def schema() -> dict:
@@ -180,7 +227,7 @@ def schema() -> dict:
         "$id": SCHEMA_URL,
         "title": "Lockstep secret-engine export",
         "description": "A KV v2 secret engine exported by Lockstep, either as plain JSON with values or "
-                       "encrypted with a one-time key. Plain exports hold secret values.",
+                       "encrypted with a one-time key, a passphrase or age public keys. Plain exports hold secret values.",
         "oneOf": [{"$ref": "#/$defs/ExportDoc"}, {"$ref": "#/$defs/EncryptedExport"}],
         "$defs": {**defs, "ExportDoc": plain, "EncryptedExport": enc},
     }
@@ -208,23 +255,202 @@ def parse_key(text: str) -> bytes:
     return raw
 
 
+def _source(doc: ExportDoc) -> EncryptedSource:
+    return EncryptedSource(vault=doc.source.vault, mount=doc.source.mount, prefix=doc.source.prefix,
+                           secrets=len(doc.secrets))
+
+
+def _plain(doc: ExportDoc) -> bytes:
+    return json.dumps(doc.dump(), separators=(",", ":"), ensure_ascii=False).encode()
+
+
+@dataclass
+class Packed:
+    """A plain export document, zlib-compressed, with what the readable header needs. Encrypting
+    starts from this, so a streamed export only ever holds the compressed bytes."""
+    data: bytes
+    created_at: str
+    source: EncryptedSource
+
+
+def pack(doc: ExportDoc) -> Packed:
+    return Packed(zlib.compress(_plain(doc), 9), doc.created_at, _source(doc))
+
+
+class Packer:
+    """Compresses an export as `stream` writes it."""
+
+    def __init__(self) -> None:
+        self._z = zlib.compressobj(9)
+        self._out = bytearray()
+
+    async def write(self, b: bytes) -> None:
+        self._out += self._z.compress(b)
+
+    def done(self, built: Built) -> Packed:
+        self._out += self._z.flush()
+        src = EncryptedSource(vault=built.source.vault, mount=built.source.mount, prefix=built.source.prefix,
+                              secrets=built.secrets)
+        return Packed(bytes(self._out), built.created_at, src)
+
+
+def _seal(env: EncryptedExport, raw: bytes, packed: Packed) -> EncryptedExport:
+    nonce = os.urandom(12)
+    env.nonce = base64.b64encode(nonce).decode()
+    env.ciphertext = base64.b64encode(AESGCM(raw).encrypt(nonce, packed.data, env.header())).decode()
+    return env
+
+
+def seal_key(packed: Packed) -> tuple[EncryptedExport, str]:
+    """Encrypt with a fresh one-time key. Returns the envelope and the key text."""
+    raw, text = new_key()
+    env = EncryptedExport(created_at=packed.created_at, ciphertext="", source=packed.source)
+    return _seal(env, raw, packed), text
+
+
 def encrypt(doc: ExportDoc) -> tuple[EncryptedExport, str]:
     """Encrypt an export with a fresh one-time key. Returns the envelope and the key text."""
-    raw, text = new_key()
-    nonce = os.urandom(12)
-    env = EncryptedExport(created_at=doc.created_at, nonce=base64.b64encode(nonce).decode(), ciphertext="",
-                          source=EncryptedSource(vault=doc.source.vault, mount=doc.source.mount,
-                                                 prefix=doc.source.prefix, secrets=len(doc.secrets)))
-    plain = zlib.compress(json.dumps(doc.dump(), separators=(",", ":"), ensure_ascii=False).encode(), 9)
-    env.ciphertext = base64.b64encode(AESGCM(raw).encrypt(nonce, plain, env.header())).decode()
-    return env, text
+    return seal_key(pack(doc))
+
+
+def check_passphrase(passphrase: str) -> None:
+    if len(passphrase) < MIN_PASSPHRASE:
+        raise ExportError(f"Use a passphrase of at least {MIN_PASSPHRASE} characters.")
+    if len(passphrase) > 1024:
+        raise ExportError("That passphrase is too long (1024 characters at most).")
+
+
+def _derive(passphrase: str, kdf: Kdf) -> bytes:
+    try:
+        salt = base64.b64decode(kdf.salt, validate=True)
+    except (binascii.Error, ValueError) as e:
+        raise ExportError("The file is damaged (invalid salt).") from e
+    if len(salt) < 16:
+        raise ExportError("The file is damaged (salt too short).")
+    return Argon2id(salt=salt, length=32, iterations=kdf.iterations, lanes=kdf.lanes,
+                    memory_cost=kdf.memory_kib).derive(passphrase.encode())
+
+
+def seal_passphrase(packed: Packed, passphrase: str) -> EncryptedExport:
+    """Encrypt with a key derived from a passphrase (Argon2id, then AES-256-GCM)."""
+    check_passphrase(passphrase)
+    kdf = Kdf(salt=base64.b64encode(os.urandom(16)).decode(), memory_kib=KDF_MEMORY_KIB,
+              iterations=KDF_ITERATIONS, lanes=KDF_LANES)
+    env = EncryptedExport(version=2, scheme="passphrase", kdf=kdf, created_at=packed.created_at, ciphertext="",
+                          source=packed.source)
+    return _seal(env, _derive(passphrase, kdf), packed)
+
+
+def encrypt_passphrase(doc: ExportDoc, passphrase: str) -> EncryptedExport:
+    return seal_passphrase(pack(doc), passphrase)
+
+
+def parse_recipients(items: list[str]) -> list[str]:
+    """age public keys (age1…), one per item or per line; `#` comments and blank lines are
+    skipped, as in an age recipients file. Returns them normalised and without duplicates."""
+    out: list[str] = []
+    for item in items:
+        for line in item.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            try:
+                key = str(x25519.Recipient.from_str(line))
+            except pyrage.RecipientError as e:
+                shown = line if len(line) <= 70 else line[:67] + "…"
+                raise ExportError(f"{shown} isn't an age public key (they start with age1): {e}.") from e
+            if key not in out:
+                out.append(key)
+    if not out:
+        raise ExportError("Give at least one age public key.")
+    if len(out) > MAX_RECIPIENTS:
+        raise ExportError(f"At most {MAX_RECIPIENTS} age public keys.")
+    return out
+
+
+class _Inflate(io.RawIOBase):
+    """Reads a Packed export's plain bytes, decompressing as it goes."""
+
+    def __init__(self, data: bytes) -> None:
+        self._z = zlib.decompressobj()
+        self._src = memoryview(data)
+        self._pos = 0
+        self._pending = b""
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, b) -> int:
+        while not self._pending:
+            if self._z.unconsumed_tail:
+                self._pending = self._z.decompress(self._z.unconsumed_tail, 1 << 16)
+            elif self._pos < len(self._src):
+                chunk = self._src[self._pos:self._pos + (1 << 16)]
+                self._pos += len(chunk)
+                self._pending = self._z.decompress(chunk, 1 << 16)
+            else:
+                self._pending = self._z.flush()
+                if not self._pending:
+                    return 0
+        n = min(len(b), len(self._pending))
+        b[:n] = self._pending[:n]
+        self._pending = self._pending[n:]
+        return n
+
+
+def seal_age(packed: Packed, recipients: list[str]) -> EncryptedExport:
+    """Encrypt to age public keys: the ciphertext is an armored age file of the plain export, so
+    `age -d -i key.txt` opens it too. The plain bytes are decompressed as age reads them."""
+    keys = parse_recipients(recipients)
+    out = io.BytesIO()
+    try:
+        pyrage.encrypt_io(io.BufferedReader(_Inflate(packed.data)), out,
+                          [x25519.Recipient.from_str(k) for k in keys], armored=True)
+    except pyrage.EncryptError as e:
+        raise ExportError(f"Couldn't encrypt to those keys: {e}") from e
+    return EncryptedExport(version=2, scheme="age", cipher="age", compression="none", recipients=keys,
+                           created_at=packed.created_at, ciphertext=out.getvalue().decode(), source=packed.source)
+
+
+def encrypt_age(doc: ExportDoc, recipients: list[str]) -> EncryptedExport:
+    return seal_age(pack(doc), recipients)
 
 
 MAX_PLAINTEXT = 256 * 1024 * 1024  # decompression limit (a zip bomb guard)
 
 
+def _identities(text: str) -> list:
+    """age identities from pasted text or an identity file (AGE-SECRET-KEY-1… lines)."""
+    found = [line.strip() for line in text.splitlines() if line.strip().upper().startswith("AGE-SECRET-KEY-1")]
+    if not found:
+        raise ExportError("That isn't an age identity: paste the AGE-SECRET-KEY-1… line from your key file.")
+    try:
+        return [x25519.Identity.from_str(line) for line in found]
+    except pyrage.IdentityError as e:
+        raise ExportError(f"That age identity is damaged: {e}.") from e
+
+
+def _decrypt_age(env: EncryptedExport, identity_text: str) -> ExportDoc:
+    try:
+        plain = pyrage.decrypt(env.ciphertext.encode(), _identities(identity_text))
+    except pyrage.DecryptError as e:
+        raise ExportError("This file isn't encrypted to that age key, or it was changed or damaged.") from e
+    if len(plain) > MAX_PLAINTEXT:
+        raise ExportError("The export is too large to open.")
+    try:
+        doc = ExportDoc.model_validate_json(plain)
+    except ValidationError as e:
+        raise ExportError(f"The decrypted export isn't valid: {e.errors()[0]['msg']}") from e
+    # age can't authenticate the readable header, so it has to agree with what's inside
+    if _source(doc) != env.source or doc.created_at != env.created_at:
+        raise ExportError("The file's readable header doesn't match its contents: it was changed. Don't trust it.")
+    return doc
+
+
 def decrypt(env: EncryptedExport, key_text: str) -> ExportDoc:
-    raw = parse_key(key_text)
+    if env.scheme == "age":
+        return _decrypt_age(env, key_text)
+    raw = _derive(key_text, env.kdf) if env.scheme == "passphrase" else parse_key(key_text)
     try:
         nonce, ct = base64.b64decode(env.nonce, validate=True), base64.b64decode(env.ciphertext, validate=True)
     except (binascii.Error, ValueError) as e:
@@ -232,7 +458,8 @@ def decrypt(env: EncryptedExport, key_text: str) -> ExportDoc:
     try:
         packed = AESGCM(raw).decrypt(nonce, ct, env.header())
     except (InvalidTag, ValueError) as e:
-        raise ExportError("Wrong key, or the file was changed or damaged.") from e
+        what = "passphrase" if env.scheme == "passphrase" else "key"
+        raise ExportError(f"Wrong {what}, or the file was changed or damaged.") from e
     d = zlib.decompressobj()
     plain = d.decompress(packed, MAX_PLAINTEXT)
     if d.unconsumed_tail:
@@ -247,7 +474,7 @@ def load(obj: Any, key: str | None = None) -> ExportDoc:
     """An export document from a parsed file: plain, or encrypted (needs `key`)."""
     if not isinstance(obj, dict) or obj.get("format") not in (FORMAT, ENCRYPTED_FORMAT):
         raise ExportError("That isn't a Lockstep export file.")
-    if obj.get("version") != 1:
+    if obj.get("version") not in ((1,) if obj["format"] == FORMAT else (1, 2)):
         raise ExportError(f"Unsupported export version {obj.get('version')!r}: update Lockstep.")
     try:
         if obj["format"] == FORMAT:
@@ -257,26 +484,53 @@ def load(obj: Any, key: str | None = None) -> ExportDoc:
         err = e.errors()[0]
         raise ExportError(f"The export file isn't valid ({'.'.join(map(str, err['loc']))}: {err['msg']}).") from e
     if not key:
-        raise ExportError("This export is encrypted: enter its key.")
+        raise ExportError({"key": "This export is encrypted: enter its key.",
+                           "passphrase": "This export is encrypted with a passphrase: enter it.",
+                           "age": "This export is encrypted to age keys: paste your age identity."}[env.scheme])
     return decrypt(env, key)
 
 
 # --------------------------------------------------------------------------- building an export
 
 
-async def build(v, *, mount: str, prefix: str, rules: ExportRules | None, source: ExportSource,
-                max_secrets: int = 5000, tool: str = "", concurrency: int = 16) -> ExportDoc:
-    """Read every secret under mount/prefix (current versions) into an export, leaving out
-    what `rules` ignores. `v` is a VaultClient. Listing errors other than "permission denied"
-    raise VaultError; unreadable secrets and folders are recorded in `skipped`."""
+@dataclass
+class Built:
+    """What an export holds, known once `stream` has written it."""
+    created_at: str
+    source: ExportSource
+    secrets: int
+    keys: int
+    skipped: ExportSkipped
+
+
+Write = Callable[[bytes], Awaitable[None]]
+Progress = Callable[[int, int], Awaitable[None]]
+
+
+async def stream(v, *, mount: str, prefix: str, rules: ExportRules | None, source: ExportSource, write: Write,
+                 max_secrets: int = 5000, tool: str = "", tree: TreeResult | None = None,
+                 progress: Progress | None = None, window: int = 64, concurrency: int = 16) -> Built:
+    """Read every secret under mount/prefix (current versions) and write the export document's
+    JSON as it goes, in path order, holding at most `window` secrets at a time. `v` is a
+    VaultClient; `tree`, if given, is its listing (so listing errors can be reported first).
+    Leaves out what `rules` ignores. Listing errors other than "permission denied" raise
+    VaultError; unreadable secrets and folders are recorded in `skipped`."""
     rules = rules or ExportRules()
     base = _norm(prefix)
     full = f"{base}/" if base else ""
-    tree = await v.kv_tree(mount, full, max_secrets=max_secrets)
+    if tree is None:
+        tree = await v.kv_tree(mount, full, max_secrets=max_secrets)
     ign_paths = [compile_glob(_norm(p)) for p in rules.ignore_paths if p.strip()]
     ign_keys = [(compile_glob(_norm(k.path) or "**"), k.key) for k in rules.ignore_keys]
-    sem = asyncio.Semaphore(concurrency)
     skipped = ExportSkipped(denied_folders=[d[len(full):] for d in tree.denied], truncated=tree.truncated)
+    created = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    source = source.model_copy(update={"mount": mount, "prefix": base})
+
+    head = ExportDoc(created_at=created, tool=tool, source=source, rules=rules, secrets=[]).dump()
+    del head["secrets"], head["skipped"]
+    await write(_compact(head)[:-1] + b',"secrets":[')
+
+    sem = asyncio.Semaphore(concurrency)
 
     async def one(path: str):
         rel = path[len(full):]
@@ -297,24 +551,44 @@ async def build(v, *, mount: str, prefix: str, rules: ExportRules | None, source
                 data[k] = val
         return rel, "ok", ExportSecret(path=rel, version=s.version, updated=s.updated, data=data)
 
-    secrets = []
-    for rel, state, secret in await asyncio.gather(*(one(p) for p in tree.secrets)):
-        if state == "ok" and secret.data:
-            secrets.append(secret)
-        elif state in ("ok", "ignored"):
-            skipped.ignored_paths += 1  # an ignored path, or every key ignored
-        elif state == "deleted":
-            skipped.deleted.append(rel)
-        elif state == "unreadable":
-            skipped.unreadable.append(rel)
-    source = source.model_copy(update={"mount": mount, "prefix": base})
-    return ExportDoc(created_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), tool=tool, source=source,
-                     rules=rules, secrets=sorted(secrets, key=lambda x: x.path),
-                     skipped=skipped.model_copy(update={"unreadable": sorted(skipped.unreadable),
-                                                        "deleted": sorted(skipped.deleted)}))
+    paths = sorted(tree.secrets)
+    written = n_keys = 0
+    for i in range(0, len(paths), window):
+        for rel, state, secret in await asyncio.gather(*(one(p) for p in paths[i:i + window])):
+            if state == "ok" and secret.data:
+                await write((b"," if written else b"") + _compact(secret.model_dump(mode="json")))
+                written += 1
+                n_keys += len(secret.data)
+            elif state in ("ok", "ignored"):
+                skipped.ignored_paths += 1  # an ignored path, or every key ignored
+            elif state == "deleted":
+                skipped.deleted.append(rel)
+            elif state == "unreadable":
+                skipped.unreadable.append(rel)
+        if progress:
+            await progress(min(i + window, len(paths)), len(paths))
+    await write(b'],"skipped":' + _compact(skipped.model_dump(mode="json")) + b"}")
+    return Built(created_at=created, source=source, secrets=written, keys=n_keys, skipped=skipped)
 
 
-def file_name(doc: ExportDoc, encrypted: bool) -> str:
+def _compact(obj: Any) -> bytes:
+    return json.dumps(obj, separators=(",", ":"), ensure_ascii=False).encode()
+
+
+async def build(v, *, mount: str, prefix: str, rules: ExportRules | None, source: ExportSource,
+                max_secrets: int = 5000, tool: str = "") -> ExportDoc:
+    """The whole export as a document in memory (`stream` writes it without holding it)."""
+    buf = bytearray()
+
+    async def write(b: bytes) -> None:
+        buf.extend(b)
+
+    await stream(v, mount=mount, prefix=prefix, rules=rules, source=source, write=write,
+                 max_secrets=max_secrets, tool=tool)
+    return ExportDoc.model_validate_json(bytes(buf))
+
+
+def file_name(doc: ExportDoc | Built, encrypted: bool) -> str:
     """A descriptive file name: lockstep-export-<vault>-<mount>[-<prefix>]-<time>[.encrypted].json"""
     parts = [doc.source.vault, doc.source.mount, doc.source.prefix]
     slug = "-".join(re.sub(r"[^A-Za-z0-9._-]+", "_", p).strip("._-") for p in parts if p)

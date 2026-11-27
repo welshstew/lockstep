@@ -18,6 +18,7 @@ from ..analyze import certs, passwords
 from ..analyze.detect import Analysis, Node, analyze
 from ..config import Settings, get_settings
 from ..session import SessionData, load_session
+from ..reveal import Shown, reveal
 from ..vault import VaultError
 from .connections import client_for, get_connection, vault_http_error
 
@@ -170,7 +171,14 @@ async def run(req: AnalyzeRequest, session: SessionData, settings: Settings) -> 
 
 @router.post("", response_model=AnalyzeOut)
 async def analyze_value(body: AnalyzeRequest, session: Sess, settings: Conf):
-    return (await run(body, session, settings))[2]
+    out = (await run(body, session, settings))[2]
+    _revealed(body, session, settings, "inspect")
+    return out
+
+
+def _revealed(body: Locator, session: SessionData, settings: Settings, how: str) -> None:
+    """Inspect shows what's inside a value (decoded text, certificate and key details)."""
+    reveal(settings, how, [Shown(get_connection(session, body.conn_id), body.mount.strip("/"), body.path.strip("/"), [body.key])])
 
 
 @router.post("/content")
@@ -184,6 +192,7 @@ async def content(body: ContentRequest, session: Sess, settings: Conf):
         raise HTTPException(404, detail={"message": "Nothing to download for that part of the value"})
     base = re.sub(r"[^A-Za-z0-9._-]+", "_", body.key).strip("._") or "value"
     name = base if base.lower().endswith("." + node.ext) else f"{base}.{node.ext}"
+    _revealed(body, session, settings, "inspect.download")
     return Response(blob, media_type="application/octet-stream", headers={
         "Content-Disposition": f'attachment; filename="{name}"',
         "X-Filename": name,

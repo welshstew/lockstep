@@ -4,6 +4,7 @@ import type { AppConfig, Connection, LoadedFile, SideSelection } from "../types"
 import { ConnectForm } from "./ConnectForm";
 import { FileLoader, FileSummary } from "./FileLoader";
 import { MountSelect } from "./MountSelect";
+import { NamespacePicker } from "./NamespacePicker";
 
 interface Props {
   side: "left" | "right";
@@ -19,6 +20,7 @@ interface Props {
 }
 
 const NEW = "__new__";
+const PRESET = "preset:"; // "preset:<id>": sign in to that preset connection
 
 function expiry(c: Connection): string {
   if (!c.expires_at) return "no expiry";
@@ -153,6 +155,8 @@ export function SideCard(props: Props) {
 function VaultSide({ side, config, connections, selection, onChange, onConnected, onDisconnect }: Props) {
   const conn = connections.find((c) => c.id === selection.connId) ?? null;
   const [adding, setAdding] = useState(false);
+  // Which preset the sign-in form starts on, when chosen from the Connection list
+  const [formPreset, setFormPreset] = useState<number | null>(null);
   const [renewing, setRenewing] = useState(false);
   const [renewNote, setRenewNote] = useState<{ id: string; text: string; error?: boolean } | null>(null);
   const renew = async (c: Connection) => {
@@ -178,18 +182,30 @@ function VaultSide({ side, config, connections, selection, onChange, onConnected
         <label className="field">
           <span>Connection</span>
           <select
-            value={showForm ? NEW : conn!.id}
+            value={showForm ? (formPreset != null ? `${PRESET}${formPreset}` : NEW) : conn!.id}
             onChange={(e) => {
-              if (e.target.value === NEW) { setAdding(true); return; }
+              const v = e.target.value;
+              if (v === NEW) { setFormPreset(null); setAdding(true); return; }
+              if (v.startsWith(PRESET)) { setFormPreset(Number(v.slice(PRESET.length))); setAdding(true); return; }
               setAdding(false);
-              onChange({ connId: e.target.value || null, mount: null, prefix: "" });
+              setFormPreset(null);
+              onChange({ connId: v || null, mount: null, prefix: "" });
             }}
           >
-            {connections.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name} · {c.display_name || c.auth_method}{c.status !== "ok" ? ` (${c.status})` : ""}
-              </option>
-            ))}
+            <optgroup label="Signed in">
+              {connections.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name} · {c.display_name || c.auth_method}{c.status !== "ok" ? ` (${c.status})` : ""}
+                </option>
+              ))}
+            </optgroup>
+            {config.presets.length > 0 && (
+              <optgroup label="Sign in to">
+                {config.presets.map((p) => (
+                  <option key={p.id} value={`${PRESET}${p.id}`}>{p.name}…</option>
+                ))}
+              </optgroup>
+            )}
             <option value={NEW}>＋ New connection…</option>
           </select>
         </label>
@@ -197,12 +213,14 @@ function VaultSide({ side, config, connections, selection, onChange, onConnected
 
       {showForm ? (
         <ConnectForm
+          key={formPreset ?? "default"}  // a new choice in the list starts the form on that Vault
           config={config}
           side={side}
-          initialPresetId={conn?.preset_id ?? (side === "right" ? config.presets[1]?.id : config.presets[0]?.id)}
-          onCancel={adding && conn ? () => setAdding(false) : undefined}
+          initialPresetId={formPreset ?? conn?.preset_id ?? (side === "right" ? config.presets[1]?.id : config.presets[0]?.id)}
+          onCancel={adding && conn ? () => { setAdding(false); setFormPreset(null); } : undefined}
           onConnected={(c) => {
             setAdding(false);
+            setFormPreset(null);
             onConnected(c);
             onChange({ connId: c.id, mount: null, prefix: "" });
           }}
@@ -224,8 +242,9 @@ function VaultSide({ side, config, connections, selection, onChange, onConnected
               </button>
             )}
             <button type="button" className="btn ghost small" onClick={() => onDisconnect(conn.id)}
-                    title={conn.auth_method === "token" ? "Forget this connection" : "Sign out and revoke the token"}>
-              Sign out
+                    title={conn.parent ? "Close this namespace (the sign-in it came from stays)"
+                      : conn.auth_method === "token" ? "Forget this connection" : "Sign out and revoke the token"}>
+              {conn.parent ? "Close" : "Sign out"}
             </button>
           </div>
 
@@ -240,8 +259,15 @@ function VaultSide({ side, config, connections, selection, onChange, onConnected
             </div>
           ) : (
             <>
-              <MountSelect connId={conn.id} mount={selection.mount}
-                           onChange={(mount) => onChange({ ...selection, mount, prefix: "" })} />
+              <NamespacePicker conn={conn} connections={connections} onPick={(c, opened) => {
+                if (opened) onConnected(c);
+                onChange({ connId: c.id, mount: null, prefix: "" });
+              }} />
+              <MountSelect connId={conn.id} mount={selection.mount} kv1
+                           onChange={(mount, version) => onChange({ ...selection, mount, prefix: "", kvVersion: version })} />
+              {selection.kvVersion === "1" && (
+                <div className="notice info">KV v1: compared, and copied from into KV v2. Lockstep never writes it, and the other tabs need a KV v2 mount.</div>
+              )}
               <label className="field">
                 <span>Path prefix <span className="subtle">(optional)</span></span>
                 <span className="input-with-clear">

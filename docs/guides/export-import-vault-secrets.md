@@ -16,7 +16,7 @@ This guide does it with [Lockstep](https://getlockstep.cloud), in the web UI or 
 1. Sign in to the Vault you want to export on either side, and choose the mount and an optional path prefix.
 2. Open the **Export & import** tab. **Export from** shows that side.
 3. Optionally, **leave out** secrets (globs such as `legacy/**`) and keys (a key pattern under a path glob, such as `*_token` under `**`). **Start from a profile's ignore rules** reuses the rules of a [comparison profile](build-a-comparison-profile.md).
-4. Leave **Encrypt with a one-time key** ticked and press **Export and download**.
+4. Under **Protect the file with**, leave **A one-time key** chosen and press **Export and download**. A passphrase, or your team's age keys, also work: see below.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../images/16-export-dark.png">
@@ -34,22 +34,48 @@ lockstep export --vault-addr https://vault-prod.example.com --mount app-config -
 
 The CLI signs in like the `vault` CLI (`VAULT_TOKEN`, `~/.vault-token`, `--vault-auth userpass|ldap|jwt`). It writes the file and the key readable by you only. Without `--key-file` it prints the key once.
 
+### Without passing a key around
+
+A one-time key has to reach whoever imports the file. Two other choices avoid that:
+- **A passphrase** your team already shares: choose **A passphrase**, or `--passphrase` in the CLI (it asks twice, or reads `LOCKSTEP_EXPORT_PASSPHRASE`).
+- **age public keys:** choose **age public keys** and tick a team the admin set up, or paste `age1…` keys. In the CLI: `-r age1…` (repeatable) or `-R team-keys.txt`. Each holder opens the file with their own age identity, in Lockstep or with `age`:
+
+```sh
+lockstep export --vault-addr https://vault-prod.example.com --mount app-config --prefix services \
+    -R platform-team.txt -o services.json
+jq -r .ciphertext services.json | age -d -i ~/.config/age/key.txt > services.plain.json
+```
+
+Admins name the teams with `LOCKSTEP_EXPORT_RECIPIENTS` ([configuration](../configuration.md)).
+
 ### What's in the file
 
 An export is JSON. It holds each secret's current data, version and update time, where it came from, the rules used, and what was left out or couldn't be read. The format has a published [JSON Schema](https://getlockstep.cloud/schemas/lockstep-export-v1.json), and `lockstep schema export` prints it, so you can validate or process exports with your own tools.
 
-Encrypted files use AES-256-GCM with a random 256-bit key (`lsk1.` plus 43 characters). A small header stays readable (the Vault name, mount, prefix, number of secrets and time) so you can tell files apart. It's authenticated, so editing it makes the file fail to open.
+Encrypted files use AES-256-GCM with a random 256-bit key (`lsk1.` plus 43 characters), or with a key derived from a passphrase by Argon2id, or are an age file inside the envelope. A small header stays readable (the Vault name, mount, prefix, number of secrets and time) so you can tell files apart. Editing it makes the file fail to open.
 
-**Plain-text exports** (untick the box, or `--no-encrypt`) hold every value in the clear. Treat them like the secrets themselves. Admins can allow only encrypted exports, or turn exporting off, with `LOCKSTEP_EXPORT_MODE=encrypted|off` (chart value `exportMode`). Every export is audit-logged: who exported what, and whether it was encrypted. Values are never logged.
+**Plain-text exports** (**Nothing (plain text)**, or `--no-encrypt`) hold every value in the clear. Treat them like the secrets themselves. The web app allows them only where an admin has said so: `LOCKSTEP_EXPORT_MODE` is `encrypted` by default, and `any` allows plain exports (chart value `exportMode`). A preset's `export` setting (`any`, `encrypted` or `off`) replaces it for one Vault, so plain exports can be allowed from dev and exports turned off for prod. The CLI uses your own token and isn't affected. Every export is audit-logged: who exported what, and whether it was encrypted. Values are never logged.
 
 ## Compare a Vault against an export
 
 Either side of a comparison can be an export file instead of a Vault. Use it to see what changed since a backup, or to check that an environment still matches a snapshot.
 
-1. On one side, switch **Vault / Export file** to **Export file** and open the file. Lockstep asks for the key if the file is encrypted.
+1. On one side, switch **Vault / Export file** to **Export file** and open the file. Lockstep asks for the key, the passphrase or your age identity if the file is encrypted.
 2. Choose the mount on the other side and press **Compare**.
 
 Everything works as it does between two Vaults: statuses, **Show values**, comparison profiles. You can copy values *from* the file into the Vault, through the usual review and check-and-set write. Nothing is ever written *into* a file. The opened file lives only in the page's memory and is gone when you close it.
+
+### From `vault kv get` output
+
+Already have secrets saved with the `vault` CLI? Open `vault kv get -format=json` output instead of an export: one file (the path is its name), a folder of them (**Open a folder of vault kv get files…**), or one JSON object of path to output. A loop like this saves a folder's secrets in one file:
+
+```sh
+for p in $(vault kv list -format=json secret/app | jq -r '.[]'); do
+  vault kv get -format=json "secret/app/$p" | jq --arg p "$p" '{($p): .}'
+done | jq -s add > app.json
+```
+
+Then compare it, or import it with `lockstep import app.json --vault-addr … --mount app-config --prefix app`. Treat the file like the secrets: it holds values in plain text.
 
 ## Import with rules
 

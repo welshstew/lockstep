@@ -5,6 +5,7 @@
 
 | Data | Where | For how long |
 |---|---|---|
+| Plan signing key | `LOCKSTEP_PLAN_SIGNING_KEY` (optional), from the environment or a Secret; never sent to browsers | As long as you keep it; plans it signed stop verifying elsewhere when its public key is removed from their trusted list |
 | Vault tokens | Encrypted, httpOnly, `SameSite=Lax` session cookie (Fernet: AES-128-CBC + HMAC-SHA256; key derived from `LOCKSTEP_SESSION_KEY`) | Until the session (8 h by default) or the token expires; removed on *Sign out* |
 | Pending OIDC login | Same cookie | Single use, at most 10 minutes |
 | Secret values | Server memory, during one request | Dropped as each secret is compared or copied |
@@ -24,7 +25,7 @@ There is no database and no server-side session store. The browser can't read or
 A [secret-engine export](usage.md#6-export-and-import) is the one thing Lockstep produces that contains values in bulk. The server builds it with the user's own token (so it holds only what they can read), sends it to their browser as a download, and keeps nothing.
 
 - **Encrypted by default** with AES-256-GCM and a random 256-bit one-time key. The key is shown once and never stored or logged. The readable header (Vault name, mount, prefix, count) is authenticated.
-- **Plain exports** need an explicit choice and come with a warning. Set `LOCKSTEP_EXPORT_MODE=encrypted` to forbid them, or `off` to turn exporting off.
+- **Plain exports** are refused unless an admin allows them (`LOCKSTEP_EXPORT_MODE=any`, or a preset's `"export": "any"`), and even then need an explicit choice and come with a warning. `off` turns exporting off, for the server or for one Vault.
 - **Audit:** every export is logged (`"event": "export"`), never with values or the key.
 - **Opening an export** sends the file (and key) to the server, which decrypts it and returns the contents to the page. The page holds them in memory only: never in browser storage, and gone on reload. The CLI writes export files and key files readable by their owner only.
 
@@ -41,7 +42,7 @@ Only **Apply** in the review dialog and **Import** write, and only:
 
 **Share once** (Browse) hands values over as a Vault response-wrapping token: Lockstep reads them and passes them straight to `sys/wrapping/wrap`, stores nothing, and logs the key names and the token's accessor, never the values or the token. A token opens once and expires after at most 24 hours.
 
-**Read-only servers:** `LOCKSTEP_READ_ONLY=true` makes Lockstep look-only, whatever Vault's policies allow: the UI hides every write and the API refuses them (403). **Copy** in Browse can be turned off with `LOCKSTEP_ALLOW_CLIPBOARD=false`.
+**Read-only servers:** `LOCKSTEP_READ_ONLY=true` makes Lockstep look-only, whatever Vault's policies allow: the UI hides every write and the API refuses them (403). **Per Vault**, a preset's [write policy](configuration.md#write-policy-per-vault) makes one Vault read-only (`writable: false`), or limits writes to some paths (`write_paths`, `deny_paths`) and turns off Destroy there. Refusals are audit-logged as `write.refused`. **Copy** in Browse can be turned off with `LOCKSTEP_ALLOW_CLIPBOARD=false`.
 
 **Policies and roles** written from the Policies tab go through the same kind of review. `root` and `default` can't be touched, and each item is re-read and skipped if it changed since the review. Writes and deletes are audit-logged with hashes, never policy text. `LOCKSTEP_POLICY_APPLY=off` leaves Lockstep to building and exporting.
 
@@ -49,13 +50,20 @@ Only **Apply** in the review dialog and **Import** write, and only:
 
 **Destroying** is the one action that can't be undone: [**Destroy**](usage.md#destroy-secrets) permanently deletes every version and the metadata of the secrets you chose, on one side, after you type a confirmation phrase. Each is checked against the version you compared first. It needs the `delete` capability on `<mount>/metadata/…`, and `LOCKSTEP_ALLOW_DESTROY=false` turns it off for everyone.
 
-Every attempted write and destroy is [audit-logged](usage.md#audit-log), without values. Tokens the tool created (userpass, LDAP, OIDC, Kubernetes) are revoked on *Sign out*; pasted tokens are left alone.
+Every attempted write and destroy is [audit-logged](usage.md#audit-log), without values. The [server log](configuration.md#logging) records requests, sign-ins and Vault errors: paths and identities, never values, tokens, passwords, bodies or query strings. Tokens the tool created (userpass, LDAP, OIDC, Kubernetes) are revoked on *Sign out*; pasted tokens are left alone.
 
 ## Web protections
 
 - **CSRF:** every state-changing `/api` call must send `X-Requested-With: lockstep`. A cross-site form can't set it, and a cross-origin script would need a CORS preflight the server never approves. That's on top of `SameSite=Lax` cookies.
 - **OIDC:** the `state` must match the pending login (constant-time comparison); the pending login is single use and expires.
-- **SSRF:** with `LOCKSTEP_ALLOW_CUSTOM_CONNECTIONS=false`, the server only calls the Vaults you configured. With custom addresses allowed, `LOCKSTEP_CUSTOM_URL_PATTERNS` limits which hosts it will call. Preset URLs are never sent to browsers.
+- **SSRF:** custom addresses are off by default (`LOCKSTEP_ALLOW_CUSTOM_CONNECTIONS=false`), so the server only calls the Vaults you configured. With them on:
+  - an address must be exactly `scheme://host[:port]`, with no user name, path, query or fragment;
+  - `LOCKSTEP_CUSTOM_URL_PATTERNS` is matched against that normalised origin;
+  - the host is resolved, and refused if any address it resolves to is private, loopback or link-local, unless `LOCKSTEP_CUSTOM_ALLOW_PRIVATE=true`;
+  - the connection goes to the address that was checked, so a DNS answer can't change between the check and the call;
+  - redirects from a custom Vault pass the same checks.
+
+  Preset URLs are never sent to browsers.
 - **Untrusted content:** SVG previews are rendered as images (no script execution). Downloads are sent as `application/octet-stream` with `nosniff`.
 
 ## The command line

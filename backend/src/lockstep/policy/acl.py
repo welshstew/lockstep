@@ -18,7 +18,11 @@ This mirrors Vault's ACL (vault/acl.go):
         slash form wins if it's at least as specific;
       - deny rules also apply case-insensitively: a deny that matches the lower-cased path wins
         unless the rule that matched as written is more specific.
-It's checked against real Vaults (1.21 and 2.2) in tests/test_policy_acl.py.
+OpenBao forked before either change and has its own order (internal/vault/policy/acl.go at v2.7.3):
+the exact rule, then for list requests the exact rule without a trailing slash, then the best wildcard
+rule for the path as written, then (list requests on "a/") for "a". Deny rules match case as written,
+and there's a `scan` capability.
+It's checked against real Vaults (1.21 and 2.2) and OpenBao (2.7) in tests/test_policy_acl.py.
 """
 
 from __future__ import annotations
@@ -28,7 +32,7 @@ from dataclasses import dataclass, field
 
 from .hcl import Policy
 
-ORDER = ("sudo", "read", "list", "update", "delete", "create", "patch", "subscribe", "recover")
+ORDER = ("sudo", "read", "list", "update", "delete", "create", "patch", "scan", "subscribe", "recover")
 
 
 @dataclass
@@ -66,21 +70,27 @@ class Decision:
 
 @dataclass(frozen=True)
 class Behaviour:
-    """Policy evaluation details that changed between Vault versions."""
-    slash_as_given_first: bool = True  # 2.2.2+: try "a/" before "a" for list requests
-    deny_case_insensitive: bool = True  # 2.2.2+: deny rules match regardless of case
+    """Policy evaluation details that differ between Vault versions and OpenBao."""
+    lookup: str = "current"  # current (Vault 2.2.2+) | legacy (Vault up to 2.2.1) | openbao
+    deny_case_insensitive: bool = True  # Vault 2.2.2+: deny rules match regardless of case
     label: str = "Vault 2.2.2 or later"
+    known: bool = True  # False: the server's rules couldn't be told, so these are a guess
 
 
-LEGACY = Behaviour(slash_as_given_first=False, deny_case_insensitive=False, label="Vault 2.2.1 or earlier")
+LEGACY = Behaviour(lookup="legacy", deny_case_insensitive=False, label="Vault 2.2.1 or earlier")
 CURRENT = Behaviour()
+OPENBAO = Behaviour(lookup="openbao", deny_case_insensitive=False, label="OpenBao")
+UNKNOWN = Behaviour(label="unknown rules, assumed Vault 2.2.2 or later", known=False)
 
 
-def behaviour_for(version: str | None) -> Behaviour:
-    """The evaluation rules of a Vault version ("1.21.4", "2.2.2+ent"); unknown: the latest."""
+def behaviour_for(version: str | None, product: str = "Vault") -> Behaviour:
+    """The evaluation rules of a server: `product` is "Vault", "Vault Enterprise" or "OpenBao",
+    `version` like "1.21.4" or "2.2.2+ent". An unreadable Vault version gives UNKNOWN."""
+    if product == "OpenBao":
+        return OPENBAO
     m = re.match(r"v?(\d+)\.(\d+)\.(\d+)", version or "")
     if not m:
-        return CURRENT
+        return UNKNOWN
     return CURRENT if tuple(map(int, m.groups())) >= (2, 2, 2) else LEGACY
 
 
@@ -120,8 +130,10 @@ class ACL:
         if self.root:
             return Decision(["root"], None)
         path = path.lstrip("/")
-        if not self.behaviour.slash_as_given_first:
+        if self.behaviour.lookup == "legacy":
             e = self._entry_legacy(path, list_op)
+        elif self.behaviour.lookup == "openbao":
+            e = self._entry_openbao(path, list_op)
         else:
             e = self._entry_current(path, list_op)
             if e is not None and not e.deny and self._lower is not None:
@@ -137,6 +149,17 @@ class ACL:
             e = self.exact.get(path[:-1]) or self._non_exact(path[:-1])
         if e is None:
             e = self._non_exact(path)
+        return e
+
+    def _entry_openbao(self, path: str, list_op: bool) -> Entry | None:
+        """OpenBao (AllowOperation in internal/vault/policy/acl.go)."""
+        e = self.exact.get(path)
+        if e is None and list_op:
+            e = self.exact.get(path.removesuffix("/"))
+        if e is None:
+            e = self._non_exact(path)
+        if e is None and list_op and path.endswith("/"):
+            e = self._non_exact(path[:-1])
         return e
 
     def _entry_current(self, path: str, list_op: bool) -> Entry | None:

@@ -3,6 +3,30 @@
   "title": "Lockstep chart values",
   "type": "object",
   "additionalProperties": false,
+  "definitions": {
+    "secretKey": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string"},
+        "key": {"type": "string", "minLength": 1}
+      }
+    },
+    "driftSide": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "addr": {"type": "string", "pattern": "^(https?://.+)?$"},
+        "namespace": {"type": "string"},
+        "mount": {"type": "string"},
+        "prefix": {"type": "string"},
+        "name": {"type": "string"},
+        "role": {"type": "string"},
+        "authMount": {"type": "string", "minLength": 1},
+        "tokenSecret": {"$ref": "#/definitions/secretKey"}
+      }
+    }
+  },
   "properties": {
     "image": {
       "type": "object",
@@ -91,11 +115,43 @@
           },
           "namespace": {
             "type": "string"
+          },
+          "writable": {
+            "type": "boolean"
+          },
+          "allowDestroy": {
+            "type": "boolean"
+          },
+          "approvals": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "exportMode": {
+            "type": "string",
+            "enum": ["any", "encrypted", "off"]
+          },
+          "writePaths": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "denyPaths": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
           }
         }
       }
     },
     "allowCustomConnections": {
+      "type": "boolean"
+    },
+    "customAllowPrivate": {
       "type": "boolean"
     },
     "customUrlPatterns": {
@@ -118,6 +174,14 @@
       "type": "string",
       "enum": ["on", "off"]
     },
+    "auditReveals": {
+      "type": "string",
+      "enum": ["on", "off"]
+    },
+    "apiDocs": {
+      "type": "string",
+      "enum": ["on", "off"]
+    },
     "userWrite": {
       "type": "string",
       "enum": ["on", "off"]
@@ -125,9 +189,119 @@
     "allowClipboard": {
       "type": "boolean"
     },
+    "plans": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "issuer": {"type": "string"},
+        "ttlHours": {"type": "integer", "minimum": 1, "maximum": 2160},
+        "approvals": {"type": "integer", "minimum": 0, "maximum": 1},
+        "signingKeySecret": {"$ref": "#/definitions/secretKey"},
+        "trustedKeys": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "key"],
+            "properties": {"name": {"type": "string", "minLength": 1}, "key": {"type": "string", "minLength": 1}}
+          }
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "tokenSecret": {"$ref": "#/definitions/secretKey"},
+        "serviceMonitor": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "interval": {"type": "string"},
+            "labels": {"type": "object", "additionalProperties": {"type": "string"}}
+          }
+        }
+      }
+    },
+    "driftCheck": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "schedule": {"type": "string", "minLength": 1},
+        "suspend": {"type": "boolean"},
+        "left": {"$ref": "#/definitions/driftSide"},
+        "right": {"$ref": "#/definitions/driftSide"},
+        "profile": {"type": "string"},
+        "baseline": {"type": "string"},
+        "baselineConfigMap": {"$ref": "#/definitions/secretKey"},
+        "failOn": {"enum": ["", "any", "new", "changed"]},
+        "waivers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "owner", "reason", "expires"],
+            "properties": {
+              "path": {"type": "string", "minLength": 1},
+              "key": {"type": "string"},
+              "owner": {"type": "string", "minLength": 1},
+              "reason": {"type": "string", "minLength": 1},
+              "expires": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"}
+            }
+          }
+        },
+        "pushgateway": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "url": {"type": "string", "pattern": "^(https?://.+)?$"},
+            "job": {"type": "string", "minLength": 1}
+          }
+        },
+        "extraArgs": {"type": "array", "items": {"type": "string"}},
+        "serviceAccount": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "create": {"type": "boolean"},
+            "name": {"type": "string"},
+            "annotations": {"type": "object"}
+          }
+        },
+        "concurrencyPolicy": {"enum": ["Allow", "Forbid", "Replace"]},
+        "activeDeadlineSeconds": {"type": "integer", "minimum": 1},
+        "successfulJobsHistoryLimit": {"type": "integer", "minimum": 0},
+        "failedJobsHistoryLimit": {"type": "integer", "minimum": 0},
+        "resources": {"type": "object"},
+        "egress": {"type": "array"}
+      }
+    },
+    "logging": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "level": {"enum": ["debug", "info", "warning", "error"]},
+        "format": {"enum": ["text", "json"]}
+      }
+    },
     "exportMode": {
       "type": "string",
       "enum": ["any", "encrypted", "off"]
+    },
+    "exportRecipients": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "recipients"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1},
+          "recipients": {"type": "array", "minItems": 1, "items": {"type": "string", "pattern": "^age1"}}
+        }
+      }
     },
     "vaultTls": {
       "type": "object",

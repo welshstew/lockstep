@@ -6,7 +6,7 @@ import httpx
 import pytest
 
 from conftest import has_plugin_b, is_openbao_b
-from lockstep.api.vaultconfig import diff, normalise_mount, pair, product
+from lockstep.api.vaultconfig import HIDDEN, _public, diff, normalise_mount, pair, product, sensitive
 
 pytestmark = pytest.mark.usefixtures("vaults")
 
@@ -15,14 +15,55 @@ def test_normalise_and_diff():
     m = {"type": "kv", "accessor": "kv_1", "uuid": "u", "local": False, "options": {"version": "2"},
          "config": {"default_lease_ttl": 0, "max_lease_ttl": 3600, "listing_visibility": ""},
          "plugin_version": "", "running_plugin_version": "v0.25.0+builtin", "description": ""}
-    assert normalise_mount(m) == {"type": "kv", "options": {"version": "2"}, "config": {"max_lease_ttl": 3600},
-                                  "plugin_version": "builtin"}
+    n = normalise_mount(m)
+    assert _public(n) == {"type": "kv", "options": {"version": "2"}, "config": {"max_lease_ttl": 3600},
+                          "plugin_version": "builtin"}
     # built-in plugins differ only with the server's version (or Vault against OpenBao): not drift
     assert normalise_mount({**m, "running_plugin_version": "v2.7.3+builtin.bao"}) == normalise_mount(m)
     assert normalise_mount({**m, "plugin_version": "v0.3.1"})["plugin_version"] == "v0.3.1"  # a pinned external plugin
+    # a default false (local) is dropped; a real setting is kept
+    assert normalise_mount({**m, "local": True})["local"] is True
     assert diff({"config": {"a": 1, "b": 2}}, {"config": {"a": 1, "b": 3}, "x": True}) == [
         {"field": "config.b", "left": 2, "right": 3}, {"field": "x", "left": None, "right": True}]
-    assert "bindpass" not in normalise_mount({"type": "ldap", "bindpass": "x", "client_secret": "y", "url": "ldap://h"})
+    ldap = normalise_mount({"type": "ldap", "bindpass": "x", "client_secret": "y", "url": "ldap://h"})
+    assert ldap["bindpass"] == HIDDEN and ldap["client_secret"] == HIDDEN and "x" not in str(ldap)
+
+
+def test_which_fields_are_sensitive():
+    for name in ("password", "bindpass", "client_secret", "oidc_client_secret", "token_reviewer_jwt", "private_key",
+                 "secret_key", "credentials", "keytab", "token"):
+        assert sensitive(name) == "sensitive", name
+    # settings that only sound secret
+    for name in ("password_policy", "credential_type", "credential_config", "secret_type", "secret_id_bound_cidrs",
+                 "secret_id_ttl", "jwt_validation_pubkeys", "disable_local_ca_jwt", "token_type", "token_ttl", "max_ttl"):
+        assert sensitive(name) is None, name
+    # unknown fields the safety net catches
+    assert sensitive("api_secret") == sensitive("bearer_token") == sensitive("ssh_private_blob") == "name looks sensitive"
+
+
+def test_sensitive_values_are_not_compared_and_settings_are():
+    from lockstep.api.vaultconfig import _engine_clean
+    role = {"db_name": "orders", "credential_type": "rsa_private_key", "credential_config": {"key_bits": 2048},
+            "password_policy": "strong", "default_ttl": 0}
+    a = {**_engine_clean("roles", role), "_returned": sorted(role)}
+    b = {**_engine_clean("roles", {**role, "credential_type": "password", "password_policy": "weak"}), "_returned": sorted(role)}
+    [p] = pair({"database/roles/app": a}, {"database/roles/app": b})
+    assert {f["field"] for f in p["fields"]} == {"credential_type", "password_policy"}  # compared, not dropped
+    assert p["left"]["default_ttl"] == 0  # a 0 the server returns is kept
+    # an LDAP connection's password: never compared, shown by name only
+    l = {**_engine_clean("config", {"url": "ldap://a", "password": "hunter2", "insecure_tls": False}), "_returned": ["insecure_tls", "password", "url"]}
+    r = {**_engine_clean("config", {"url": "ldap://a", "password": "s3cret!", "insecure_tls": True}), "_returned": ["insecure_tls", "password", "url"]}
+    [q] = pair({"ldap/config/x": l}, {"ldap/config/x": r})
+    assert q["fields"] == [{"field": "insecure_tls", "left": False, "right": True}]  # false is a setting
+    assert q["not_compared"] == [{"field": "password", "reason": "sensitive"}]
+    assert "hunter2" not in str(q) and "s3cret!" not in str(q)
+
+
+def test_copy_keeps_settings_and_drops_secrets():
+    from lockstep.api.configcopy import _clean_role
+    out = _clean_role({"db_name": "orders", "credential_type": "rsa_private_key", "password_policy": "strong",
+                       "password": "x", "client_secret": "y", "api_secret": "z"})
+    assert out == {"db_name": "orders", "credential_type": "rsa_private_key", "password_policy": "strong"}
 
 
 def test_product():
@@ -168,7 +209,7 @@ def test_cloud_engine_objects_are_read():
 def test_engine_clean_redacts():
     from lockstep.api.vaultconfig import _engine_clean
     d = _engine_clean("config", {"plugin_name": "pg", "connection_details": {"connection_url": "postgresql://app:hunter2@db/x", "username": "app", "password": "x"}})
-    assert d["connection_details"] == {"connection_url": "postgresql://app:…@db/x", "username": "app"}
+    assert d["connection_details"] == {"connection_url": "postgresql://app:…@db/x", "username": "app", "password": HIDDEN}
     t = _engine_clean("config", {"connection_details": {"connection_url": "postgresql://{{username}}:{{password}}@db/x"}})
     assert t["connection_details"]["connection_url"].endswith("{{password}}@db/x")
     assert "keys" not in _engine_clean("keys", {"type": "aes", "keys": {"1": 123}, "latest_version": 3})
@@ -221,3 +262,29 @@ def test_map_path():
     assert map_path("kv-dev/roles/web", p) == "kv-prod/roles/web"
     assert map_path("kubernetes-eu/", p) == "k8s-eu/"
     assert map_path("other/", p) is None
+
+
+def test_ldap_auth_false_is_compared_and_bindpass_never_shown(client, vaults):
+    """Against the real Vaults: deny_null_bind false (its default is true) shows as false, not as
+    unset, and the bind password appears nowhere in the answer."""
+    if not has_plugin_b("auth", "ldap"):
+        pytest.skip("Vault B has no LDAP auth method (OpenBao)")
+    tag = uuid.uuid4().hex[:6]
+    a = httpx.Client(base_url=f"{vaults[0]}/v1/", headers={"X-Vault-Token": "root-a"})
+    b = httpx.Client(base_url=f"{vaults[1]}/v1/", headers={"X-Vault-Token": "root-b"})
+    path = f"ldap-{tag}"
+    try:
+        for c, deny in ((a, False), (b, True)):
+            c.post(f"sys/auth/{path}", json={"type": "ldap"}).raise_for_status()
+            c.post(f"auth/{path}/config", json={"url": "ldap://directory.example", "binddn": "cn=lockstep",
+                                                 "bindpass": f"bind-{tag}", "deny_null_bind": deny}).raise_for_status()
+        left = client.post("/api/connections", json={"preset_id": 0, "auth": {"method": "token", "token": "root-a"}}).json()["id"]
+        right = client.post("/api/connections", json={"preset_id": 1, "auth": {"method": "token", "token": "root-b"}}).json()["id"]
+        r = client.post("/api/config/compare", json={"left": left, "right": right})
+        assert f"bind-{tag}" not in r.text
+        m = {p["path"]: p for p in r.json()["auth"]}[f"{path}/"]
+        assert {"field": "configuration.deny_null_bind", "left": False, "right": True} in m["fields"], m["fields"]
+    finally:
+        for c in (a, b):
+            c.delete(f"sys/auth/{path}")
+

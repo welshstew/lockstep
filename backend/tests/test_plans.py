@@ -1,4 +1,5 @@
-"""Saved sync plans: create, verify, check and apply, all or nothing."""
+"""Saved sync plans: create, verify, check and apply. The check is all or nothing; applying stops at
+the first secret that isn't written."""
 
 import copy
 import json
@@ -123,6 +124,43 @@ def test_any_change_since_the_plan_blocks_the_whole_plan(client, env, two_secret
     assert env.b.get(f"{env.prefix}/api")[0] is None
 
 
+@pytest.mark.parametrize("moved", [0, 1])
+def test_source_moving_during_apply_stops_the_plan(client, env, two_secrets, monkeypatch, moved):
+    """Between the plan's check and a write, a source that moves is a conflict for that secret, and
+    applying stops there: what was reviewed is what gets written, and nothing after it is tried."""
+    import lockstep.api.plans as plans
+    plan = create(client, env, two_secrets).json()
+    order = [c["path"] for c in plan["changes"]]
+    newer = {"db": {"user": "app", "password": "racing-pw", "same": "x"}, "api": {"token": "t-racing"}}
+    before = {p: env.b.get(f"{env.prefix}/{p}")[0] for p in order}
+    real_check = plans._check
+
+    async def check_then_move(*a, **k):
+        out = await real_check(*a, **k)
+        env.a.put(f"{env.prefix}/{order[moved]}", newer[order[moved]])  # someone edits the source meanwhile
+        return out
+
+    monkeypatch.setattr(plans, "_check", check_then_move)
+    out = apply(client, plan, env.ca, env.cb).json()
+    by = {r["path"]: r for r in out["results"]}
+    assert out["stopped"] is True
+    assert by[order[moved]]["status"] == "conflict" and "source changed since the plan" in by[order[moved]]["message"]
+    assert env.b.get(f"{env.prefix}/{order[moved]}")[0] == before[order[moved]]  # the newer source wasn't copied
+    if moved == 0:
+        assert out["outcome"] == "not_applied" and by[order[1]]["status"] == "skipped"
+        assert env.b.get(f"{env.prefix}/{order[1]}")[0] == before[order[1]]  # not attempted
+        assert out["message"].startswith("Not applied: 0 of 2")
+    else:
+        assert out["outcome"] == "partially_applied" and by[order[0]]["status"] == "applied"
+        assert out["message"].startswith("Partially applied: 1 of 2") and order[1] in out["message"]
+    assert out["summary"]["skipped"] == (1 if moved == 0 else 0)
+
+
+def test_applied_plan_reports_its_outcome(client, env, two_secrets):
+    out = apply(client, create(client, env, two_secrets).json(), env.ca, env.cb).json()
+    assert out["outcome"] == "applied" and out["stopped"] is False and out["message"] == "Plan applied: 2 of 2 secret(s) written."
+
+
 def test_read_only_user_creates_writer_applies(client, env, two_secrets):
     bob_b = env.connect(1, method="userpass", username="bob", password="password")
     bob_a = env.connect(0, method="userpass", username="bob", password="password")
@@ -167,29 +205,63 @@ def test_conflicting_change_cannot_be_planned(client, env):
 
 
 def test_plan_with_typed_values_and_removals(client, env, two_secrets):
+    """Typed values stay out of the plan file: it keeps a check code, and whoever applies the plan
+    types them again. A value that doesn't match the creator's is refused."""
     db = two_secrets[0] | {"keys": [], "set": {"password": "typed-pw"}, "remove": ["only_b"]}
     r = create(client, env, [db, two_secrets[1]])
     assert r.status_code == 200, r.text
     plan = r.json()
-    assert plan["holds_values"] is True
+    assert plan["holds_values"] is False and "typed-pw" not in json.dumps(plan) and "t-123" not in json.dumps(plan)
+    i = [c["path"] for c in plan["changes"]].index("db")
     by_path = {c["path"]: c for c in plan["changes"]}
     assert [(k["key"], k["action"], k["override"]) for k in by_path["db"]["keys"]] == [
         ("password", "update", True), ("only_b", "remove", False)]
-    assert by_path["db"]["set"] == {"password": "typed-pw"}  # only typed values are in the file
-    assert by_path["api"]["set"] is None and "t-123" not in json.dumps(plan)
+    assert by_path["db"]["set"] is None and set(by_path["db"]["typed"]) == {"password"}
 
     md = client.post("/api/plans/report", json={"plan": plan}).text
-    assert "update (typed)" in md and "remove" in md and "typed-pw" not in md
+    assert "update (typed)" in md and "types them again" in md and "typed-pw" not in md
 
-    # Editing a typed value breaks the signature
+    # Editing a check code breaks the signature
     edited = copy.deepcopy(plan)
-    edited["changes"][[c["path"] for c in plan["changes"]].index("db")]["set"]["password"] = "evil"
+    edited["changes"][i]["typed"]["password"] = "0" * 32
     assert check(client, edited, env.ca, env.cb).status_code == 400
 
-    # The source moving doesn't matter to a change that copies nothing
+    # Checking works without the values; the source moving doesn't matter to a change that copies nothing
     env.a.put(f"{env.prefix}/db", {"user": "app", "password": "moved-on", "same": "x"})
     assert check(client, plan, env.ca, env.cb).json()["status"] == "ready"
-    out = apply(client, plan, env.ca, env.cb)
+    missing = apply(client, plan, env.ca, env.cb)
+    assert missing.status_code == 400 and missing.json()["detail"]["typed"] == "missing"
+    body = {"plan": plan, "left_conn_id": env.ca, "right_conn_id": env.cb, "confirm": True}
+    wrong = client.post("/api/plans/apply", json=body | {"values": {str(i): {"password": "typed-pq"}}})
+    assert wrong.status_code == 400 and "don't match" in wrong.json()["detail"]["message"]
+    assert check(client, plan, env.ca, env.cb).status_code == 200
+    assert client.post("/api/plans/check", json={k: body[k] for k in ("plan", "left_conn_id", "right_conn_id")}
+                       | {"values": {str(i): {"password": "nope"}}}).status_code == 400
+    assert env.b.get(f"{env.prefix}/db")[0]["password"] == "old-pw"  # nothing written
+    out = client.post("/api/plans/apply", json=body | {"values": {str(i): {"password": "typed-pw"}}})
     assert out.status_code == 200, out.text
     assert env.b.get(f"{env.prefix}/db")[0] == {"user": "app", "password": "typed-pw", "same": "x"}
     assert env.b.get(f"{env.prefix}/api")[0] == {"token": "t-123"}
+
+
+def test_older_plan_holding_typed_values_still_applies(client, env, two_secrets):
+    from lockstep.api.plans import Plan, sign
+    from lockstep.config import get_settings
+    db = two_secrets[0] | {"keys": [], "set": {"password": "typed-pw"}}
+    plan = create(client, env, [db]).json()
+    old = copy.deepcopy(plan)
+    old["changes"][0]["set"], old["changes"][0]["typed"], old["holds_values"] = {"password": "typed-pw"}, None, True
+    old = sign(Plan.model_validate(old), get_settings()).model_dump(mode="json")
+    out = apply(client, old, env.ca, env.cb)
+    assert out.status_code == 200, out.text
+    assert env.b.get(f"{env.prefix}/db")[0]["password"] == "typed-pw"
+
+
+def test_typed_value_as_json_matches():
+    from lockstep.api.plans import match_typed, typed_check
+    from lockstep.config import Settings
+    s = Settings(session_key="k" * 32)
+    code = typed_check(s, "plan", "app/db", "port", 5432)
+    assert match_typed(s, "plan", "app/db", "port", code, "5432") == (True, 5432)  # typed as text, written as a number
+    assert match_typed(s, "plan", "app/db", "port", code, "5433")[0] is False
+    assert match_typed(s, "other-plan", "app/db", "port", code, 5432)[0] is False  # bound to the plan

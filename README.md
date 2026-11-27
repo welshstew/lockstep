@@ -20,16 +20,18 @@ Compare **KV v2 secrets engines** across HashiCorp Vault clusters, or across two
 ## Features
 
 - **Browse a Vault.** The tab Lockstep opens on: a folder tree of a KV v2 mount, values masked until shown, copy and inspect, versions with diffs, roll back, delete and undelete. Edit in place and save with check-and-set, or stage several edits for one review. Every write is audit-logged.
-- **Compare anything to anything.** Two Vaults, two mounts, or two path prefixes. Each side has its own connection, mount and prefix.
+- **Compare anything to anything.** Two Vaults, two mounts, or two path prefixes. Each side has its own connection, mount and prefix. KV v1 mounts are compared too (read-only: Lockstep never writes them), and a namespace picker moves a side into a child namespace with the same sign-in.
 - **Values are compared on the server and never shown unless you ask.** The browser receives only a status per key (equal / different / left only / right only / no access). **Show values** reveals them, only for the secrets you open.
 - **Only values count.** Versions, timestamps and the order of keys inside JSON are ignored. `5432` vs `"5432"` is flagged as a *type* difference.
 - **Comparison profiles.** Pair paths that differ between environments (`services/*/prod/**` ⇄ `services/*/staging/**`, or a renamed application's old and new folder), read environment words in values as their counterpart (`test` ⇄ `dev`), and ignore keys or paths that are meant to differ. Copies follow the mapping and the rewrites. **Read both sides** suggests the rules from what's in the two Vaults and explains each one. Profiles can be shared by the team (server) or personal (browser, export/import).
+- **Many environments at once.** The **Matrix** tab (and `lockstep matrix`) compares a baseline such as prod with up to 12 environments, each under its own profile, in one grid. What differs in only one environment comes first.
 - **Honest about permissions.** Secrets you can't list or read show as **No access**, never as "only on the other side", so nobody overwrites what they couldn't see.
 - **Copy with ← / →** per key or per secret. A review shows exactly what each target gets. Writes use KV v2 **check-and-set**: a target changed by someone else since you compared becomes a conflict, not an overwrite. Nothing is deleted unless you ask (**Delete** on a key). Every write is **audit-logged** (without values).
 - **Clean up for good.** **Destroy** a secret on one side, or every secret shown with **Destroy all on left / right**: every version and its metadata, after typing a confirmation phrase. Checked against the version you compared and audit-logged; can be turned off server-wide.
-- **Sync plans.** Save a reviewed set of changes as a signed file (paths, keys and versions; never copied values) that doubles as a report of what needs updating from where. Someone with write access opens it, checks it and applies it. If anything in it changed since it was made, nothing is written and the plan has to be made again. Read-only users can prepare plans.
+- **Sync plans.** Save a reviewed set of changes as a signed file (paths, keys and versions; never copied values) that doubles as a report of what needs updating from where. Someone with write access opens it, checks it and applies it. If anything in it changed since it was made, nothing is written and the plan has to be made again. Read-only users can prepare plans. Optionally, a second person **approves** a plan before it applies, plans signed with an Ed25519 key **travel between installations** (made on dev's Lockstep, applied on prod's), and an **undo plan** puts back what an apply changed. See [Promoting secrets from dev to prod with approvals](docs/guides/promote-vault-secrets-with-approvals.md).
 - **Command line too.** `lockstep compare` writes a YAML report of the differences (no values), with each secret's Vault UI link and `vault kv get` command. Set an action on the keys to change, and `lockstep apply` makes the copies, asking before each key is written. Logs in like the `vault` CLI, and works as a drift check in CI (exit code 1 on differences). See [Command line](docs/cli.md).
-- **Export and import a secret engine.** Export a mount with its values to a file, encrypted with a one-time key, leaving out what you choose. Compare a Vault against an export, copy from it, or import it into another Vault with rules and transforms (`application-dev-env` → `application-test-env`), previewed and written with check-and-set. In the UI and the CLI (`lockstep export`, `lockstep import`).
+- **Drift checks in CI and on a schedule.** Accept known drift in a baseline and fail only on what's new, with waivers that expire. Reports as SARIF (GitHub code scanning), JUnit, Markdown and CSV. A **GitHub Action** logs in with the job's OIDC token and comments on the pull request. In Kubernetes, the chart's `driftCheck` CronJob pushes gauges to a Prometheus Pushgateway. See [Detecting secret drift in CI](docs/guides/detect-vault-secret-drift-in-ci.md) and [drift monitoring](docs/drift-monitoring.md).
+- **Export and import a secret engine.** Export a mount with its values to a file, encrypted with a one-time key, a passphrase or a team's **age** keys (which `age -d` opens too), leaving out what you choose. Big exports stream. `vault kv get -format=json` output can be opened and imported as well. Compare a Vault against an export, copy from it, or import it into another Vault with rules and transforms (`application-dev-env` → `application-test-env`), previewed and written with check-and-set. In the UI and the CLI (`lockstep export`, `lockstep import`).
 - **Certificate expiry dashboard.** Scan one or both sides' mounts for every certificate (PEM, DER, base64, PKCS#12, JKS/JCEKS; keystores opened with the password stored beside them) and see what expires when, optionally with every certificate your PKI engines issued. Only certificate details come back, never values. **Issue a development certificate** from a PKI role, to download or store in a new secret.
 - **Explain Vault policies.** See what a policy, or your own token, allows on every secret of a mount: see names, read, write, delete, destroy, history, with the rule and line behind each answer and warnings for common mistakes (KV v2 paths without `data/`, literal wildcards, risky grants). Matching follows Vault's own rules and is tested against Vault. Also `lockstep policy explain`.
 - **Build policies without the confusing parts.** Write "who can do what, where" and get the right KV v2 paths, or let Lockstep suggest policies from your `<app>/<env>/…` layout (or your own pattern). Preview them on real secrets, then hand an admin a zip with HCL, an `apply.sh` that diffs first, and optional Terraform or OpenTofu.
@@ -38,9 +40,10 @@ Compare **KV v2 secrets engines** across HashiCorp Vault clusters, or across two
 - **Value tools.** Each value is identified by its content: base64, PEM, DER, **X.509 certificates and chains** (validated link by link), **PKCS#12**, **JKS / JCEKS** keystores, keys, CSRs, images, ZIP/JAR, PDF… Inspect one or both sides, compare certificates field by field, preview images, download files.
 - **Last-updated metadata.** When each secret was written and when each key last changed (worked out from KV v2 versions), never part of the comparison.
 - **Sign in your way.** Token, userpass, LDAP, **OIDC redirect** (the same flow as the Vault UI), **JWT**, or the pod's **Kubernetes service account** with a mount and role you choose.
-- **Configuration drift.** Two Vaults' versions, secrets engines and auth methods compared side by side, tuning and auth configuration included (secrets left out). `lockstep config compare` makes it a CI check.
+- **Configuration drift.** Two Vaults' versions, secrets engines and auth methods compared side by side, tuning and auth configuration included (secrets left out), with engine roles and keys and system settings: audit devices, password policies, token roles, quotas, MFA, plugins and identity entities. `lockstep config compare` makes it a CI check.
 - **Developer tools.** A **Transit playground** (encrypt, decrypt, rewrap, sign, verify, HMAC), **database credentials** generated from a role, and **leases** to browse, renew or revoke, all with your own sign-in.
-- **Read-only mode.** `LOCKSTEP_READ_ONLY` turns Lockstep into a look-only tool: browse, compare, export and explain, but never write.
+- **Guardrails per Vault.** A Vault can be read-only in Lockstep, limited to some paths, changed only through approved plans, or kept from plain exports, on top of Vault's own policies. `LOCKSTEP_READ_ONLY` turns the whole installation into a look-only tool.
+- **Observable and audited.** Every write, approval and export is audit-logged with the actor's Vault entity, never a value; shown values can be logged too. Prometheus metrics, structured logs with request IDs, sign-in throttling and browser security headers.
 - **Built to run on Kubernetes.** Stateless (sessions live in an encrypted cookie), configured only through environment variables, runs on **Red Hat Hardened Images** (distroless, non-root), scanned in CI.
 
 ## Screenshots
@@ -77,16 +80,16 @@ This starts two dev-mode Vaults filled with demo data, Dex as an OIDC provider, 
 ## Deploy
 
 ```sh
-helm upgrade --install lockstep oci://ghcr.io/welshstew/charts/lockstep --version 0.10.1 \
+helm upgrade --install lockstep oci://ghcr.io/welshstew/charts/lockstep --version 0.11.0 \
   -n lockstep --create-namespace -f my-values.yaml
 ```
 
-Or run the container anywhere: `ghcr.io/welshstew/lockstep:0.10.1` (amd64 and arm64, signed with cosign, with an SBOM and build provenance; see [releases](https://github.com/welshstew/lockstep/releases)).
+Or run the container anywhere: `ghcr.io/welshstew/lockstep:0.11.0` (amd64 and arm64, signed with cosign, with an SBOM and build provenance; see [releases](https://github.com/welshstew/lockstep/releases)).
 
 For the command line, install from GitHub (it isn't on PyPI yet) or use the same image with `--entrypoint lockstep`. See [Command line: install](docs/cli.md#install):
 
 ```sh
-pipx install "git+https://github.com/welshstew/lockstep@v0.10.1#subdirectory=backend"
+pipx install "git+https://github.com/welshstew/lockstep@v0.11.0#subdirectory=backend"
 ```
 
 A hardened chart: non-root, read-only filesystem, a session key kept across upgrades, optional Ingress, NetworkPolicy and Kubernetes auth. See [Deploying on Kubernetes](docs/kubernetes.md) and the [chart README](charts/lockstep/README.md).
@@ -97,6 +100,7 @@ A hardened chart: non-root, read-only filesystem, a session key kept across upgr
 |---|---|
 | [Using the tool](docs/usage.md) | Comparing, statuses and permissions, copying values, value tools, timestamps |
 | [Command line](docs/cli.md) | `lockstep compare` reports and `lockstep apply`: install, logging in, the report format, exit codes |
+| [Drift monitoring](docs/drift-monitoring.md) | A scheduled drift check (CronJob), Pushgateway gauges and alert rules, and the server's `/metrics` |
 | [Authentication](docs/authentication.md) | Token, userpass/LDAP, OIDC redirect, JWT, **Kubernetes service account**: app settings *and* the Vault-side setup for each |
 | [Configuration](docs/configuration.md) | Every `LOCKSTEP_*` setting |
 | [Deploying on Kubernetes](docs/kubernetes.md) | The Helm chart, a deployment checklist, OIDC callback and Kubernetes auth in a cluster ([chart values](charts/lockstep/README.md)) |

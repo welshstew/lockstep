@@ -85,3 +85,25 @@ def test_copy_tuning_to_the_other_side(page, sandbox, vault_a, vault_b):
     finally:
         vault_a.c.delete(f"sys/mounts/e2e-cp-{tag}")
         vault_b.c.delete(f"sys/mounts/e2e-cp-{tag}")
+
+
+def test_system_settings_and_audit_warning(page, sandbox, vault_a, vault_b):
+    tag = sandbox.replace("/", "")[-6:]
+    policy = 'length = 20\nrule "charset" {\n  charset = "abcdefghijklmnopqrstuvwxyz"\n}\n'
+    vault_a.c.put(f"sys/policies/password/e2e-pp-{tag}", json={"policy": policy}).raise_for_status()
+    vault_b.c.put(f"sys/policies/password/e2e-pp-{tag}", json={"policy": policy.replace("20", "32")}).raise_for_status()
+    try:
+        sign_in_userpass(page, "left", "alice", vault="Vault A")
+        sign_in_userpass(page, "right", "alice", vault="Vault B")
+        page.get_by_role("tab", name="Configuration").click()
+        page.get_by_role("button", name="Compare configuration").click()
+        system = page.get_by_role("region", name="System settings")
+        row = system.locator(".policy-pair", has_text=f"password-policy/e2e-pp-{tag}")
+        expect(row).to_contain_text("password policy")
+        expect(row).to_contain_text("Different")
+        row.locator(".pair-head").click()
+        expect(row.locator(".rule-diff")).to_contain_text("length = 32")
+        expect(page.locator(".config-warning").first).to_contain_text("No audit device")  # the dev Vaults log nothing
+    finally:
+        vault_a.c.delete(f"sys/policies/password/e2e-pp-{tag}")
+        vault_b.c.delete(f"sys/policies/password/e2e-pp-{tag}")

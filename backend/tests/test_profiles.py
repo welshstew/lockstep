@@ -157,6 +157,27 @@ def test_suggest_builds_the_rename_profile(client, ab):
     assert "hunter" not in r.text and "tok-" not in r.text and "8f2a" not in r.text  # no values
 
 
+def test_suggest_reads_each_secret_once_per_side(client, ab, monkeypatch):
+    """Read both sides runs the comparison three times (as is, with mappings, with rewrites): every
+    secret, listing and metadata read reaches Vault once, the later passes come from memory."""
+    from collections import Counter
+
+    from lockstep.vault import VaultClient
+    counts: Counter = Counter()
+    real = VaultClient.request
+
+    async def counting(self, method, path, *a, **kw):
+        if path.startswith("apps/"):
+            counts[(self._host, method, path, str(kw.get("params") or ""))] += 1
+        return await real(self, method, path, *a, **kw)
+
+    monkeypatch.setattr(VaultClient, "request", counting)
+    out = client.post("/api/compare/suggest", json=apps(*ab)).json()
+    assert out["rewrites"]  # so all three passes ran
+    reads = [k for k in counts if "/data/" in k[2]]
+    assert len(reads) >= 10 and {n for n in counts.values()} == {1}, [k for k, n in counts.items() if n > 1]
+
+
 def test_copy_applies_rewrites_in_the_copy_direction(client, ab, vaults):
     """Releasing ELP/alerts to test writes it at the old path, with dev words read back as test."""
     raw_a = httpx.Client(base_url=f"{vaults[0]}/v1/", headers={"X-Vault-Token": "root-a"})
@@ -176,3 +197,74 @@ def test_copy_applies_rewrites_in_the_copy_direction(client, ab, vaults):
         assert next(x for x in after["secrets"] if x["path"] == "ELP/alerts")["status"] == "equal"
     finally:
         raw_a.delete("apps/metadata/enterprise-logging-app/alerts")
+
+
+# ---- unordered lists, volatile patterns and scoped rewrites, through the API
+
+def test_value_rules_through_compare_and_copy(client, ab, vaults):
+    prefix = f"rules-{uuid.uuid4().hex[:8]}/"
+    raw = [httpx.Client(base_url=f"{a}/v1/", headers={"X-Vault-Token": t}) for a, t in zip(vaults, ("root-a", "root-b"))]
+    raw[0].post(f"app-config/data/{prefix}web", json={"data": {
+        "sans": "a.example, b.example", "built": "v3 at 2026-01-01T10:00:00Z", "db_host": "db.test.internal",
+        "password": "test-pw"}}).raise_for_status()
+    raw[1].post(f"app-config/data/{prefix}web", json={"data": {
+        "sans": "b.example,a.example", "built": "v3 at 2026-03-04T05:06:07Z", "db_host": "db.dev.internal",
+        "password": "dev-pw"}}).raise_for_status()
+    rules = {"unordered_keys": [{"key": "sans", "separator": ","}],
+             "volatile": [{"key": "built", "pattern": r"\d{4}-\d{2}-\d{2}T[0-9:]+Z"}],
+             "rewrites": [{"left": "test", "right": "dev", "key": "*host*"}]}
+    try:
+        out = compare(client, *ab, rules=rules, prefix=prefix)
+        [s] = out["secrets"]
+        keys = {k["key"]: k for k in s["keys"]}
+        assert keys["sans"]["status"] == "equal" and keys["sans"]["reason"].startswith("same items in a different order")
+        assert keys["built"]["ignored"] and "volatile pattern" in keys["built"]["reason"]
+        assert keys["db_host"]["status"] == "equal" and keys["db_host"]["rewritten"]
+        assert keys["password"]["status"] == "different" and not keys["password"]["rewritten"]  # out of the rewrite's scope
+        bad = client.post("/api/compare", json={"left": {"conn_id": ab[0], "mount": "app-config"},
+                                                "right": {"conn_id": ab[1], "mount": "app-config"},
+                                                "rules": {"volatile": [{"key": "*", "pattern": "(a+)+"}]}})
+        assert bad.status_code == 422 and "repeats a group" in bad.text
+        # a copy to the right rewrites the host but never the password
+        body = {"left": {"conn_id": ab[0], "mount": "app-config", "prefix": prefix},
+                "right": {"conn_id": ab[1], "mount": "app-config", "prefix": prefix},
+                "changes": [{"path": "web", "direction": "left_to_right", "keys": ["db_host", "password"],
+                             "expected_target_version": 1}],
+                "rewrites": rules["rewrites"], "reveal": True}
+        [plan] = client.post("/api/sync/preview", json=body).json()
+        got = {k["key"]: k for k in plan["keys"]}
+        assert got["db_host"]["rewritten"] and not got["password"]["rewritten"]
+    finally:
+        for c in raw:
+            c.delete(f"app-config/metadata/{prefix}web")
+
+
+def test_builder_suggests_unordered_lists_and_volatile_values(client, ab, vaults):
+    prefix = f"suggest-{uuid.uuid4().hex[:8]}/"
+    raw = [httpx.Client(base_url=f"{a}/v1/", headers={"X-Vault-Token": t}) for a, t in zip(vaults, ("root-a", "root-b"))]
+    for i, (sans, built, uid) in enumerate((("a.example, b.example", "v3 at 2026-01-01T10:00:00Z", "6f1c1d2e-0000-4000-8000-000000000001"),
+                                            ("b.example,a.example", "v3 at 2026-03-04T05:06:07Z", "6f1c1d2e-0000-4000-8000-000000000002"))):
+        for name in ("web", "api"):
+            raw[i].post(f"app-config/data/{prefix}{name}", json={"data": {
+                "sans": sans, "scopes": ["read", "write"] if i == 0 else ["write", "read"], "built": built,
+                "run_id": uid, "password": f"pw-{i}"}}).raise_for_status()
+    try:
+        r = client.post("/api/compare/suggest", json={
+            "left": {"conn_id": ab[0], "mount": "app-config", "prefix": prefix},
+            "right": {"conn_id": ab[1], "mount": "app-config", "prefix": prefix}})
+        assert r.status_code == 200, r.text
+        out = r.json()
+        assert {(u["key"], u["separator"], u["keys"]) for u in out["unordered"]} == {("sans", ",", 2), ("scopes", None, 2)}
+        assert {(v["key"], v["what"], v["keys"]) for v in out["volatile"]} == {("built", "a timestamp", 2), ("run_id", "a UUID", 2)}
+        assert all("pw-" not in v["reason"] and "2026" not in v["reason"] for v in out["volatile"] + out["unordered"])
+        assert out["before"]["different"] == 2 and out["after"]["different"] == 2  # the password still differs
+        rules = {"unordered_keys": [{"key": u["key"], "separator": u["separator"]} for u in out["unordered"]],
+                 "volatile": [{"key": v["key"], "pattern": v["pattern"]} for v in out["volatile"]]}
+        res = compare(client, *ab, rules=rules, prefix=prefix)
+        keys = {k["key"]: k for k in res["secrets"][0]["keys"]}
+        assert keys["sans"]["status"] == keys["scopes"]["status"] == "equal"
+        assert keys["built"]["ignored"] and keys["run_id"]["ignored"] and keys["password"]["status"] == "different"
+    finally:
+        for c in raw:
+            for name in ("web", "api"):
+                c.delete(f"app-config/metadata/{prefix}{name}")

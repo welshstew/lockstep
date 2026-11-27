@@ -5,21 +5,26 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 import re
+import secrets
 import time
 from typing import Annotated, Literal
 from pathlib import Path
-from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from ..config import Settings, get_settings
 from ..session import Connection, PendingMfa, SessionData, load_session, save_session
+from ..addresses import AddressError, check_origin
+from .. import metrics, writepolicy
+from ..ratelimit import retry_after, signin_throttle
 from ..vault import VaultClient, VaultError
 
 router = APIRouter(prefix="/api/connections", tags=["connections"])
+log = logging.getLogger("lockstep.auth")
 
 MAX_CONNECTIONS = 6
 
@@ -78,11 +83,16 @@ class ConnectionOut(BaseModel):
     expires_at: float | None
     renewable: bool = False
     status: Literal["ok", "expired", "unreachable", "unknown"] = "unknown"
+    parent: str | None = None  # opened in a child namespace of this connection
+    writes: Literal["all", "some", "none"] = "all"  # the preset's write policy (some: only certain paths)
+    destroy: bool = True  # destroying secrets is allowed here
+    export: Literal["any", "encrypted", "off"] = "encrypted"  # which exports are allowed from here
 
 
 class MountOut(BaseModel):
     path: str
     description: str
+    version: str = "2"  # KV version: "1" mounts are listed only with ?kv1=true, and only read
 
 
 class MountsOut(BaseModel):
@@ -112,8 +122,34 @@ def vault_http_error(e: VaultError, *, login: bool = False) -> HTTPException:
     return HTTPException(status, detail={"message": e.message, "vault_status": e.status})
 
 
+def _throttle(settings: Settings):
+    return signin_throttle(settings.signin_max_failures, settings.signin_window_seconds)
+
+
+def signin_keys(request: Request, url: str | None = None, mount: str | None = None,
+                username: str | None = None) -> list[str]:
+    """Throttle keys: the client's address, and the user on that Vault (case-insensitive)."""
+    keys = [f"client {request.client.host if request.client else 'unknown'}"]
+    if username and url:
+        keys.append(f"user {username.strip().lower()} at {url} ({(mount or '').strip('/')})")
+    return keys
+
+
+def check_signin_throttle(settings: Settings, keys: list[str]) -> None:
+    """429 if too many sign-ins failed recently for any of the keys."""
+    wait = _throttle(settings).wait(*keys)
+    if wait:
+        secs = retry_after(wait)
+        metrics.rate_limited("signin")
+        log.warning("sign-in refused for %ds: %d failed sign-ins within %ds (%s)", secs,
+                    settings.signin_max_failures, settings.signin_window_seconds, "; ".join(keys))
+        raise HTTPException(429, headers={"Retry-After": str(secs)}, detail={
+            "message": f"Too many failed sign-ins. Try again in {secs} second{'s' if secs != 1 else ''}."})
+
+
 def client_for(conn: Connection, settings: Settings) -> VaultClient:
-    return VaultClient(conn.url, settings, token=conn.token, namespace=conn.namespace)
+    return VaultClient(conn.url, settings, token=conn.token, namespace=conn.namespace,
+                       custom=conn.preset_id is None and conn.custom)
 
 
 def get_connection(session: SessionData, conn_id: str) -> Connection:
@@ -128,7 +164,8 @@ def to_out(c: Connection, status: str = "unknown") -> ConnectionOut:
         id=c.id, name=c.name, url=None if c.preset_id is not None else c.url,
         namespace=c.namespace, preset_id=c.preset_id, auth_method=c.auth_method,
         display_name=c.display_name, policies=c.policies, expires_at=c.expires_at, renewable=c.renewable,
-        status=status)
+        status=status, parent=c.parent, **dict(zip(("writes", "destroy"), writepolicy.summary(get_settings(), c))),
+        export=writepolicy.export_mode(get_settings(), c)[0])
 
 
 def resolve_target(body: ConnectionCreate, settings: Settings) -> tuple[str, str | None, str, int | None]:
@@ -140,23 +177,22 @@ def resolve_target(body: ConnectionCreate, settings: Settings) -> tuple[str, str
         return p.url, p.namespace or body.namespace, body.name or p.name, body.preset_id
     if not body.url:
         raise HTTPException(400, detail={"message": "Either preset_id or url is required"})
-    if not settings.allow_custom_connections:
-        raise HTTPException(403, detail={"message": "Custom Vault URLs are disabled; pick a preset"})
-    u = urlparse(body.url)
-    if u.scheme not in ("http", "https") or not u.hostname:
-        raise HTTPException(400, detail={"message": "Vault URL must be http(s)://host[:port]"})
-    if settings.custom_url_patterns and not any(re.fullmatch(p, body.url) for p in settings.custom_url_patterns):
-        raise HTTPException(403, detail={"message": "This Vault URL is not on the allowed list"})
-    return body.url.rstrip("/"), body.namespace, body.name or u.netloc, None
+    try:
+        origin = check_origin(body.url, settings)
+    except AddressError as e:
+        status = 403 if not settings.allow_custom_connections or "allowed list" in str(e) else 400
+        raise HTTPException(status, detail={"message": str(e)}) from e
+    return origin, body.namespace, body.name or origin.split("://", 1)[1], None
 
 
 def connection_from_token(*, token: str, info: dict, url: str, namespace: str | None, name: str,
-                          preset_id: int | None, method: str, minted: bool) -> Connection:
+                          preset_id: int | None, method: str, minted: bool, custom: bool = True) -> Connection:
     ttl = info.get("ttl") or 0
     return Connection(
         name=name, url=url, namespace=namespace, preset_id=preset_id, token=token,
-        auth_method=method, minted=minted,
+        auth_method=method, minted=minted, custom=custom,
         display_name=info.get("display_name") or "",
+        entity_id=info.get("entity_id") or "", accessor=info.get("accessor") or "",
         policies=sorted(set(info.get("policies") or []) | set(info.get("identity_policies") or [])),
         expires_at=time.time() + ttl if ttl else None,
         renewable=bool(ttl and info.get("renewable")),
@@ -243,10 +279,28 @@ def mfa_response(session: SessionData, settings: Settings, pending: PendingMfa) 
 
 @router.post("", response_model=ConnectionOut, status_code=201,
              responses={202: {"description": "Vault wants a second factor: answer with POST /api/connections/mfa"}})
-async def create_connection(body: ConnectionCreate, response: Response, session: Sess, settings: Conf):
+async def create_connection(body: ConnectionCreate, request: Request, response: Response, session: Sess, settings: Conf):
     url, namespace, name, preset_id = resolve_target(body, settings)
     auth = body.auth
-    async with VaultClient(url, settings, namespace=namespace) as anon:
+    username = getattr(auth, "username", None)
+    keys = signin_keys(request, url, getattr(auth, "mount", None) or auth.method, username)
+    check_signin_throttle(settings, keys)
+    try:
+        out = await _sign_in(body, url, namespace, name, preset_id, response, session, settings)
+    except HTTPException as e:
+        if e.status_code == 401:  # Vault rejected the credentials
+            _throttle(settings).failed(*keys)
+            metrics.signin(auth.method, False)
+        raise
+    if username and isinstance(out, ConnectionOut):
+        _throttle(settings).succeeded(keys[-1])
+    return out
+
+
+async def _sign_in(body: ConnectionCreate, url: str, namespace: str | None, name: str, preset_id: int | None,
+                   response: Response, session: SessionData, settings: Settings):
+    auth = body.auth
+    async with VaultClient(url, settings, namespace=namespace, custom=preset_id is None) as anon:
         try:
             if isinstance(auth, TokenAuth):
                 token, minted, res = auth.token.strip(), False, {}
@@ -262,6 +316,8 @@ async def create_connection(body: ConnectionCreate, response: Response, session:
                 res = await login(auth.username, auth.password, auth.mount or auth.method)
                 token, minted = res["client_token"], True
         except VaultError as e:
+            who = f" as {auth.username}" if hasattr(auth, "username") else ""
+            log.info("sign-in to %s%s (%s) failed: Vault said %d: %s", name, who, auth.method, e.status, e.message)
             raise vault_http_error(e, login=True) from e
     constraints = mfa_constraints(res)
     if constraints is not None:
@@ -273,7 +329,7 @@ async def create_connection(body: ConnectionCreate, response: Response, session:
 
 async def finish_login(token: str, minted: bool, url: str, namespace: str | None, name: str, preset_id: int | None,
                        method: str, response: Response, session: SessionData, settings: Settings) -> ConnectionOut:
-    async with VaultClient(url, settings, token=token, namespace=namespace) as v:
+    async with VaultClient(url, settings, token=token, namespace=namespace, custom=preset_id is None) as v:
         try:
             info = await v.lookup_self()
         except VaultError as e:
@@ -283,6 +339,9 @@ async def finish_login(token: str, minted: bool, url: str, namespace: str | None
                                  preset_id=preset_id, method=method, minted=minted)
     add_connection(session, conn)
     save_session(response, session, settings)
+    metrics.signin(method, True)
+    log.info("signed in to %s as %s (%s), connection %s, policies %s", name, conn.display_name, method, conn.id,
+             ",".join(conn.policies) or "none")
     return to_out(conn, "ok")
 
 
@@ -300,8 +359,10 @@ def pending_mfa(session: Sess):
 
 
 @router.post("/mfa", response_model=ConnectionOut, status_code=201)
-async def answer_mfa(body: MfaAnswer, response: Response, session: Sess, settings: Conf):
+async def answer_mfa(body: MfaAnswer, request: Request, response: Response, session: Sess, settings: Conf):
     """Send the second factor to Vault (sys/mfa/validate) and finish the sign-in."""
+    keys = signin_keys(request)
+    check_signin_throttle(settings, keys)
     p = session.pending_mfa
     if p is None or p.expired():
         session.pending_mfa = None
@@ -310,13 +371,15 @@ async def answer_mfa(body: MfaAnswer, response: Response, session: Sess, setting
     known = {m["id"] for c in p.constraints for m in c["methods"]}
     if not body.payload or not set(body.payload) <= known:
         raise HTTPException(400, detail={"message": "Answer the methods this sign-in asked for"})
-    async with VaultClient(p.url, settings, namespace=p.namespace) as anon:
+    async with VaultClient(p.url, settings, namespace=p.namespace, custom=p.preset_id is None) as anon:
         try:
             res = await anon.request("POST", "sys/mfa/validate", token="", json={
                 "mfa_request_id": p.request_id,
                 "mfa_payload": {mid: ([code.strip()] if code.strip() else []) for mid, code in body.payload.items()}})
         except VaultError as e:
-            # A wrong passcode can be tried again until the request expires
+            # A wrong passcode can be tried again until the request expires, or the throttle stops it
+            _throttle(settings).failed(*keys)
+            metrics.signin(p.method, False)
             raise HTTPException(401, detail={"message": f"Vault didn't accept the second factor: {e.message}"}) from e
     session.pending_mfa = None
     return await finish_login(res["auth"]["client_token"], True, p.url, p.namespace, p.name, p.preset_id, p.method,
@@ -330,10 +393,85 @@ async def delete_connection(conn_id: str, response: Response, session: Sess, set
         try:
             async with client_for(conn, settings) as v:
                 await v.revoke_self()
-        except VaultError:
-            pass
-    session.connections = [c for c in session.connections if c.id != conn_id]
+        except VaultError as e:
+            log.info("signing out of %s: couldn't revoke the token (Vault said %d: %s)", conn.name, e.status, e.message)
+    # Connections opened in its namespaces use the same token: they go with it
+    session.connections = [c for c in session.connections if c.id != conn_id and c.parent != conn_id]
+    log.info("signed out of %s (%s), connection %s", conn.name, conn.display_name, conn_id)
     save_session(response, session, settings)
+
+
+class NamespaceOut(BaseModel):
+    name: str  # the child's own name, e.g. team-a
+    path: str  # its full path, e.g. eng/team-a
+
+
+class NamespacesOut(BaseModel):
+    supported: bool  # False: this Vault has no namespaces (Vault Community)
+    namespace: str | None  # the connection's own namespace
+    namespaces: list[NamespaceOut] = []
+    error: str | None = None
+
+
+NAMESPACE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+
+
+def _join_ns(parent: str | None, child: str) -> str:
+    return "/".join(x for x in ((parent or "").strip("/"), child.strip("/")) if x)
+
+
+@router.get("/{conn_id}/namespaces", response_model=NamespacesOut)
+async def list_namespaces(conn_id: str, session: Sess, settings: Conf):
+    """The child namespaces of the connection's namespace (LIST sys/namespaces): Vault
+    Enterprise and OpenBao 2.3+."""
+    conn = get_connection(session, conn_id)
+    async with client_for(conn, settings) as v:
+        try:
+            res = await v.request("LIST", "sys/namespaces")
+        except VaultError as e:
+            text = e.message.lower()
+            if "enterprise" in text or "unsupported" in text or e.status == 405:
+                return NamespacesOut(supported=False, namespace=conn.namespace)
+            if e.status == 404:  # no child namespaces
+                return NamespacesOut(supported=True, namespace=conn.namespace)
+            return NamespacesOut(supported=True, namespace=conn.namespace,
+                                 error="can't list namespaces (needs list on sys/namespaces)" if e.denied else e.message)
+    keys = (res.get("data") or {}).get("keys") or []
+    return NamespacesOut(supported=True, namespace=conn.namespace, namespaces=[
+        NamespaceOut(name=k.strip("/"), path=_join_ns(conn.namespace, k)) for k in sorted(keys)])
+
+
+class NamespaceOpen(BaseModel):
+    namespace: str = Field(min_length=1, max_length=128)  # a child of the connection's namespace
+
+
+@router.post("/{conn_id}/namespaces", response_model=ConnectionOut, status_code=201)
+async def open_namespace(conn_id: str, body: NamespaceOpen, response: Response, session: Sess, settings: Conf):
+    """A connection to a child namespace with the same token, so it can be a side like any other."""
+    conn = get_connection(session, conn_id)
+    child = body.namespace.strip("/")
+    if not all(NAMESPACE_NAME.match(p) for p in child.split("/")):
+        raise HTTPException(400, detail={"message": "A namespace name is letters, digits, '.', '_' and '-'"})
+    root = session.get(conn.parent) if conn.parent else conn
+    root = root or conn
+    full = _join_ns(conn.namespace, child)
+    for c in session.connections:  # already open
+        if (c.parent == root.id or c.id == root.id) and (c.namespace or "") == full:
+            return to_out(c, "ok")
+    async with VaultClient(conn.url, settings, token=conn.token, namespace=full,
+                           custom=conn.preset_id is None and conn.custom) as v:
+        try:
+            info = await v.lookup_self()
+        except VaultError as e:
+            raise HTTPException(400 if e.status in (400, 403, 404) else 502, detail={
+                "message": f"Can't use namespace {full}: {e.message}", "vault_status": e.status}) from e
+    derived = conn.model_copy(update={"id": secrets.token_hex(4), "namespace": full, "minted": False,
+                                      "parent": root.id, "name": f"{root.name} · {full}",
+                                      "display_name": info.get("display_name") or conn.display_name})
+    add_connection(session, derived)
+    save_session(response, session, settings)
+    log.info("opened namespace %s on %s for connection %s, as connection %s", full, conn.name, conn.id, derived.id)
+    return to_out(derived, "ok")
 
 
 class RenewOut(ConnectionOut):
@@ -364,32 +502,33 @@ async def renew_connection(conn_id: str, response: Response, session: Sess, sett
 
 
 @router.get("/{conn_id}/mounts", response_model=MountsOut)
-async def list_mounts(conn_id: str, session: Sess, settings: Conf):
+async def list_mounts(conn_id: str, session: Sess, settings: Conf, kv1: bool = False):
+    """KV v2 mounts; with kv1=true, KV v1 mounts too (for comparing: Lockstep never writes them)."""
     conn = get_connection(session, conn_id)
     async with client_for(conn, settings) as v:
         try:
-            mounts, source = await v.list_kv2_mounts()
+            mounts, source = await v.list_kv2_mounts(include_v1=kv1)
         except VaultError as e:
             raise vault_http_error(e) from e
-    return MountsOut(mounts=[MountOut(path=m.path, description=m.description) for m in mounts],
+    return MountsOut(mounts=[MountOut(path=m.path, description=m.description, version=m.version) for m in mounts],
                      source=source, complete=source == "sys/mounts")
 
 
 @router.get("/{conn_id}/mounts/{path:path}", response_model=MountOut)
-async def describe_mount(conn_id: str, path: str, session: Sess, settings: Conf):
-    """For a manually typed mount path: check it exists, is KV v2 and is accessible."""
+async def describe_mount(conn_id: str, path: str, session: Sess, settings: Conf, kv1: bool = False):
+    """For a manually typed mount path: check it exists, is KV v2 (or v1, with kv1=true) and is accessible."""
     conn = get_connection(session, conn_id)
     async with client_for(conn, settings) as v:
         try:
-            m = await v.describe_mount(path)
+            m = await v.describe_mount(path, include_v1=kv1)
         except VaultError as e:
             if e.status in (400, 403, 404):
                 raise HTTPException(404, detail={"message": f"No accessible mount at '{path}'",
                                                  "vault_status": e.status}) from e
             raise vault_http_error(e) from e
     if m is None:
-        raise HTTPException(400, detail={"message": f"'{path}' is not a KV v2 mount"})
-    return MountOut(path=m.path, description=m.description)
+        raise HTTPException(400, detail={"message": f"'{path}' is not a KV {'' if kv1 else 'v2 '}mount"})
+    return MountOut(path=m.path, description=m.description, version=m.version)
 
 
 @router.get("/{conn_id}/tree", response_model=TreeOut)

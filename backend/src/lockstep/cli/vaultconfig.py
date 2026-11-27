@@ -36,19 +36,29 @@ def load_profile(ref: str, settings) -> ConfigProfile:
         raise CliError(f"{ref}: not a configuration profile: {e.errors()[0]['msg']}") from e
 
 
+def _one_line(v, width: int = 60) -> str:
+    """A value on one line (a password policy's rules span several), cut to `width`."""
+    if v is None:
+        return "—"
+    text = " ".join(str(v).split())
+    return text if len(text) <= width else text[:width - 1] + "…"
+
+
 LABEL = {"equal": "equal", "different": "different", "left_only": "left only", "right_only": "right only"}
 
 
 def add_parsers(sub) -> None:
-    p = sub.add_parser("config", help="compare two Vaults' configuration (secrets engines, auth methods)",
+    p = sub.add_parser("config", help="compare two Vaults' configuration (secrets engines, auth methods, system settings)",
                        description="Vault configuration. Read-only.")
     psub = p.add_subparsers(dest="config_command", required=True, metavar="ACTION")
     c = psub.add_parser("compare", help="compare the secrets engines and auth methods of two Vaults",
                         description="Compare two Vaults' secrets engines and auth methods: type, plugin version, "
                                     "tuning (TTLs, listing visibility, audit settings), options, auth method "
                                     "configuration, and the roles and keys of engines both have (PKI, database, "
-                                    "Transit, SSH, Kubernetes, AWS), with sensitive fields left out. Exit codes: 0 same, 1 differences, "
-                                    "2 error.")
+                                    "Transit, SSH, Kubernetes, AWS, and others such as TOTP, Consul and Nomad compared generically), "
+                                    "and system settings (audit devices, password policies, token roles, quotas, MFA "
+                                    "methods and enforcements, registered plugins, identity entities), with sensitive "
+                                    "fields left out. Exit codes: 0 same, 1 differences, 2 error.")
     c.add_argument("--profile", metavar="FILE|NAME",
                    help="configuration profile: a YAML/JSON file or a name from $LOCKSTEP_CONFIG_PROFILES "
                         "(mappings between mount paths, value rewrites, paths to ignore)")
@@ -73,7 +83,8 @@ async def run(args) -> int:
     finally:
         await asyncio.gather(revoke(lconn, settings), revoke(rconn, settings))
     rows = ([("secrets engine", p) for p in out["mounts"]] + [("auth method", p) for p in out["auth"]]
-            + [({"keys": "key", "config": "connection"}.get(p["path"].rsplit("/", 2)[-2], "role"), p) for p in out["engines"]])
+            + [({"keys": "key", "config": "connection"}.get(p["path"].rsplit("/", 2)[-2], "role"), p) for p in out["engines"]]
+            + [(p["type"], p) for p in out["system"]])
     rows = [(k, p) for k, p in rows if args.include_system or not p["system"]]
     if args.json:
         print(json.dumps(out, indent=2))
@@ -86,10 +97,16 @@ async def run(args) -> int:
                 continue
             print(f"{LABEL[p['status']]:<11} {kind} {p['path']}" + (f" ⇄ {p['right_path']}" if p.get("right_path") else "") + f" ({p['type']})")
             for f in p["fields"]:
-                print(f"              {f['field']}: {f['left'] if f['left'] is not None else '—'} → {f['right'] if f['right'] is not None else '—'}")
+                print(f"              {f['field']}: {_one_line(f['left'])} → {_one_line(f['right'])}")
+            if p.get("not_compared") and p["status"] != "equal":
+                print("              not compared (secret): " + ", ".join(f["field"] for f in p["not_compared"]))
         counts = {s: sum(p["status"] == s for _, p in rows) for s in LABEL}
         print(f"\n{len(rows)} compared: " + ", ".join(f"{n} {LABEL[s]}" for s, n in counts.items() if n) + ".")
         for side in ("left", "right"):
+            for w in out["warnings"][side]:
+                print(f"Warning ({side}): {w}")
+            for t in out["truncated"][side]:
+                print(f"Cut off ({side}): {t}")
             for m in out["missing"][side]:
                 print(f"Missing right ({side}): {m}")
     return 1 if any(p["status"] != "equal" for _, p in rows) else 0

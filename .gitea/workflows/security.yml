@@ -7,9 +7,12 @@
 name: security-scan
 
 on:
+  # A push that only changes docs or notes runs none of this (secrets.yml still checks it for secrets)
   pull_request:
+    paths-ignore: ['**/*.md', 'docs/**']
   push:
     branches: [main]
+    paths-ignore: ['**/*.md', 'docs/**']
   workflow_dispatch:
 
 jobs:

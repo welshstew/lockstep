@@ -102,6 +102,7 @@ def explain(policies: list[Policy], mount: str, secrets: list[str], behaviour: B
     return {
         "columns": [{"id": c, "label": label} for c, label, _, _ in COLUMNS],
         "evaluation": behaviour.label,
+        "evaluation_known": behaviour.known,
         "root": acl.root,
         "rules": [{"key": e.key, "kind": e.kind, "capabilities": sorted(e.caps),
                    "sources": [{"policy": s.policy, "path": s.path, "line": s.line, "capabilities": s.capabilities}

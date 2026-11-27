@@ -220,6 +220,9 @@ services:
       LOCKSTEP_COOKIE_SECURE: "true"
       # Visitors can only use the demo's Vaults and OpenBaos, never point the server at other hosts.
       LOCKSTEP_ALLOW_CUSTOM_CONNECTIONS: "false"
+      LOCKSTEP_API_DOCS: "off"
+      # Throwaway data: visitors may see a plain export too (the default allows only encrypted ones)
+      LOCKSTEP_EXPORT_MODE: any
       LOCKSTEP_PRESET_CONNECTIONS: >-
         [{"name":"Vault A","url":"http://vault-a:8200"},
          {"name":"Vault B","url":"http://vault-b:8200"},
@@ -245,7 +248,11 @@ services:
                     "rewrites": [{"left": "enterprise-logging-app", "right": "elp"}, {"left": "test", "right": "dev"}],
                     "ignore_keys": [{"key": "api_token", "path": "**"}, {"key": "log_level", "path": "**"},
                                     {"key": "tls.*", "path": "**/certs"}]}}]
-      LOCKSTEP_DEMO_BANNER: ${DEMO_BANNER:-Public demo with throwaway data, reset every hour. Two Vaults and two OpenBaos. Sign in with userpass alice / bob / carol (password "password"), or OIDC as alice@example.com.}
+      # One client can't use up the app: measured capacity is about 20 requests a second
+      # (single process, 2026-11-24 load check), so this caps any one address at about 15%.
+      LOCKSTEP_RATE_LIMIT_PER_MINUTE: "180"
+      LOCKSTEP_RATE_LIMIT_BURST: "90"
+      LOCKSTEP_DEMO_BANNER: ${DEMO_BANNER:-Public demo with throwaway data, reset every hour. Two Vaults and two OpenBaos, all listed under Connection → Sign in to. Sign in with userpass alice / bob / carol (password "password"), or OIDC as alice@example.com.}
     mem_limit: 384m
     depends_on:
       vault-a: {condition: service_healthy}

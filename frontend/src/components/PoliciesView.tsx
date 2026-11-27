@@ -267,8 +267,8 @@ export function ExplainResultView({ result }: { result: ExplainResult }) {
       )}
       <div className="policy-sources">
         {result.root && <div className="notice warn">This token has the <strong>root</strong> policy: everything is allowed everywhere.</div>}
-        {result.evaluation && <span className="subtle eval-note" title="Vault 2.2.2 changed how some paths match (trailing slashes, case-insensitive deny); Lockstep follows the rules of the Vault it reads">
-          Matched like {result.vault_version ? `Vault ${result.vault_version}` : "the latest Vault"} ({result.evaluation})</span>}
+        {result.evaluation && result.evaluation_known !== false && <span className="subtle eval-note" title="Vault 2.2.2 changed how some paths match (trailing slashes, case-insensitive deny), and OpenBao has rules of its own; Lockstep follows the rules of the server it reads">
+          Matched like {result.product ?? "Vault"} {result.vault_version ?? ""} ({result.evaluation})</span>}
         {result.policies.map((p) => (
           <span key={`${p.origin}${p.name}`} className={`policy-chip${p.error ? " bad" : ""}`} title={p.error ?? `${p.rules} rules`}>
             <span className="mono">{p.name}</span> <span className="subtle">{p.error ? p.error : `${p.rules} rule${p.rules === 1 ? "" : "s"}`}</span>
@@ -289,6 +289,12 @@ export function ExplainResultView({ result }: { result: ExplainResult }) {
         <div className="notice info">
           You may not read every policy of your token, so these answers come from Vault itself (<span className="mono">sys/capabilities-self</span>).
           They’re complete, but the rule behind each one can’t be shown.
+        </div>
+      )}
+      {result.evaluation_known === false && !result.temporary_policy && result.mode !== "vault" && (
+        <div className="notice warn">
+          Lockstep couldn’t tell which policy rules this server follows, so it assumed those of Vault 2.2.2 or later. A few answers
+          about trailing slashes and wildcards may be wrong: <strong>Try for real</strong> in Build policies asks the server itself.
         </div>
       )}
       {!result.complete && <div className="notice warn">Some policies couldn’t be read or parsed, so this answer may be incomplete.</div>}

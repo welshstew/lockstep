@@ -120,9 +120,21 @@ jobs:
       id-token: write
     outputs:
       digest: ${{ steps.push.outputs.digest }}
+    env:
+      RH_REGISTRY_USER: ${{ secrets.RH_REGISTRY_USER }}
     steps:
       - uses: actions/checkout@v7
       - uses: sigstore/cosign-installer@v3
+
+      - name: Log in to Red Hat's registry (the Helm image)
+        if: env.RH_REGISTRY_USER != ''
+        env:
+          RH_REGISTRY_TOKEN: ${{ secrets.RH_REGISTRY_TOKEN }}
+        run: |
+          for r in registry.redhat.io registry.access.redhat.com; do
+            echo "$RH_REGISTRY_TOKEN" | docker login "$r" -u "$RH_REGISTRY_USER" --password-stdin
+          done
+
       - id: push
         name: Package and push the chart
         env:
@@ -131,13 +143,25 @@ jobs:
           set -euo pipefail
           source scan/versions.env
           mkdir -p "$RUNNER_TEMP/helm"
-          helm() { docker run --rm -v "$PWD:/w" -w /w -v "$RUNNER_TEMP/helm:/root/.config/helm" "$HELM_IMG" "$@"; }
-          echo "$TOKEN" | docker run --rm -i -v "$RUNNER_TEMP/helm:/root/.config/helm" "$HELM_IMG" \
-            registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+          # The image runs as a non-root user: run it as the runner's user, with Helm's
+          # home (registry login, cache) in a directory the job owns.
+          helm() { docker run --rm -i -u "$(id -u):$(id -g)" -e HOME=/helm -v "$RUNNER_TEMP/helm:/helm" \
+                     -v "$PWD:/w" -w /w "$HELM_IMG" "$@"; }
+          echo "$TOKEN" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
           helm package charts/lockstep -d dist
-          out=$(helm push "dist/lockstep-${{ needs.verify.outputs.version }}.tgz" "oci://ghcr.io/${{ github.repository_owner }}/charts" 2>&1)
-          echo "$out"
+          # Show helm's output whether or not it fails (set -e would otherwise exit before the
+          # echo), and retry: a push once failed with no message and passed on a re-run.
+          for attempt in 1 2 3; do
+            if out=$(helm push "dist/lockstep-${{ needs.verify.outputs.version }}.tgz" \
+                       "oci://ghcr.io/${{ github.repository_owner }}/charts" 2>&1); then
+              echo "$out"; break
+            fi
+            echo "$out"
+            if (( attempt == 3 )); then echo "::error::helm push failed 3 times"; exit 1; fi
+            echo "::warning::helm push failed (attempt $attempt); retrying"; sleep $((attempt * 20))
+          done
           digest=$(sed -n 's/^Digest: //p' <<<"$out")
+          [[ -n $digest ]] || { echo "::error::helm push printed no digest"; exit 1; }
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
       - name: Sign the chart
         run: |

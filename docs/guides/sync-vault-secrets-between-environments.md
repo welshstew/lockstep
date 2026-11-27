@@ -25,6 +25,7 @@ Lockstep applies the same rules to every copy, from the web UI or the command li
 4. **Values read fresh from the source.** When you apply, Lockstep reads the source again and writes what's there. Copied values never pass through the browser or through a file. (To set a value yourself, such as a rotated password, use an **override**: it goes through the same review and check-and-set write.)
 5. **Audit log without values.** Every write is logged with who made it, from where to where, the versions and the outcome, but never the values.
 6. **"No access" is not "missing".** A secret you can't read on either side can't be copied.
+7. **Limits per Vault, if you want them.** An admin can make a Vault read-only in Lockstep, limit writes to some paths, or require approved plans for it, on top of Vault's own policies. See [write policy per Vault](../configuration.md#write-policy-per-vault).
 
 ## Three ways to apply a sync
 
@@ -34,9 +35,11 @@ Compare, stage copies with ← and →, review, then **Apply**. This suits someo
 
 ### 2. As a sync plan, for someone else to apply
 
-Often the person who spots the differences isn't allowed to write to production. In the review, **Save as plan** downloads a signed file that holds paths, keys, directions and versions. Copied values are never in it; values you typed yourself are, if you agree to it. It also serves as a report of what needs updating, and from where.
+Often the person who spots the differences isn't allowed to write to production. In the review, **Save as plan** downloads a signed file that holds paths, keys, directions and versions. Copied values are never in it, and neither are values you typed yourself: whoever applies the plan types those again, and Lockstep checks they match yours. It also serves as a report of what needs updating, and from where.
 
 Anyone with write access to the targets opens the plan in Lockstep, checks it against both Vaults, and applies it. **If anything in it changed since the plan was made, nothing is written**, and the plan has to be made again. See [Sync plans](../usage.md#sync-plans).
+
+For production, plans can carry more guardrails: a second person's **approval** before they apply, **signatures** that let a plan made on dev's Lockstep be applied on prod's, a **write policy** per Vault so prod's secrets change only through approved plans, and an **undo plan** after the apply. [Promoting secrets from dev to prod with approvals](promote-vault-secrets-with-approvals.md) walks through it.
 
 ### 3. From the command line
 
@@ -70,6 +73,7 @@ The person or role applying a sync needs `create` and `update` on the target's d
 
 ## Next steps
 
+- [Promoting secrets from dev to prod with approvals](promote-vault-secrets-with-approvals.md)
 - [How to compare secrets between two HashiCorp Vault clusters](compare-hashicorp-vault-clusters.md)
 - [Detecting secret drift between Vault environments in CI](detect-vault-secret-drift-in-ci.md)
 - [Try the live demo](https://demo.getlockstep.cloud): `alice` can write, `bob` is read-only. Both use the password `password`.

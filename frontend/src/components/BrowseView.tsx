@@ -14,6 +14,9 @@ export interface BrowseTarget {
   prefix: string;
   label: string;
   url?: string | null; // the Vault's address, for snippets
+  writes?: "all" | "some" | "none"; // the preset's write policy
+  destroy?: boolean; // destroying allowed here
+  export?: "any" | "encrypted" | "off"; // exports allowed from here
 }
 
 type Go = (view: "compare" | "expiry" | "policies" | "policy-build" | "transfer", side: "left" | "right", folder: string) => void;
@@ -68,7 +71,7 @@ export function BrowseView({ config, targets, reveal, onInspect, onGo }: Props) 
   const [reviewing, setReviewing] = useState(false);
   const [unwrapping, setUnwrapping] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const writable = !config.read_only;
+  const writable = !config.read_only && target?.writes !== "none";
   const key = target ? `${target.conn_id}|${target.mount}` : "";
 
   const setStage = (v: boolean) => { setStageState(v); save(STAGE_KEY, v); };
@@ -227,6 +230,8 @@ export function BrowseView({ config, targets, reveal, onInspect, onGo }: Props) 
           </label>
         )}
         {config.read_only && <span className="badge unknown" title="LOCKSTEP_READ_ONLY">read-only server</span>}
+        {!config.read_only && target?.writes === "none" && <span className="badge unknown" title="This Vault's preset is read-only on this Lockstep server">read-only here</span>}
+        {!config.read_only && target?.writes === "some" && <span className="badge unknown" title="This Vault's preset limits which paths Lockstep may write">writes limited</span>}
       </div>
       {error && <div className="notice error" role="alert">{error}</div>}
 
@@ -333,7 +338,7 @@ function SecretPanel({ target, path, config, reveal, stage, onStage, onInspect, 
   const [sharing, setSharing] = useState(false);
   const [snippets, setSnippets] = useState(false);
   const [asYaml, setAsYaml] = useState(false);
-  const writable = !config.read_only;
+  const writable = !config.read_only && target.writes !== "none";
 
   const loadInfo = useCallback(async (v: number | null) => {
     try {
@@ -653,7 +658,7 @@ function SecretPanel({ target, path, config, reveal, stage, onStage, onInspect, 
               {writable && vInfo?.deleted && !vInfo.destroyed && info.caps.undelete !== false && (
                 <button type="button" className="btn small" onClick={() => setConfirm({ label: `Undelete v${version}`, edit: { path, action: "undelete", versions: [version!] } })}>Undelete v{version}</button>
               )}
-              {writable && vInfo && !vInfo.destroyed && config.allow_destroy !== false && info.caps.destroy_versions !== false && (
+              {writable && vInfo && !vInfo.destroyed && config.allow_destroy !== false && target.destroy !== false && info.caps.destroy_versions !== false && (
                 <button type="button" className="btn ghost small danger" onClick={() => setConfirm({ label: `Destroy the data of v${version} (can’t be undone)`, typed: `destroy v${version}`,
                   edit: { path, action: "destroy", versions: [version!] } })}>Destroy v{version}…</button>
               )}
@@ -704,7 +709,7 @@ function SecretPanel({ target, path, config, reveal, stage, onStage, onInspect, 
             <button type="button" className="btn ghost small" onClick={() => onGo("policies", target.side, folder)}>Why can I…?</button>
             <button type="button" className="btn ghost small" onClick={() => onGo("policy-build", target.side, folder)}
                     title="Start a policy draft that lets someone read this folder; adjust it in Policies › Build">Policy for this folder…</button>
-            {config.export_mode !== "off" && <button type="button" className="btn ghost small" onClick={() => onGo("transfer", target.side, folder)}>Export this folder…</button>}
+            {(target.export ?? config.export_mode) !== "off" && <button type="button" className="btn ghost small" onClick={() => onGo("transfer", target.side, folder)}>Export this folder…</button>}
             {info.state === "present" && info.caps.read !== false && (
               <button type="button" className="btn ghost small" aria-expanded={sharing} onClick={() => setSharing(!sharing)}>Share once…</button>
             )}
@@ -719,7 +724,7 @@ function SecretPanel({ target, path, config, reveal, stage, onStage, onInspect, 
               {info.state === "deleted" && info.caps.undelete !== false && (
                 <button type="button" className="btn small" onClick={() => setConfirm({ label: `Undelete v${info.current_version}`, edit: { path, action: "undelete", versions: [info.current_version!] } })}>Undelete v{info.current_version}</button>
               )}
-              {config.allow_destroy !== false && info.caps.destroy !== false && (
+              {writable && config.allow_destroy !== false && target.destroy !== false && info.caps.destroy !== false && (
                 <button type="button" className="btn ghost small danger" onClick={() => setDestroying(true)}>Destroy secret…</button>
               )}
             </div>

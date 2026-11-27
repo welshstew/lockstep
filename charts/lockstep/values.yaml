@@ -33,12 +33,27 @@ vaults: []
 #    url: https://vault.prod.example.com
 #    browserUrl: https://vault.prod.example.com
 #    namespace: ""                   # Vault Enterprise namespace (optional)
+#    writable: false                 # compare and read only: nothing is written to this Vault from Lockstep
+#    exportMode: "off"               # no exports from this Vault, whatever exportMode says
+#  - name: Development
+#    url: https://vault.dev.example.com
+#    writePaths: ["app-config/**"]   # writes only here (KV: mount/path; otherwise the API path)
+#    denyPaths: ["app-config/*/break-glass/**"]
+#    allowDestroy: false             # no Destroy here, whatever allowDestroy says
+#    approvals: 1                    # secrets change here only through plans someone else approved
+#    exportMode: any                 # plain exports allowed from this Vault
 
 allowCustomConnections: false       # let users type any Vault address (SSRF risk; see docs)
-customUrlPatterns: []               # regexes a custom address must fully match
+customUrlPatterns: []               # regexes a custom address's origin (scheme://host[:port]) must fully match
+customAllowPrivate: false           # custom addresses may resolve to private, loopback or link-local IPs
 maxTreeSecrets: 5000
-# Secret-engine exports hold values: any (users choose encrypted or plain) | encrypted | off
-exportMode: any
+# Secret-engine exports hold values: encrypted (only with a one-time key) | any (users choose
+# encrypted or plain) | off. A Vault's own exportMode (under vaults) replaces this for that Vault.
+exportMode: encrypted
+# Teams an export can be encrypted to: members open it with their own age identity (or age -d)
+exportRecipients: []
+#  - name: Platform
+#    recipients: ["age1…", "age1…"]
 # Offer Destroy (every version and the metadata of a secret, no undo). Vault policies still apply.
 allowDestroy: true
 # Look-only: refuse every write from Lockstep (browsing, comparing, exports and policies still work)
@@ -47,8 +62,89 @@ readOnly: false
 policyApply: "on"
 # Create userpass users and reset their passwords (Policies › Roles): on | off. Meant for dev Vaults
 userWrite: "off"
+auditReveals: "off"                 # audit-log a secret.reveal event when values are shown (names only)
+apiDocs: "on"                       # Swagger UI at /api/docs and /api/openapi.json; "off" hides them
 # Offer Copy next to shown values in Browse
 allowClipboard: true
+
+# Sync and access plans that travel between installations (docs: configuration.md#plans-between-installations).
+# Without a signing key, plans verify only on installations with the same session key.
+plans:
+  issuer: ""                        # this installation's name in plans (default: publicUrl's host)
+  ttlHours: 168                     # how long a new plan can be applied
+  approvals: 0                      # 1: every sync plan applied here needs someone else's approval
+  signingKeySecret:                 # a Secret holding the Ed25519 private key (`lockstep plan-key` makes one)
+    name: ""
+    key: signing-key
+  trustedKeys: []                   # installations whose plans this one applies
+#    - {name: dev-lockstep, key: <base64 public key>}
+
+# Prometheus metrics at /metrics on the http port: API requests and latency by route template,
+# calls to each Vault, sign-ins and 429s. Labels never hold secret paths, users or tokens.
+metrics:
+  enabled: false
+  # Optional: a Secret holding a bearer token Prometheus must send (LOCKSTEP_METRICS_TOKEN)
+  tokenSecret:
+    name: ""
+    key: token
+  serviceMonitor:                   # for the Prometheus Operator (needs its CRDs)
+    enabled: false
+    interval: 30s
+    labels: {}                      # e.g. release: kube-prometheus-stack
+
+# A scheduled drift check: a CronJob runs `lockstep compare` between two locations and fails
+# (and optionally pushes gauges to a Prometheus Pushgateway) when there's drift. It signs in to
+# each Vault with its own service account (Vault's kubernetes auth), or a token from a Secret.
+# See docs/drift-monitoring.md.
+driftCheck:
+  enabled: false
+  schedule: "17 * * * *"            # hourly
+  suspend: false
+  left:
+    addr: ""                        # how the job reaches this Vault, e.g. https://vault.prod.svc:8200
+    namespace: ""
+    mount: ""
+    prefix: ""
+    name: ""                        # label in metrics and logs (default: the host)
+    role: ""                        # kubernetes auth: the Vault role for the job's service account
+    authMount: kubernetes
+    tokenSecret: {name: "", key: token}   # instead of kubernetes auth: a Secret with a Vault token
+  right:
+    addr: ""
+    namespace: ""
+    mount: ""
+    prefix: ""
+    name: ""
+    role: ""
+    authMount: kubernetes
+    tokenSecret: {name: "", key: token}
+  profile: ""                       # a name from `profiles`
+  # Accepted drift, from `lockstep baseline update`: the JSON itself, or a ConfigMap you keep
+  baseline: ""
+  baselineConfigMap: {name: "", key: drift.json}
+  failOn: ""                        # any | new | changed (default: new with a baseline, any without)
+  waivers: []                       # [{path, key, owner, reason, expires}]; an expired one fails the run
+  pushgateway:
+    url: ""                         # e.g. http://pushgateway.monitoring:9091
+    job: lockstep
+  extraArgs: []                     # more `lockstep compare` options
+  serviceAccount:
+    create: true
+    name: ""                        # default: <release>-drift-check; bind your Vault role to it
+    annotations: {}
+  concurrencyPolicy: Forbid
+  activeDeadlineSeconds: 1800
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  resources:
+    requests: {cpu: 20m, memory: 96Mi}
+    limits: {memory: 384Mi}
+  egress: []                        # with networkPolicy.enabled: rules to the Pushgateway (Vaults use vaultEgress)
+
+# Server log on stderr (the audit log on stdout is separate)
+logging:
+  level: info       # debug | info | warning | error; debug adds every call to a Vault
+  format: text      # text | json
 
 vaultTls:
   verify: true

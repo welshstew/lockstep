@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import difflib
 import hashlib
-import hmac
 import json
 import uuid
 import logging
@@ -40,6 +39,9 @@ from ..vault import VaultClient, VaultError, _q
 from .connections import client_for, get_connection, vault_http_error
 from .configcopy import COPYABLE, EngineObjectChange, TuneChange, engine_path, mount_types, normalise as as_text, read_tune, tune_path
 from .guard import require_writable
+from .. import plansign
+from ..plansign import Issuer
+from .. import writepolicy
 
 router = APIRouter(prefix="/api/access", tags=["access"])
 audit = logging.getLogger("lockstep.audit")
@@ -383,14 +385,44 @@ def _guard(settings: Settings) -> None:
                                                     "server (LOCKSTEP_POLICY_APPLY). Download them for an admin instead."})
 
 
+def item_path(it: Item) -> str:
+    """The Vault path an item writes, for the preset's write policy."""
+    kind, _, rest = it.id.partition(":")
+    if kind == "policy":
+        return f"sys/policies/acl/{rest}"
+    if kind == "role":
+        mount, _, name = rest.rpartition("/")
+        return f"auth/{mount}/role/{name}"
+    if kind == "group":
+        return f"identity/group/name/{rest}"
+    if kind == "tune":
+        which, _, path = rest.partition(":")
+        return tune_path(which, path)
+    return rest  # engine: <mount>/<kind>/<name>
+
+
+def mark_refused(items: list[Item], conn: Connection, settings: Settings, log: bool = False) -> None:
+    """Items the preset's write policy forbids become invalid, with the reason."""
+    for it in items:
+        if it.status in ("ready", "denied") and it.action not in ("same", "absent"):
+            path = item_path(it)
+            if why := writepolicy.refusal(settings, conn, path):
+                it.status = "invalid"
+                it.problems.append(why)
+                if log:
+                    writepolicy.log_refusal(conn, path, "write", "access.apply", why)
+
+
 @router.post("/preview", response_model=list[Item])
 async def preview(body: AccessChanges, session: Sess, settings: Conf):
     conn = get_connection(session, body.conn_id)
     async with client_for(conn, settings) as v:
         try:
-            return await plan(v, body)
+            items = await plan(v, body)
         except VaultError as e:
             raise vault_http_error(e) from e
+    mark_refused(items, conn, settings)
+    return items
 
 
 @router.post("/apply", response_model=list[Item])
@@ -410,6 +442,7 @@ async def run_apply(v: VaultClient, conn: Connection, body: Changes, expected: d
         items = await plan(v, body)
     except VaultError as e:
         raise vault_http_error(e) from e
+    mark_refused(items, conn, get_settings(), log=True)
     policies = {f"policy:{p.name}": p for p in body.policies}
     roles = {f"role:{r.mount.strip('/')}/{r.name}": r for r in body.roles}
     groups = {f"group:{g.name}": g for g in body.group_policies}
@@ -460,7 +493,7 @@ def _audit(conn: Connection, it: Item, plan_id: str | None = None) -> None:
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "event": f"{it.kind}.{'delete' if it.action == 'delete' else 'write'}",
         "outcome": it.status,
-        "actor": {"identity": conn.display_name, "auth": conn.auth_method},
+        "actor": {"identity": conn.display_name, "auth": conn.auth_method, "entity_id": conn.entity_id, "accessor": conn.accessor},
         "target": {"vault": conn.name, "url": conn.url, "name": it.name, "previous_hash": it.hash},
         "message": "; ".join(it.problems),
         **({"plan_id": plan_id} if plan_id else {}),
@@ -470,7 +503,7 @@ def _audit(conn: Connection, it: Item, plan_id: str | None = None) -> None:
 # --------------------------------------------------------------------------- saved access plans
 
 PLAN_FORMAT = "lockstep.access-plan"
-PLAN_VERSION = 1
+PLAN_VERSION = 2  # 2: issuer, audience, validity and the creator's entity ID
 
 
 class PlanItem(BaseModel):
@@ -485,6 +518,12 @@ class AccessPlan(BaseModel):
     id: str
     created: str
     created_by: str
+    created_by_entity: str = ""  # the creator's Vault entity ID and token accessor (lookup-self)
+    created_by_accessor: str = ""
+    issuer: Issuer | None = None
+    audience: list[str] = []
+    not_before: str | None = None
+    expires_at: str | None = None
     vault: str  # preset name, or the address of a custom connection
     preset: bool
     namespace: str | None = None
@@ -498,8 +537,12 @@ def _plan_key(settings: Settings) -> bytes:
     return hashlib.sha256(b"lockstep-access-plan-v1\0" + settings.session_key.encode()).digest()
 
 
+_NEWER = ("created_by_entity", "created_by_accessor", "issuer", "audience", "not_before", "expires_at")
+
+
 def _canonical(data: dict) -> bytes:
-    data = {k: x for k, x in data.items() if k != "signature"}
+    # Fields added in version 2 are left out when empty, so version 1 plans still verify
+    data = {k: x for k, x in data.items() if k != "signature" and not (k in _NEWER and not x)}
     if isinstance(data.get("changes"), dict):
         # Added after the first plans were signed: left out when empty so those still verify
         data["changes"] = {k: x for k, x in data["changes"].items()
@@ -509,25 +552,23 @@ def _canonical(data: dict) -> bytes:
 
 
 def _sign(p: AccessPlan, settings: Settings) -> AccessPlan:
-    p.signature = hmac.new(_plan_key(settings), _canonical(p.model_dump(mode="json")), hashlib.sha256).hexdigest()
+    p.signature = plansign.sign(_canonical(p.model_dump(mode="json")), settings, _plan_key(settings))
     return p
 
 
 def load_access_plan(raw: dict[str, Any], settings: Settings) -> AccessPlan:
     if raw.get("format") != PLAN_FORMAT:
         raise HTTPException(400, detail={"message": "This isn't a Lockstep access plan file."})
-    if raw.get("version") != PLAN_VERSION:
+    if raw.get("version") not in (1, PLAN_VERSION):
         raise HTTPException(400, detail={"message": f"Unsupported access plan version {raw.get('version')!r}."})
     try:
         p = AccessPlan.model_validate(raw)
     except ValidationError as e:
         raise HTTPException(400, detail={"message": f"The plan file is malformed: {e.errors()[0]['msg']}"}) from e
     # Re-serialise before checking, so the signature covers exactly what will be applied
-    want = hmac.new(_plan_key(settings), _canonical(p.model_dump(mode="json")), hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(want, str(raw.get("signature", ""))):
-        raise HTTPException(400, detail={"message": (
-            "This plan file was changed after it was created, or was made by a different Lockstep server. "
-            "Nothing can be applied from it: make the plan again.")})
+    plansign.verify(_canonical(p.model_dump(mode="json")), str(raw.get("signature", "")), p.issuer, settings,
+                    _plan_key(settings))
+    plansign.check_valid(settings, p.not_before, p.expires_at, p.audience)
     return p
 
 
@@ -559,11 +600,12 @@ async def create_plan(body: AccessChanges, session: Sess, settings: Conf):
         raise HTTPException(400, detail={"message": "Nothing in these changes would be written, so there's no plan to save."})
     vault, preset = _vault_of(conn, settings)
     p = AccessPlan(id=uuid.uuid4().hex[:12], created=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                   created_by=conn.display_name or conn.auth_method, vault=vault, preset=preset,
+                   created_by=conn.display_name or conn.auth_method, created_by_entity=conn.entity_id,
+                   created_by_accessor=conn.accessor, **plansign.validity(settings), vault=vault, preset=preset,
                    namespace=conn.namespace or None, changes=Changes(**body.model_dump(exclude={"conn_id"})),
                    expected={i.id: i.hash for i in items}, items=[PlanItem(id=i.id, action=i.action, status=i.status) for i in items])
     audit.info(json.dumps({"ts": p.created, "event": "access.plan", "outcome": "created", "plan_id": p.id,
-                           "actor": {"identity": conn.display_name, "auth": conn.auth_method},
+                           "actor": {"identity": conn.display_name, "auth": conn.auth_method, "entity_id": conn.entity_id, "accessor": conn.accessor},
                            "target": {"vault": conn.name, "url": conn.url}, "items": [i.id for i in p.items]}, sort_keys=True))
     return _sign(p, settings)
 

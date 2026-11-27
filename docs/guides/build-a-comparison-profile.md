@@ -89,6 +89,15 @@ Open **Edit** to change a profile by hand.
 - A word can be on one side of only one rewrite. All the rewrites apply at once, longest word first, so `enterprise-logging-app` ⇄ `elp` and `test` ⇄ `dev` turn `enterprise-logging-app-test` into `elp-dev`.
 - Certificates, keys and base64 data are never rewritten. Numbers and booleans keep their type.
 
+**Patterns in rewrites.** A rewrite can have placeholders: `{app}-test-db` ⇄ `{app}-dev-db` reads `billing-test-db` as `billing-dev-db`, and copies the other way read it back. A placeholder stands for one word.
+
+**Other rules** for differences that are meant to be there, each shown as *ignored* or equal with the reason rather than hidden:
+- **Ignored field:** for a key holding JSON or YAML, ignore one field inside it (`config` field `db.password`, or `tls.*`), while any other field that differs still counts.
+- **Unordered list:** the same items in another order are equal, for a list in JSON or YAML (name the field) or in plain text (name the separator, such as `,`).
+- **Volatile pattern:** text matching a regex, such as a timestamp or a UUID, is blanked on both sides before comparing.
+
+Building a profile from what's in both Vaults suggests unordered lists and volatile patterns too, with how many keys each would affect. See [comparison profiles](../usage.md#comparison-profiles) for every rule.
+
 **Copies follow both.** Copying a left-only `services/search/prod/config` to the right writes `services/search/staging/config`. A copied value has `prod` written as `staging` on the way right, and the other way on the way left. The review marks each rewritten key, and with **Show values** on it shows exactly what will be written. Sync plans and `lockstep apply` do the same.
 
 **Seeing the effect.** The summary line above the results counts the pairs a mapping matched, the key differences and paths ignored, and the keys that are equal only once the rewrites are applied. In the results, those keys say **equal after rewrite** and ignored ones say **ignored**, so you can always see how much the profile is doing.

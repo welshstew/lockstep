@@ -6,12 +6,11 @@ import { AccessApply } from "./AccessApply";
 import type { AccessChanges } from "../types";
 
 type Source = "mount" | "auth" | "engine";
-const NOT_COPIED = new Set(["config", "static-roles", "static-role", "library", "roleset", "static-account", "impersonated-account"]);
 function copyable(source: Source, p: ConfigPair, to: "left" | "right"): boolean {
   const from = to === "right" ? p.left : p.right;
   if (!from || p.status === "equal" || p.system) return false;
   if (source !== "engine") return p.status === "different";  // tuning: the mount must exist on both sides
-  return !NOT_COPIED.has(p.path.split("/")[1] ?? "");
+  return !!p.copyable;  // the server says which roles and keys it can copy
 }
 
 const LABEL: Record<ConfigPair["status"], string> = { equal: "Equal", different: "Different", left_only: "Left only", right_only: "Right only" };
@@ -70,6 +69,13 @@ function Section({ title, rows, sides, source, onCopy }: { title: string; rows: 
                 <div className="subtle set-aside" title="These servers return different sets of fields (Vault and OpenBao, or different versions)">
                   Not compared, as only one server has them or one leaves them automatic:{" "}
                   {p.set_aside.map((f, i) => <span key={f.field}>{i > 0 && ", "}<span className="mono">{f.field}</span> ({show(f.left)} / {show(f.right)})</span>)}
+                </div>
+              )}
+              {p.not_compared && p.not_compared.length > 0 && (
+                <div className="subtle set-aside" title="Lockstep never compares, shows or copies secret values, even when Vault returns them">
+                  Not compared, as they hold secrets:{" "}
+                  {p.not_compared.map((f, i) => <span key={f.field}>{i > 0 && ", "}<span className="mono">{f.field}</span>
+                    {f.reason !== "sensitive" && " (the name looks secret)"}</span>)}
                 </div>
               )}
               {onCopy && (copyable(source, p, "right") || copyable(source, p, "left")) && (
@@ -198,7 +204,8 @@ export function ConfigView({ sides, canApply = false }: { sides: CompareSides; c
     <section className="config">
       <div className="card policies-head">
         <div className="subtle">Compares the two Vaults’ secrets engines and auth methods: type, plugin version, tuning (TTLs, listing visibility, audit settings),
-          options, each auth method’s configuration, and the roles and keys of engines both have (PKI, database, Transit, SSH, Kubernetes, AWS, Azure, GCP, LDAP), with secrets left out. A configuration profile pairs mounts whose paths differ. Read-only. On the command line: <span className="mono">lockstep config compare</span>.</div>
+          options, each auth method’s configuration, the roles and keys of engines both have (PKI, database, Transit, SSH, Kubernetes, AWS, Azure, GCP, LDAP, and others such as TOTP, Consul and Nomad compared generically),
+          and system settings: audit devices, password policies, token roles, quotas, MFA, registered plugins and identity entities, by name. Secrets are left out. A configuration profile pairs mounts whose paths differ. Read-only. On the command line: <span className="mono">lockstep config compare</span>.</div>
         <div className="field-row"><ProfilePicker value={profile} onChange={setProfile} /><span className="spacer" />
           <button type="button" className="btn primary" onClick={run} disabled={busy}>{busy && <span className="spinner" />} {result ? "Compare again" : "Compare configuration"}</button>
         </div>
@@ -214,6 +221,12 @@ export function ConfigView({ sides, canApply = false }: { sides: CompareSides; c
             <div key={s} className="notice warn"><span className={`scope ${s}`}>{sides[s]!.label}</span> is missing rights: {result.missing[s].join(", ")}.
               {result.missing[s].some((m) => m.includes("sys/mounts")) && " The engines shown come from the UI listing, without their tuning."}</div>
           ))}
+          {(["left", "right"] as const).flatMap((s) => (result.warnings?.[s] ?? []).map((w) => (
+            <div key={`w${s}${w}`} className="notice warn config-warning"><span className={`scope ${s}`}>{sides[s]!.label}</span> {w}</div>
+          )))}
+          {(["left", "right"] as const).map((s) => (result.truncated?.[s] ?? []).length > 0 && (
+            <div key={`t${s}`} className="notice info"><span className={`scope ${s}`}>{sides[s]!.label}</span> has more than Lockstep compares at once, so these lists were cut off: {result.truncated[s].join("; ")}.</div>
+          ))}
           <div className="results-head">
             <div className="filters">
               {Object.entries(result.summary).filter(([, n]) => n).map(([s, n]) => <span key={s} className={`badge ${s === "equal" ? "equal" : s === "different" ? "different" : s}`}>{n} {LABEL[s as ConfigPair["status"]].toLowerCase()}</span>)}
@@ -226,6 +239,7 @@ export function ConfigView({ sides, canApply = false }: { sides: CompareSides; c
           <Section title="Secrets engines" rows={filter(result.mounts)} sides={sides} source="mount" onCopy={canApply ? copy : undefined} />
           <Section title="Auth methods" rows={filter(result.auth)} sides={sides} source="auth" onCopy={canApply ? copy : undefined} />
           <Section title="Engine roles and keys" rows={filter(result.engines ?? [])} sides={sides} source="engine" onCopy={canApply ? copy : undefined} />
+          <Section title="System settings" rows={filter(result.system ?? [])} sides={sides} source="mount" />
           {copying && <AccessApply changes={copying.changes} label={copying.label}
                                    onClose={(done) => { setCopying(null); if (done) run(); }} />}
         </>

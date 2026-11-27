@@ -121,16 +121,51 @@ def _probe_paths(vocab=SEGMENTS, depth=4) -> list[str]:
 
 
 def test_behaviour_for_versions():
-    from lockstep.policy.acl import CURRENT, LEGACY, behaviour_for
+    from lockstep.policy.acl import CURRENT, LEGACY, OPENBAO, UNKNOWN, behaviour_for
     assert behaviour_for("1.21.4") is LEGACY and behaviour_for("2.2.1+ent") is LEGACY
-    assert behaviour_for("2.2.2") is CURRENT and behaviour_for("v2.3.0") is CURRENT and behaviour_for(None) is CURRENT
+    assert behaviour_for("2.2.2") is CURRENT and behaviour_for("v2.3.0") is CURRENT
+    # OpenBao's version numbers say nothing about Vault's rules: it has its own
+    assert behaviour_for("2.7.3", "OpenBao") is OPENBAO and behaviour_for("2.0.0", "OpenBao") is OPENBAO
+    assert behaviour_for(None) is UNKNOWN and behaviour_for("dev") is UNKNOWN
+    assert not UNKNOWN.known and UNKNOWN.lookup == "current" and CURRENT.known
+
+
+def test_openbao_tries_the_path_as_written_before_trimming_the_slash():
+    """OpenBao 2.7.3 (internal/vault/policy/acl.go): exact rule, then (lists) the exact rule without
+    the trailing slash, then the best wildcard rule for the path as written, then for the path without
+    the slash. Vault 2.2.2 pools both forms; Vault 2.2.1 trims first."""
+    from lockstep.policy.acl import CURRENT, LEGACY, OPENBAO
+    pols = [parse_policy('path "b*" { capabilities = ["read", "update", "patch"] }\n'
+                         'path "b/+" { capabilities = ["read", "patch"] }', "p")]
+    bao = ACL(pols, OPENBAO)
+    assert bao.decide("b/").capabilities == ["read", "patch"]  # b/+ matches "b/" (an empty segment)
+    assert bao.decide("b/a/").capabilities == ["read", "update", "patch"]  # b/+ can't match 3 segments
+    assert ACL(pols, CURRENT).decide("b/a/").capabilities == ["read", "patch"]  # pooled with "b/a"
+    assert ACL(pols, LEGACY).decide("b/").capabilities == ["read", "update", "patch"]  # "b" first
+    # Only as a fallback: the trimmed form when nothing matches the path as written
+    trim = ACL([parse_policy('path "c/+" { capabilities = ["list"] }', "p")], OPENBAO)
+    assert trim.decide("c/x/").capabilities == ["list"] and trim.decide("c/x/", list_op=False).capabilities == ["deny"]
+    # No case-insensitive deny on OpenBao
+    mixed = ACL([parse_policy('path "a/*" { capabilities = ["read"] }\npath "A/*" { capabilities = ["deny"] }', "p")], OPENBAO)
+    assert mixed.decide("a/x").capabilities == ["read"]
+
+
+def test_openbao_scan_capability():
+    from lockstep.policy.acl import OPENBAO
+    r = parse_policy('path "kv/metadata/*" { capabilities = ["scan", "list"] }').rules[0]
+    assert r.unknown == []
+    assert ACL([parse_policy('path "kv/metadata/*" { capabilities = ["scan", "list"] }', "p")],
+               OPENBAO).decide("kv/metadata/a/").capabilities == ["list", "scan"]
 
 
 def _check_against(addr: str, token: str, trials: int, vocab, depth: int, seed: int) -> None:
     from lockstep.policy.acl import behaviour_for
+    from lockstep.vault import product_of
     v = httpx.Client(base_url=f"{addr}/v1/", headers={"X-Vault-Token": token}, timeout=20)
-    version = v.get("sys/seal-status").json().get("version")
-    behaviour = behaviour_for(version)
+    seal = v.get("sys/seal-status").json()
+    version = seal.get("version")
+    behaviour = behaviour_for(version, product_of(seal, v.get("sys/internal/ui/mounts").json()))
+    assert behaviour.known, f"{addr}: couldn't tell which evaluation rules {version} uses"
     rnd = random.Random(seed)
     paths = _probe_paths(vocab, depth)
     names = []
@@ -151,7 +186,7 @@ def _check_against(addr: str, token: str, trials: int, vocab, depth: int, seed: 
             acl = ACL([parse_policy(t, n) for n, t in zip(pnames, texts)], behaviour)
             wrong = {p: (sorted(vault[p]), sorted(acl.decide(p).capabilities)) for p in paths
                      if sorted(vault[p]) != sorted(acl.decide(p).capabilities)}
-            assert not wrong, (f"Vault {version} ({behaviour.label}), trial {trial}: policies {texts}\n"
+            assert not wrong, (f"{addr} {version} ({behaviour.label}), trial {trial}: policies {texts}\n"
                                f"vault vs lockstep: {dict(list(wrong.items())[:5])}")
             v.post("auth/token/revoke", json={"token": token_})
     finally:
@@ -181,13 +216,19 @@ def test_matching_agrees_with_the_latest_vault(vocab, depth, trials, seed):
     _check_against(LATEST, "root-latest", trials * FUZZ_SCALE, vocab, depth, seed + FUZZ_SEED)
 
 
+# Vault A and Vault B: under `make test-openbao` (and the weekly openbao workflow) Vault B is OpenBao
+SIDES = [pytest.param(0, "root-a", id="vault-a"), pytest.param(1, "root-b", id="vault-b")]
+
+
 @pytest.mark.usefixtures("vaults")
-def test_mixed_case_matching_agrees_with_vault(vaults):
+@pytest.mark.parametrize("side,token", SIDES)
+def test_mixed_case_matching_agrees_with_vault(vaults, side, token):
     """Upper and lower case in rules and paths: deny rules ignore case from Vault 2.2.2."""
-    _check_against(vaults[0], "root-a", 60, MIXED, 3, 20261122)
+    _check_against(vaults[side], token, 60, MIXED, 3, 20261122)
 
 
 @pytest.mark.usefixtures("vaults")
-def test_matching_agrees_with_vault(vaults):
+@pytest.mark.parametrize("side,token", SIDES)
+def test_matching_agrees_with_vault(vaults, side, token):
     """Random policies: Lockstep's answer must equal Vault's for every probe path."""
-    _check_against(vaults[0], "root-a", 150, SEGMENTS, 4, 20261121)
+    _check_against(vaults[side], token, 150, SEGMENTS, 4, 20261121)

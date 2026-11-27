@@ -10,7 +10,7 @@ os.environ.setdefault("LOCKSTEP_SESSION_KEY", "test-session-key-0123456789abcdef
 os.environ.setdefault("LOCKSTEP_COOKIE_SECURE", "false")
 os.environ.setdefault("LOCKSTEP_USER_WRITE", "on")
 os.environ.setdefault("LOCKSTEP_PRESET_CONNECTIONS", json.dumps([
-    {"name": "Vault A", "url": VAULT_A, "browser_url": "http://localhost:8200"},
+    {"name": "Vault A", "url": VAULT_A, "browser_url": "http://localhost:8200", "export": "any"},
     {"name": "Vault B", "url": VAULT_B, "browser_url": "http://localhost:8201"},
 ]))
 
@@ -30,6 +30,14 @@ def client():
     from lockstep.main import create_app
     with TestClient(create_app(), headers={"X-Requested-With": "lockstep"}) as c:
         yield c
+
+
+@pytest.fixture(autouse=True)
+def _fresh_signin_throttle():
+    """Failed sign-ins in one test mustn't throttle the next (the throttle lives per process)."""
+    from lockstep import ratelimit
+    ratelimit._throttles.clear()
+    yield
 
 
 def has_plugin_b(kind: str, name: str) -> bool:

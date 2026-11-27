@@ -12,21 +12,24 @@ The session cookie is SameSite=Lax, which is sent on the IdP's top-level redirec
 
 from __future__ import annotations
 
+import logging
 import secrets
 from typing import Annotated
 from urllib.parse import parse_qs, urlencode, urlparse
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from ..config import Settings, get_settings
+from .. import metrics
 from ..session import PendingMfa, PendingOidc, SessionData, load_session, save_session
 from ..vault import VaultClient, VaultError
 from .connections import (ConnectionCreate, TokenAuth, add_connection, connection_from_token, mfa_constraints,
-                          resolve_target, vault_http_error)
+                          check_signin_throttle, resolve_target, signin_keys, vault_http_error)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+log = logging.getLogger("lockstep.auth")
 
 Sess = Annotated[SessionData, Depends(load_session)]
 Conf = Annotated[Settings, Depends(get_settings)]
@@ -57,8 +60,8 @@ def callback_url(settings: Settings) -> str:
 @router.post("/methods")
 async def login_methods(body: Target, settings: Conf):
     """Auth methods the chosen Vault shows on its login screen (unauthenticated)."""
-    url, namespace, _, _ = resolve_target(body.as_create(), settings)
-    async with VaultClient(url, settings, namespace=namespace) as v:
+    url, namespace, _, preset_id = resolve_target(body.as_create(), settings)
+    async with VaultClient(url, settings, namespace=namespace, custom=preset_id is None) as v:
         try:
             return {"methods": await v.login_methods()}
         except VaultError as e:
@@ -66,10 +69,13 @@ async def login_methods(body: Target, settings: Conf):
 
 
 @router.post("/oidc/start")
-async def oidc_start(body: OidcStart, session: Sess, settings: Conf):
+async def oidc_start(body: OidcStart, request: Request, session: Sess, settings: Conf):
+    # Starting OIDC isn't a guess (the IdP checks the password), but a client that's been failing
+    # sign-ins waits like on any other method
+    check_signin_throttle(settings, signin_keys(request))
     url, namespace, name, preset_id = resolve_target(body.as_create(), settings)
     nonce = secrets.token_urlsafe(24)
-    async with VaultClient(url, settings, namespace=namespace) as v:
+    async with VaultClient(url, settings, namespace=namespace, custom=preset_id is None) as v:
         try:
             auth_url = await v.oidc_auth_url(body.mount, body.role, callback_url(settings), nonce)
         except VaultError as e:
@@ -96,6 +102,8 @@ async def oidc_callback(session: Sess, settings: Conf, state: str = Query(""), c
     session.pending_oidc = None  # single use, whatever happens next
 
     def fail(msg: str) -> RedirectResponse:
+        log.info("OIDC sign-in%s failed: %s", f" to {pending.name}" if pending else "", msg)
+        metrics.signin("oidc", False)
         r = RedirectResponse(_back(settings, oidc_error=msg), status_code=303)
         save_session(r, session, settings)
         return r
@@ -111,7 +119,7 @@ async def oidc_callback(session: Sess, settings: Conf, state: str = Query(""), c
     if not code:
         return fail("The identity provider returned no authorisation code.")
 
-    async with VaultClient(pending.url, settings, namespace=pending.namespace) as v:
+    async with VaultClient(pending.url, settings, namespace=pending.namespace, custom=pending.preset_id is None) as v:
         try:
             auth = await v.oidc_callback(pending.mount, state, code, pending.nonce)
         except VaultError as e:
@@ -125,7 +133,7 @@ async def oidc_callback(session: Sess, settings: Conf, state: str = Query(""), c
         save_session(r, session, settings)
         return r
     token = auth["client_token"]
-    async with VaultClient(pending.url, settings, token=token, namespace=pending.namespace) as v:
+    async with VaultClient(pending.url, settings, token=token, namespace=pending.namespace, custom=pending.preset_id is None) as v:
         try:
             info = await v.lookup_self()
         except VaultError as e:
@@ -137,6 +145,8 @@ async def oidc_callback(session: Sess, settings: Conf, state: str = Query(""), c
         add_connection(session, conn)
     except HTTPException as e:
         return fail(e.detail["message"] if isinstance(e.detail, dict) else str(e.detail))
+    log.info("signed in to %s as %s (oidc), connection %s, policies %s", pending.name, conn.display_name, conn.id,
+             ",".join(conn.policies) or "none")
     r = RedirectResponse(_back(settings, oidc="ok", conn=conn.id, side=pending.side), status_code=303)
     save_session(r, session, settings)
     return r

@@ -19,7 +19,8 @@ import yaml
 from pydantic import ValidationError
 
 from ..api.connections import client_for
-from ..api.policies import ExplainError, PastedPolicy, run_compare, run_explain, run_suggest
+from ..api.policies import (ExplainError, PastedPolicy, SidePolicies, compare_sets, read_all, run_compare, run_explain,
+                            run_suggest)
 from ..policy.bundle import BundlePolicy, TerraformOptions, build_bundle
 from ..policy.compare import PolicyProfile
 from ..vault import VaultError
@@ -68,6 +69,26 @@ def add_parsers(sub) -> None:
         add_side_args(c, which, locations=False)
     add_tls_args(c)
 
+    d = psub.add_parser("diff", help="compare policy files in a directory with a Vault's policies",
+                        description="Compare the HCL or JSON policy files in a directory (as kept in Git) with the "
+                                    "live Vault's ACL policies, by meaning: a file's name without .hcl/.json is the "
+                                    "policy name. Read-only. Exit codes: 0 same, 1 differences, 2 error.")
+    d.add_argument("--dir", required=True, metavar="DIR", help="the directory of policy files (searched recursively)")
+    d.add_argument("--files-only", action="store_true",
+                   help="only compare policies that have a file; leave out the ones only in Vault")
+    d.add_argument("--ignore", action="append", default=[], metavar="NAME",
+                   help="leave out policies with this name (* patterns); repeatable. root is always left out")
+    d.add_argument("--profile", metavar="FILE|NAME", help="a policy profile, as for `policy compare` (files are the left side)")
+    d.add_argument("--profile-name", metavar="NAME", help="which profile, when the file holds several")
+    d.add_argument("--map", action="append", default=[], metavar="FILE=VAULT",
+                   help="pair a file's name with a Vault policy's, with * patterns; repeatable")
+    d.add_argument("--rewrite", action="append", default=[], metavar="FIND=REPLACE",
+                   help="rewrite the files' paths before comparing; repeatable")
+    d.add_argument("--show-equal", action="store_true", help="list equal policies too")
+    d.add_argument("--json", action="store_true", help="print the full result as JSON")
+    add_side_args(d, "vault", locations=False)
+    add_tls_args(d)
+
     s = psub.add_parser("suggest", help="suggest policies from how a mount's secrets are laid out",
                         description="Detect a layout such as <app>/<env>/... (or use --pattern) and suggest policies "
                                     "for it, as HCL. --bundle writes them as a zip for an admin.")
@@ -111,6 +132,8 @@ def _write_bundle(args, policies: list[BundlePolicy], existing: list[str] | None
 async def run(args) -> int:
     if args.policy_command == "compare":
         return await run_compare_cli(args)
+    if args.policy_command == "diff":
+        return await run_diff_cli(args)
     if args.policy_command == "suggest":
         return await run_suggest_cli(args)
     if args.policy_command == "export":
@@ -157,7 +180,10 @@ def _print(out: dict, args) -> None:
         print(f"  {s.name} ({s.origin}): " + (s.error if s.error else f"{s.rules} rule{'s' if s.rules != 1 else ''}"))
     if out["root"]:
         print("  root: everything is allowed")
-    print(f"  Vault {out.get('vault_version') or '(version unknown)'}: evaluated as {out['evaluation']}")
+    print(f"  {out.get('product') or 'Vault'} {out.get('vault_version') or '(version unknown)'}: evaluated as {out['evaluation']}")
+    if out.get("evaluation_known") is False:
+        print("  Couldn't tell which policy rules this server follows: a few answers about trailing slashes "
+              "and wildcards may be wrong.")
     if out["mode"] == "vault":
         print("  Some of your token's policies can't be read, so the answers below come from Vault "
               "(sys/capabilities-self), without the deciding rules.")
@@ -264,29 +290,95 @@ async def run_compare_cli(args) -> int:
     for side in ("left", "right"):
         if out[side].error:
             raise CliError(f"{side}: {out[side].error}")
+    return _report_pairs(out, args)
+
+
+def _report_pairs(out: dict, args, label: dict[str, str] | None = None) -> int:
     if args.json:
         print(json.dumps({**out, "left": out["left"].model_dump(), "right": out["right"].model_dump(),
                           "pairs": [p.model_dump() for p in out["pairs"]]}, indent=2, ensure_ascii=False))
     else:
-        label = {"equal": "equal", "different": "different", "left_only": "left only", "right_only": "right only",
-                 "error": "error"}
+        label = label or {"equal": "equal", "different": "different", "left_only": "left only",
+                          "right_only": "right only", "error": "error"}
+        width = max(11, *(len(v) for v in label.values()))
         for p in out["pairs"]:
             if p.status == "equal" and not args.show_equal:
                 continue
-            name = p.left if p.left == p.right else f"{p.left or '—'} ⇄ {p.right or '—'}"
+            name = p.left if p.left == p.right or not p.right else p.right if not p.left else f"{p.left} ⇄ {p.right}"
             extra = " (formatting differs)" if p.formatting else ""
-            print(f"{label[p.status]:<11} {name}{extra}" + (f"  [{p.note}]" if p.note else ""))
+            print(f"{label[p.status]:<{width}} {name}{extra}" + (f"  [{p.note}]" if p.note else ""))
             for r in p.rules:
                 if r["change"] == "same":
                     continue
                 caps = lambda c: "—" if c is None else "[" + ", ".join(c) + "]"  # noqa: E731
-                print(f"              path \"{r['path']}\"  {caps(r['left'])} → {caps(r['right'])}")
+                print(f"{'':<{width + 3}}path \"{r['path']}\"  {caps(r['left'])} → {caps(r['right'])}")
         s = out["summary"]
         print(f"\n{sum(s.values())} policies: " + ", ".join(f"{n} {label[k]}" for k, n in s.items() if n) + ".")
         for m in out["missing"]:
             print(f"Missing right: {m}")
+        for w in out.get("warnings", []):
+            print(f"Warning: {w}")
     s = out["summary"]
     return 1 if s["different"] or s["left_only"] or s["right_only"] or s["error"] else 0
+
+
+POLICY_SUFFIXES = (".hcl", ".json")
+MAX_POLICY_FILE = 256 * 1024
+
+
+def read_policy_dir(path: str) -> tuple[dict[str, str | None], dict[str, str], list[str]]:
+    """{name: text} from the .hcl and .json files under a directory, the read errors, and warnings."""
+    root = Path(path).expanduser()
+    if not root.is_dir():
+        raise CliError(f"{path} isn't a directory.")
+    texts: dict[str, str | None] = {}
+    errors: dict[str, str] = {}
+    where: dict[str, Path] = {}
+    warnings = []
+    for f in sorted(p for p in root.rglob("*") if p.is_file() and p.suffix.lower() in POLICY_SUFFIXES):
+        name = f.stem
+        if name in where:
+            raise CliError(f"Two files are policy {name!r}: {where[name].relative_to(root)} and {f.relative_to(root)}.")
+        where[name] = f
+        if f.stat().st_size > MAX_POLICY_FILE:
+            texts[name], errors[name] = None, f"{f.relative_to(root)} is larger than 256 KB"
+            continue
+        try:
+            texts[name] = f.read_text()
+        except (OSError, UnicodeDecodeError) as e:
+            texts[name], errors[name] = None, f"can't read {f.relative_to(root)}: {e}"
+    if not texts:
+        warnings.append(f"No .hcl or .json files under {path}.")
+    return texts, errors, warnings
+
+
+async def run_diff_cli(args) -> int:
+    from .connect import resolve_targets
+    settings = cli_settings(args)
+    profile = load_profile(args, settings) or PolicyProfile(name="command line")
+    profile = profile.model_copy(update={"ignore": [*profile.ignore, *args.ignore]})
+    ftexts, ferrors, warnings = read_policy_dir(args.dir)
+    t = resolve_targets(args, sides=("vault",))["vault"]
+    conn = await connect(t, settings, default_name(t.addr))
+    missing: list[str] = []
+    try:
+        async with client_for(conn, settings) as v:
+            vault = await read_all(v, "right", missing)
+    except VaultError as e:
+        raise CliError(f"Vault: {e}") from e
+    finally:
+        await revoke(conn, settings)
+    if vault[2].error:
+        raise CliError(f"Vault: {vault[2].error}")
+    out = compare_sets((ftexts, ferrors, SidePolicies(count=len(ftexts))), vault, profile, missing)
+    if args.files_only:
+        out["pairs"] = [p for p in out["pairs"] if p.status != "right_only"]
+        out["summary"]["right_only"] = 0
+    out["warnings"] = warnings
+    label = {"equal": "equal", "different": "different", "left_only": "only in files",
+             "right_only": "only in Vault", "error": "error"}
+    rc = _report_pairs(out, args, label)
+    return rc
 
 
 # --------------------------------------------------------------------------- suggest, export

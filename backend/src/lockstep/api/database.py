@@ -26,6 +26,7 @@ from ..session import SessionData, load_session
 from ..vault import VaultClient, VaultError, _q
 from .connections import client_for, get_connection, vault_http_error
 from .guard import require_writable
+from .. import writepolicy
 
 router = APIRouter(prefix="/api/database", tags=["database"])
 audit = logging.getLogger("lockstep.audit")
@@ -117,13 +118,14 @@ async def creds(body: CredsRequest, session: Sess, settings: Conf):
     require_writable(settings)
     conn = get_connection(session, body.conn_id)
     mount = body.mount.strip("/")
+    writepolicy.check(settings, conn, f"{mount}/creds/{body.role}", event="database.creds")
     async with client_for(conn, settings) as v:
         try:
             res = await v.request("GET", f"{mount}/creds/{_q(body.role)}")
         except VaultError as e:
             raise vault_http_error(e) from e
     audit.info(json.dumps({"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "event": "database.creds",
-                           "outcome": "applied", "actor": {"identity": conn.display_name, "auth": conn.auth_method},
+                           "outcome": "applied", "actor": {"identity": conn.display_name, "auth": conn.auth_method, "entity_id": conn.entity_id, "accessor": conn.accessor},
                            "target": {"vault": conn.name, "url": conn.url, "mount": mount, "role": body.role},
                            "lease_id": res.get("lease_id"), "ttl": res.get("lease_duration")}, sort_keys=True))
     return {"data": res.get("data") or {}, "lease_id": res.get("lease_id"), "ttl": res.get("lease_duration"),

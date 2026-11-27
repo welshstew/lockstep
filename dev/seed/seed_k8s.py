@@ -6,6 +6,7 @@ Roles on both Vaults:
   lockstep-admin   bound to lockstep/lockstep   → lockstep-admin
   other-app        bound to lockstep/other-app  → (the tool's account must NOT get in)
   lockstep-helm    bound to lockstep-helm/lockstep → lockstep-readonly (the Helm chart in k3s)
+  lockstep-helm-drift  bound to lockstep-helm/lockstep-drift-check → lockstep-readonly (its drift check)
 """
 
 import os
@@ -35,7 +36,9 @@ def main() -> None:
                                   ("lockstep-admin", "lockstep", "lockstep", "lockstep-admin"),
                                   ("other-app", "other-app", "lockstep", "lockstep-readonly"),
                                   # the Helm chart installed in k3s (make helm-test): its own namespace
-                                  ("lockstep-helm", "lockstep", "lockstep-helm", "lockstep-readonly")]:
+                                  ("lockstep-helm", "lockstep", "lockstep-helm", "lockstep-readonly"),
+                                  # the chart's drift-check CronJob, as its own service account
+                                  ("lockstep-helm-drift", "lockstep-drift-check", "lockstep-helm", "lockstep-readonly")]:
             v.req("POST", f"auth/kubernetes/role/{role}", {
                 "bound_service_account_names": [sa], "bound_service_account_namespaces": [ns],
                 "token_policies": [pol], "token_ttl": "1h"})

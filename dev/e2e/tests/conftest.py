@@ -134,7 +134,7 @@ def sign_in_userpass(page: Page, which: str, username: str, vault: str | None = 
 
 def choose_mount(page: Page, which: str, mount: str, prefix: str = "") -> None:
     card = side(page, which)
-    sel = field(card, "KV v2 secret engine").locator("select")
+    sel = field(card, "KV secret engine").locator("select")
     expect(sel.locator(f"option[value='{mount}']")).to_have_count(1)  # mounts load asynchronously
     sel.select_option(value=mount)
     if prefix:

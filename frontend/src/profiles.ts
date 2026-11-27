@@ -1,16 +1,20 @@
 // Comparison profiles in the browser: personal profiles live in localStorage (export/import
 // as JSON to share); shared profiles come from the server (read-only).
-import type { Profile, ProfileRules } from "./types";
+import type { IgnoreRule, Profile, ProfileRules } from "./types";
 
 const KEY = "lockstep.profiles";
 const ACTIVE = "lockstep.activeProfile";
 
 export type ProfileRef = { source: "shared" | "personal"; name: string };
 
-export const emptyRules = (): ProfileRules => ({ mappings: [], ignore_paths: [], ignore_keys: [], rewrites: [] });
+export const emptyRules = (): ProfileRules => ({ mappings: [], ignore_paths: [], ignore_keys: [], rewrites: [], exact_keys: [], unordered_keys: [], volatile: [] });
 
 /** Profiles saved before rewrites existed have none. */
 export const rewritesOf = (r: ProfileRules | null | undefined) => r?.rewrites ?? [];
+/** Nor before keys could be compared as text only. */
+export const exactOf = (r: ProfileRules | null | undefined) => r?.exact_keys ?? [];
+export const unorderedOf = (r: ProfileRules | null | undefined) => r?.unordered_keys ?? [];
+export const volatileOf = (r: ProfileRules | null | undefined) => r?.volatile ?? [];
 
 export function loadPersonal(): Profile[] {
   try {
@@ -37,7 +41,10 @@ function isProfile(p: unknown): p is Profile {
   const x = p as Profile;
   return !!x && typeof x.name === "string" && !!x.rules && Array.isArray(x.rules.mappings)
     && Array.isArray(x.rules.ignore_paths) && Array.isArray(x.rules.ignore_keys)
-    && (x.rules.rewrites === undefined || Array.isArray(x.rules.rewrites));
+    && (x.rules.rewrites === undefined || Array.isArray(x.rules.rewrites))
+    && (x.rules.exact_keys === undefined || Array.isArray(x.rules.exact_keys))
+    && (x.rules.unordered_keys === undefined || Array.isArray(x.rules.unordered_keys))
+    && (x.rules.volatile === undefined || Array.isArray(x.rules.volatile));
 }
 
 const wildcards = (p: string) => p.match(/\*\*|\*/g) ?? [];
@@ -53,6 +60,8 @@ export function validateRules(r: ProfileRules): string | null {
   for (const w of rw) {
     if (!w.left.trim() || !w.right.trim()) return "Each rewrite needs a word on each side.";
     if (w.left.trim() === w.right.trim()) return `Rewrite "${w.left}" ⇄ "${w.right}": the two words are the same.`;
+    const holes = (t: string) => (t.match(/\{[A-Za-z_][A-Za-z0-9_]*\}/g) ?? []).sort().join();
+    if (holes(w.left) !== holes(w.right)) return `Rewrite "${w.left}" ⇄ "${w.right}": both sides need the same placeholders.`;
   }
   for (const side of ["left", "right"] as const) {
     const words = rw.map((w) => w[side].trim());
@@ -60,6 +69,12 @@ export function validateRules(r: ProfileRules): string | null {
     if (dup) return `"${dup}" is on the ${side} of more than one rewrite.`;
   }
   if (r.ignore_keys.some((k) => !k.key.trim())) return "Each ignored key needs a key pattern.";
+  if (exactOf(r).some((k) => !k.key.trim())) return "Each key compared as text needs a key pattern.";
+  if (unorderedOf(r).some((k) => !k.key.trim())) return "Each unordered list needs a key pattern.";
+  for (const v of volatileOf(r)) {
+    if (!v.key.trim() || !v.pattern) return "Each volatile pattern needs a key pattern and a regex.";
+    try { new RegExp(v.pattern); } catch { return `Volatile pattern "${v.pattern}" isn't a valid regex.`; }
+  }
   return null;
 }
 
@@ -70,6 +85,9 @@ export function describe(p: Profile): string {
     r.ignore_keys.length && `${r.ignore_keys.length} ignored key rule${r.ignore_keys.length === 1 ? "" : "s"}`,
     r.ignore_paths.length && `${r.ignore_paths.length} ignored path${r.ignore_paths.length === 1 ? "" : "s"}`,
     rewritesOf(r).length && `${rewritesOf(r).length} rewrite${rewritesOf(r).length === 1 ? "" : "s"}`,
+    exactOf(r).length && `${exactOf(r).length} compared as text`,
+    unorderedOf(r).length && `${unorderedOf(r).length} unordered list${unorderedOf(r).length === 1 ? "" : "s"}`,
+    volatileOf(r).length && `${volatileOf(r).length} volatile pattern${volatileOf(r).length === 1 ? "" : "s"}`,
   ].filter(Boolean);
   return parts.join(" · ") || "no rules";
 }
@@ -120,22 +138,27 @@ export function pathIgnored(rules: ProfileRules, ...paths: string[]): boolean {
 }
 
 export function keyIgnored(rules: ProfileRules, key: string, ...paths: string[]): boolean {
-  return rules.ignore_keys.some((k) => keyGlob(k.key).test(key) && paths.some((p) => p && globRegex(k.path || "**").test(p)));
+  // A rule for one field inside the value doesn't ignore the whole key (the server works that out)
+  return rules.ignore_keys.some((k) => !k.field && keyGlob(k.key).test(key) && paths.some((p) => p && globRegex(k.path || "**").test(p)));
 }
 
 /** Rules in both, without duplicates (a's order first). */
 export function mergeRules(a: ProfileRules | null | undefined, b: ProfileRules): ProfileRules {
   const base = a ?? emptyRules();
   const paths = [...base.ignore_paths, ...b.ignore_paths.filter((p) => !base.ignore_paths.includes(p))];
-  const same = (x: { key: string; path: string }, y: { key: string; path: string }) => x.key === y.key && (x.path || "**") === (y.path || "**");
+  const same = (x: IgnoreRule, y: IgnoreRule) => x.key === y.key && (x.path || "**") === (y.path || "**") && (x.field || "") === (y.field || "");
   const keys = [...base.ignore_keys, ...b.ignore_keys.filter((k) => !base.ignore_keys.some((x) => same(x, k)))];
   const maps = [...base.mappings, ...b.mappings.filter((m) => !base.mappings.some((x) => x.left === m.left && x.right === m.right))];
   const rws = [...rewritesOf(base), ...rewritesOf(b).filter((w) => !rewritesOf(base).some((x) => x.left === w.left || x.right === w.right))];
-  return { mappings: maps, ignore_paths: paths, ignore_keys: keys, rewrites: rws };
+  const exact = [...exactOf(base), ...exactOf(b).filter((k) => !exactOf(base).some((x) => same(x, k)))];
+  const unord = [...unorderedOf(base), ...unorderedOf(b).filter((k) => !unorderedOf(base).some((x) => same(x, k) && (x.separator || "") === (k.separator || "")))];
+  const vol = [...volatileOf(base), ...volatileOf(b).filter((k) => !volatileOf(base).some((x) => x.key === k.key && x.path === k.path && x.pattern === k.pattern))];
+  return { mappings: maps, ignore_paths: paths, ignore_keys: keys, rewrites: rws, exact_keys: exact, unordered_keys: unord, volatile: vol };
 }
 
 export function ruleCount(r: ProfileRules): number {
-  return r.mappings.length + r.ignore_paths.length + r.ignore_keys.length + rewritesOf(r).length;
+  return r.mappings.length + r.ignore_paths.length + r.ignore_keys.length + rewritesOf(r).length + exactOf(r).length
+    + unorderedOf(r).length + volatileOf(r).length;
 }
 
 /** Add or remove one ignored path in a draft. */

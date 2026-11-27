@@ -25,6 +25,7 @@ from ..session import SessionData, load_session
 from ..vault import VaultError
 from .connections import client_for, get_connection, vault_http_error
 from .guard import require_writable
+from .. import writepolicy
 
 router = APIRouter(prefix="/api/leases", tags=["leases"])
 audit = logging.getLogger("lockstep.audit")
@@ -128,7 +129,7 @@ async def lookup(body: LeaseIds, session: Sess, settings: Conf):
 
 def _audit(event: str, conn, **fields) -> None:
     audit.info(json.dumps({"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "event": event,
-                           "actor": {"identity": conn.display_name, "auth": conn.auth_method},
+                           "actor": {"identity": conn.display_name, "auth": conn.auth_method, "entity_id": conn.entity_id, "accessor": conn.accessor},
                            "target": {"vault": conn.name, "url": conn.url}, **fields}, sort_keys=True))
 
 
@@ -142,6 +143,7 @@ class Renew(BaseModel):
 async def renew(body: Renew, session: Sess, settings: Conf):
     require_writable(settings)
     conn = get_connection(session, body.conn_id)
+    writepolicy.check(settings, conn, f"sys/leases/renew/{body.lease_id}", event="lease.renew")
     async with client_for(conn, settings) as v:
         try:
             res = await v.request("PUT", "sys/leases/renew", json={"lease_id": body.lease_id,
@@ -158,6 +160,7 @@ async def renew(body: Renew, session: Sess, settings: Conf):
 async def revoke(body: LeaseIds, session: Sess, settings: Conf):
     require_writable(settings)
     conn = get_connection(session, body.conn_id)
+    writepolicy.check(settings, conn, [f"sys/leases/revoke/{lid}" for lid in body.lease_ids], event="lease.revoke")
     results = []
     async with client_for(conn, settings) as v:
         for lid in body.lease_ids:

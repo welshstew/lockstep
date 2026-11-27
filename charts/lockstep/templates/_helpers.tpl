@@ -66,6 +66,12 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- $v := dict "name" .name "url" .url }}
 {{- with .browserUrl }}{{ $_ := set $v "browser_url" . }}{{ end }}
 {{- with .namespace }}{{ $_ := set $v "namespace" . }}{{ end }}
+{{- if hasKey . "writable" }}{{ $_ := set $v "writable" .writable }}{{ end }}
+{{- if hasKey . "allowDestroy" }}{{ $_ := set $v "allow_destroy" .allowDestroy }}{{ end }}
+{{- with .writePaths }}{{ $_ := set $v "write_paths" . }}{{ end }}
+{{- with .denyPaths }}{{ $_ := set $v "deny_paths" . }}{{ end }}
+{{- with .approvals }}{{ $_ := set $v "approvals" . }}{{ end }}
+{{- with .exportMode }}{{ $_ := set $v "export" . }}{{ end }}
 {{- $out = append $out $v }}
 {{- end }}
 {{- toJson $out }}
@@ -106,4 +112,40 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- if and .Values.vaultTls.caBundle.configMap .Values.vaultTls.caBundle.secret }}
 {{- fail "vaultTls.caBundle: set configMap or secret, not both" }}
 {{- end }}
+{{- with .Values.driftCheck }}
+{{- if .enabled }}
+{{- range $which, $s := dict "left" .left "right" .right }}
+{{- if or (not $s.addr) (not $s.mount) }}
+{{- fail (printf "driftCheck.%s needs addr and mount" $which) }}
+{{- end }}
+{{- if and (not $s.role) (not $s.tokenSecret.name) }}
+{{- fail (printf "driftCheck.%s: set role (kubernetes auth) or tokenSecret.name" $which) }}
+{{- end }}
+{{- end }}
+{{- if and .baseline .baselineConfigMap.name }}
+{{- fail "driftCheck: set baseline or baselineConfigMap, not both" }}
+{{- end }}
+{{- if and (has .failOn (list "new" "changed")) (not (or .baseline .baselineConfigMap.name)) }}
+{{- fail (printf "driftCheck.failOn %s needs a baseline" .failOn) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{- define "lockstep.driftName" -}}
+{{- printf "%s-drift-check" (include "lockstep.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{- define "lockstep.driftServiceAccountName" -}}
+{{- if .Values.driftCheck.serviceAccount.create }}
+{{- default (include "lockstep.driftName" .) .Values.driftCheck.serviceAccount.name }}
+{{- else }}
+{{- default "default" .Values.driftCheck.serviceAccount.name }}
+{{- end }}
+{{- end }}
+
+{{- define "lockstep.driftSelectorLabels" -}}
+app.kubernetes.io/name: {{ include "lockstep.name" . }}-drift-check
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: drift-check
 {{- end }}

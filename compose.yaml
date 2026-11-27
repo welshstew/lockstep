@@ -126,8 +126,10 @@ services:
       LOCKSTEP_COOKIE_SECURE: "false"
       # Pre-defined connections offered in the UI (JSON). Users may also add their own.
       LOCKSTEP_PRESET_CONNECTIONS: >-
-        [{"name":"Vault A","url":"http://vault-a:8200","browser_url":"http://localhost:8200"},
-         {"name":"Vault B","url":"http://${VAULT_B_HOST:-vault-b}:8200","browser_url":"${VAULT_B_BROWSER_URL:-http://localhost:8201}"}]
+        [{"name":"Vault A","url":"http://vault-a:8200","browser_url":"http://localhost:8200","export":"any"},
+         {"name":"Vault B","url":"http://${VAULT_B_HOST:-vault-b}:8200","browser_url":"${VAULT_B_BROWSER_URL:-http://localhost:8201}"},
+         {"name":"Vault B (read-only)","url":"http://${VAULT_B_HOST:-vault-b}:8200","browser_url":"${VAULT_B_BROWSER_URL:-http://localhost:8201}","writable":false},
+         {"name":"Vault B (with approval)","url":"http://${VAULT_B_HOST:-vault-b}:8200","browser_url":"${VAULT_B_BROWSER_URL:-http://localhost:8201}","approvals":1}]
       # Shared comparison profiles, offered read-only to everyone (examples in docs/guides).
       LOCKSTEP_PROFILES: >-
         [{"name": "Prod ↔ staging services",
@@ -153,6 +155,9 @@ services:
       LOCKSTEP_K8S_AUTH_ENABLED: "true"
       # Dev Vaults: create userpass users and reset passwords from Policies › Roles
       LOCKSTEP_USER_WRITE: "on"
+      # "Other Vault URL…" for the containers here (http://openbao:8200), which are private addresses
+      LOCKSTEP_ALLOW_CUSTOM_CONNECTIONS: "true"
+      LOCKSTEP_CUSTOM_ALLOW_PRIVATE: "true"
     volumes:
       # Same path a pod's service account token is mounted at. Empty without the k8s profile.
       - k8s-sa:/var/run/secrets/kubernetes.io/serviceaccount:ro

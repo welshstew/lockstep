@@ -26,7 +26,7 @@ def test_shared_profile_maps_ignores_and_copies(page, vault_b):
     expect(bar).to_contain_text("1 mapping")
     # the profile's mounts were applied to both sides
     for which in ("left", "right"):
-        expect(side(page, which).locator("label.field", has=page.locator("> span", has_text="KV v2 secret engine"))
+        expect(side(page, which).locator("label.field", has=page.locator("> span", has_text="KV secret engine"))
                .locator("select")).to_have_value("app-config")
     compare(page)
     expect(page.locator(".profile-effect")).to_contain_text(re.compile(r"\d+ pairs? matched by a mapping"))
@@ -59,7 +59,7 @@ def test_shared_profile_maps_ignores_and_copies(page, vault_b):
 def test_create_personal_profile_in_editor(page):
     connect_both(page)
     for which in ("left", "right"):
-        sel = side(page, which).locator("label.field", has=page.locator("> span", has_text="KV v2 secret engine")).locator("select")
+        sel = side(page, which).locator("label.field", has=page.locator("> span", has_text="KV secret engine")).locator("select")
         expect(sel.locator("option[value='app-config']")).to_have_count(1)
         sel.select_option("app-config")
     bar = page.locator("section.profile-bar")
@@ -93,7 +93,7 @@ def test_cancelled_review_does_not_come_back(page):
     the app in 'reviewing' state, so the next comparison re-opened an empty review."""
     connect_both(page)
     for which in ("left", "right"):
-        sel = side(page, which).locator("label.field", has=page.locator("> span", has_text="KV v2 secret engine")).locator("select")
+        sel = side(page, which).locator("label.field", has=page.locator("> span", has_text="KV secret engine")).locator("select")
         expect(sel.locator("option[value='app-config']")).to_have_count(1)
         sel.select_option("app-config")
     compare(page)

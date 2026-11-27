@@ -2,6 +2,73 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://getlockstep.cloud/schemas/lockstep-report-v1.json",
   "$defs": {
+    "DriftCheck": {
+      "description": "The drift check of this run (with --baseline or --waivers).",
+      "properties": {
+        "fail_on": {
+          "description": "any, new or changed: which drift fails the run.",
+          "title": "Fail On",
+          "type": "string"
+        },
+        "baseline": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The baseline file compared with.",
+          "title": "Baseline"
+        },
+        "failed": {
+          "description": "Whether this run failed the check (exit code 1).",
+          "title": "Failed",
+          "type": "boolean"
+        },
+        "new": {
+          "default": 0,
+          "title": "New",
+          "type": "integer"
+        },
+        "known": {
+          "default": 0,
+          "title": "Known",
+          "type": "integer"
+        },
+        "waived": {
+          "default": 0,
+          "title": "Waived",
+          "type": "integer"
+        },
+        "resolved": {
+          "default": [],
+          "description": "Drift in the baseline that's gone now.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Resolved",
+          "type": "array"
+        },
+        "expired_waivers": {
+          "default": [],
+          "description": "Waivers past their expiry date; they fail the run.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Expired Waivers",
+          "type": "array"
+        }
+      },
+      "required": [
+        "fail_on",
+        "failed"
+      ],
+      "title": "DriftCheck",
+      "type": "object"
+    },
     "ReportKey": {
       "additionalProperties": false,
       "description": "A key that isn't equal on both sides.",
@@ -12,7 +79,7 @@
           "type": "string"
         },
         "status": {
-          "description": "different, left_only or right_only (unknown if a side couldn't be read).",
+          "description": "different, left_only, right_only or not_compared (a keystore whose password isn't in the secret); unknown if a side couldn't be read.",
           "title": "Status",
           "type": "string"
         },
@@ -27,6 +94,20 @@
           "description": "A profile rule says this difference doesn't count.",
           "title": "Ignored",
           "type": "boolean"
+        },
+        "reason": {
+          "default": "",
+          "description": "Why the key has this status, e.g. \"different at `db.host`\". Never a value.",
+          "title": "Reason",
+          "type": "string"
+        },
+        "paths": {
+          "description": "Fields inside a JSON or YAML value that differ (names only).",
+          "items": {
+            "type": "string"
+          },
+          "title": "Paths",
+          "type": "array"
         },
         "left_holds": {
           "anyOf": [
@@ -74,6 +155,24 @@
           ],
           "title": "Action",
           "type": "string"
+        },
+        "drift": {
+          "anyOf": [
+            {
+              "enum": [
+                "new",
+                "known",
+                "waived"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "With --baseline or --waivers: new (not in the baseline), known (in the baseline with the same status) or waived.",
+          "title": "Drift"
         }
       },
       "required": [
@@ -138,7 +237,7 @@
           "type": "string"
         },
         "status": {
-          "description": "equal, different, left_only, right_only, no_access or error.",
+          "description": "equal, different, left_only, right_only, not_compared (nothing differs, but a key couldn't be compared), no_access or error.",
           "title": "Status",
           "type": "string"
         },
@@ -208,6 +307,24 @@
           },
           "title": "Custom Metadata",
           "type": "array"
+        },
+        "drift": {
+          "anyOf": [
+            {
+              "enum": [
+                "new",
+                "known",
+                "waived"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "With --baseline or --waivers: new (not in the baseline), known (in the baseline with the same status) or waived. Set on the secret when it's on one side only, or no key is named.",
+          "title": "Drift"
         }
       },
       "required": [
@@ -297,6 +414,18 @@
           "maxLength": 200,
           "minLength": 1,
           "title": "Right",
+          "type": "string"
+        },
+        "key": {
+          "default": "*",
+          "maxLength": 256,
+          "title": "Key",
+          "type": "string"
+        },
+        "path": {
+          "default": "**",
+          "maxLength": 512,
+          "title": "Path",
           "type": "string"
         }
       },
@@ -448,6 +577,18 @@
       },
       "title": "Secrets",
       "type": "array"
+    },
+    "drift_check": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DriftCheck"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The drift check, with --baseline or --waivers."
     }
   },
   "required": [

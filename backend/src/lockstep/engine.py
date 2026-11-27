@@ -67,6 +67,40 @@ async def _compare_metadata(d: SecretDiff, lv, lsem, lmount: str, lpath: str, rv
         d.status = "different"
 
 
+class ReadOnce:
+    """A client wrapper for one request that runs the comparison more than once (compare/suggest
+    runs it up to three times): each tree listing, secret read and metadata read reaches Vault
+    once, and later passes are answered from memory. Concurrent reads of the same thing share one
+    call. Everything else passes through. Drop it with the request: it holds the values read."""
+
+    CACHED = ("kv_tree", "kv_read", "kv_metadata")
+
+    def __init__(self, inner):
+        self._inner = inner
+        self._calls: dict[tuple, asyncio.Future] = {}
+
+    def __getattr__(self, name):
+        attr = getattr(self._inner, name)
+        if name not in self.CACHED:
+            return attr
+
+        async def once(*args, **kwargs):
+            key = (name, args, tuple(sorted(kwargs.items())))
+            fut = self._calls.get(key)
+            if fut is None:
+                fut = self._calls[key] = asyncio.ensure_future(attr(*args, **kwargs))
+            return await asyncio.shield(fut)
+        return once
+
+    def clear(self) -> None:
+        for f in self._calls.values():
+            if not f.done():
+                f.cancel()
+            elif not f.cancelled():
+                f.exception()  # retrieved, so a cached failure isn't reported as unhandled
+        self._calls.clear()
+
+
 async def compare(lv: VaultClient, lmount: str, lprefix: str,
                   rv: VaultClient, rmount: str, rprefix: str,
                   rules: Rules | None = None, max_secrets: int = 5000, custom_metadata: bool = False,
@@ -96,8 +130,7 @@ async def compare(lv: VaultClient, lmount: str, lprefix: str,
         (li, ld), (ri, rd) = await asyncio.gather(
             _read_side(lv, lsem, lmount, lprefix + lp, lp in lrel, ltree),
             _read_side(rv, rsem, rmount, rprefix + rp, rp in rrel, rtree))
-        d = diff_secret(key, li, ld, ri, rd, ignored=lambda k: rules.key_ignored(k, lp, rp),
-                        left_path=lp, right_path=rp, rewrite=rules.rewrite if rules.rewrites else None)
+        d = diff_secret(key, li, ld, ri, rd, left_path=lp, right_path=rp, rules=rules)
         if observe:
             observe(d, ld if li.state == "present" else None, rd if ri.state == "present" else None)
         for name in (kd.key for kd in d.keys):

@@ -32,9 +32,18 @@ class Connection(BaseModel):
     auth_method: str  # token | userpass | ldap | oidc | kubernetes | jwt
     minted: bool = False  # True if we created this token by logging in, so we should revoke it
     display_name: str = ""
+    # From lookup-self: identifiers a token can't choose, to check against Vault's own audit log
+    entity_id: str = ""
+    accessor: str = ""
     policies: list[str] = []
     expires_at: float | None = None  # epoch seconds; None means no expiry
     renewable: bool = False
+    # A user-typed address (preset_id None) is checked before every use (lockstep.addresses).
+    # False only for the CLI, which runs as its user and may call any address.
+    custom: bool = True
+    # Opened from another connection's namespace picker: the same token, in a child namespace.
+    # Signing out of the parent closes it too; signing out of it never revokes the token.
+    parent: str | None = None
 
 
 class PendingOidc(BaseModel):

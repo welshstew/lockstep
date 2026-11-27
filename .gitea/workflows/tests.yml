@@ -5,9 +5,12 @@
 name: tests
 
 on:
+  # A push that only changes docs or notes runs none of this (secrets.yml still checks it for secrets)
   pull_request:
+    paths-ignore: ['**/*.md', 'docs/**']
   push:
     branches: [main]
+    paths-ignore: ['**/*.md', 'docs/**']
   workflow_dispatch:
 
 jobs:
@@ -18,6 +21,9 @@ jobs:
       COMPOSE: docker compose -f compose.yaml -f compose.ci.yaml
     steps:
       - uses: actions/checkout@v4
+
+      - name: Remove what cancelled runs left behind
+        run: ./scripts/ci-cleanup.sh
 
       - name: Tooling
         run: docker version --format 'docker {{.Server.Version}}' && docker compose version

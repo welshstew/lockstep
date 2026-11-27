@@ -98,10 +98,12 @@
               <dd>Two Vaults, two mounts or two path prefixes, down to a number that became a string.</dd>
               <dt>Comparison profiles</dt>
               <dd>Pair <code>services/*/prod/**</code> with <code>services/*/staging/**</code>, or a renamed app’s old folder with its new one. Read <code>test</code> as <code>dev</code> inside values, and ignore keys that differ by design. Lockstep reads both sides, suggests the rules and explains each one.</dd>
+              <dt>Many environments at once</dt>
+              <dd>One baseline against up to 12 environments in a grid, with the environment that’s out of line first.</dd>
               <dt>Configuration, too</dt>
-              <dd>Secrets engines, auth methods, their tuning, roles and keys, compared across two Vaults or OpenBaos.</dd>
-              <dt>Drift checks in CI</dt>
-              <dd><code>lockstep compare</code> exits non-zero when environments drift, with no values in the log.</dd>
+              <dd>Secrets engines, auth methods, roles and keys, audit devices, quotas, MFA and plugins, compared across two Vaults or OpenBaos.</dd>
+              <dt>Drift checks in CI and on a schedule</dt>
+              <dd>A GitHub Action, SARIF and pull request summaries, and a Kubernetes CronJob with Prometheus gauges. Accept known drift in a baseline and fail only on what’s new, with no values in the log.</dd>
             </dl>
           </div>
           <div class="job">
@@ -109,12 +111,12 @@
             <dl>
               <dt>Review, then write</dt>
               <dd>Every copy, edit and delete is reviewed first and written with check-and-set, so a change made since you compared is never overwritten.</dd>
-              <dt>Plans for someone else</dt>
-              <dd>Save reviewed changes as a signed file, without values, for a colleague with write access to apply.</dd>
+              <dt>Plans, approvals and undo</dt>
+              <dd>Save reviewed changes as a signed file, without values. A second person approves it, it’s applied on prod’s Lockstep, and an undo plan puts things back.</dd>
               <dt>Browse and edit</dt>
               <dd>A folder tree of one mount, versions with diffs and roll back, metadata, one-time sharing.</dd>
               <dt>Export and import</dt>
-              <dd>Encrypted exports, and imports that turn <code>dev</code> into <code>test</code> on the way.</dd>
+              <dd>Exports encrypted with a one-time key, a passphrase or your team’s age keys. Imports that turn <code>dev</code> into <code>test</code> on the way, from an export or <code>vault kv get</code> output.</dd>
             </dl>
           </div>
           <div class="job">
@@ -216,8 +218,9 @@ staging · app-config/payments/db   from prod · app-config/payments/db
           <li><strong>Sign in your way.</strong> Token, userpass, LDAP, OIDC, JWT from a CI job, or the pod’s Kubernetes service account, with login MFA.</li>
           <li><strong>Hardened images.</strong> Distroless and non-root on Red Hat Hardened Images, multi-arch, signed with cosign, with an SBOM and build provenance.</li>
           <li><strong>A tested Helm chart.</strong> Read-only filesystem, NetworkPolicy, PodDisruptionBudget, and a session key kept across upgrades, installed into a real cluster in CI.</li>
-          <li><strong>Look-only when you want it.</strong> One setting refuses every write; others turn off exports, destroy or policy writes.</li>
-          <li><strong>Audited.</strong> Every write is logged with who, where and a hash of what was there, never a value.</li>
+          <li><strong>Guardrails per Vault.</strong> Compare prod, write only to dev: a Vault can be read-only, limited to some paths, or changed only through approved plans. Or make the whole installation look-only.</li>
+          <li><strong>Audited.</strong> Every write is logged with who, where, their Vault entity and a hash of what was there, never a value. Shown values can be logged too.</li>
+          <li><strong>Observable.</strong> Prometheus metrics, structured logs with request IDs, sign-in throttling and a per-client rate limit.</li>
         </ul>
       </div>
     </section>
@@ -243,11 +246,11 @@ open http://localhost:8080</code></pre>
           </div>
           <div class="span">
             <h3>Command line</h3>
-<pre><code>pipx install "git+https://github.com/welshstew/lockstep@v0.10.1#subdirectory=backend"
+<pre><code>pipx install "git+https://github.com/welshstew/lockstep@v0.11.0#subdirectory=backend"
 lockstep compare --help
 
 # or run it from the image
-docker run --rm -it --entrypoint lockstep ghcr.io/welshstew/lockstep:0.10.1 --help</code></pre>
+docker run --rm -it --entrypoint lockstep ghcr.io/welshstew/lockstep:0.11.0 --help</code></pre>
           </div>
         </div>
         <p class="more">Configuration, authentication, deployment and <a href="/docs/cli/">command-line</a> guides are in the <a href="/docs/">documentation</a>.</p>
@@ -264,10 +267,12 @@ docker run --rm -it --entrypoint lockstep ghcr.io/welshstew/lockstep:0.10.1 --he
             <span>Diffing with the vault CLI and where it falls short, then comparing whole mounts.</span></li>
           <li><a href="/guides/sync-vault-secrets-between-environments/">Syncing secrets between environments safely</a>
             <span>Check-and-set writes, merges without deletes, reviews, and plans someone else applies.</span></li>
+          <li><a href="/guides/promote-vault-secrets-with-approvals/">Promoting secrets from dev to prod with approvals</a>
+            <span>A write policy per Vault, signed plans that travel between installations, a second person’s approval, and undo.</span></li>
           <li><a href="/guides/detect-vault-secret-drift-in-ci/">Detecting secret drift in CI</a>
-            <span>Fail a pipeline when two environments drift apart, with a read-only token.</span></li>
+            <span>Fail a pipeline only on new drift, with a GitHub Action, baselines and SARIF, or check on a schedule.</span></li>
           <li><a href="/guides/export-import-vault-secrets/">Exporting, importing and migrating Vault secrets</a>
-            <span>Encrypted exports, comparing against a backup, and promoting dev to test.</span></li>
+            <span>Exports encrypted with a key, a passphrase or age, comparing against a backup, and promoting dev to test.</span></li>
           <li><a href="/guides/migrate-vault-to-openbao/">Migrating from Vault to OpenBao, verified</a>
             <span>Check what OpenBao lacks, copy each mount, prove every secret arrived, then compare policies.</span></li>
           <li><a href="/guides/build-a-comparison-profile/">Building a comparison profile</a>

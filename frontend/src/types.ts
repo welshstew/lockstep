@@ -10,6 +10,8 @@ export interface AppConfig {
   allow_custom_connections: boolean;
   demo_banner?: string;
   export_mode?: "any" | "encrypted" | "off";
+  /** Teams an export can be encrypted to (LOCKSTEP_EXPORT_RECIPIENTS): name and number of age keys */
+  export_teams?: { name: string; keys: number }[];
   allow_destroy?: boolean;
   read_only?: boolean;
   allow_clipboard?: boolean;
@@ -37,11 +39,28 @@ export interface Connection {
   expires_at: number | null;
   renewable?: boolean;
   status: ConnStatus;
+  /** Opened from this connection's namespace picker: the same token, in a child namespace */
+  parent?: string | null;
+  /** The preset's write policy: "none" (read-only here), "some" (only certain paths) or "all" */
+  writes?: "all" | "some" | "none";
+  /** Destroying secrets is allowed on this connection */
+  destroy?: boolean;
+  /** Which exports are allowed from this connection (its preset's setting, else the server's) */
+  export?: "any" | "encrypted" | "off";
+}
+
+export interface NamespacesResponse {
+  supported: boolean;
+  namespace: string | null;
+  namespaces: { name: string; path: string }[];
+  error?: string | null;
 }
 
 export interface Mount {
   path: string;
   description: string;
+  /** KV version: "1" mounts are listed only for comparing, and Lockstep never writes them */
+  version?: string;
 }
 
 export interface MountsResponse {
@@ -50,8 +69,9 @@ export interface MountsResponse {
   complete: boolean;
 }
 
-export type KeyStatus = "equal" | "different" | "left_only" | "right_only" | "unknown";
-export type SecretStatus = "equal" | "different" | "left_only" | "right_only" | "no_access" | "error";
+/** not_compared: both sides are there, but the values can't be compared (a keystore whose password isn't in the secret) */
+export type KeyStatus = "equal" | "different" | "left_only" | "right_only" | "not_compared" | "unknown";
+export type SecretStatus = "equal" | "different" | "left_only" | "right_only" | "not_compared" | "no_access" | "error";
 export type SideState = "present" | "absent" | "deleted" | "no_access" | "error";
 
 export interface KeyDiff {
@@ -61,6 +81,10 @@ export interface KeyDiff {
   ignored: boolean;
   /** Equal only once the profile's rewrites are applied (test → dev) */
   rewritten?: boolean;
+  /** Why it has this status, in a few words; `backticks` mark names (never values) */
+  reason?: string;
+  /** Fields inside a JSON or YAML value that differ, e.g. "config.db.host" */
+  paths?: string[];
 }
 
 export interface SideInfo {
@@ -94,7 +118,10 @@ export interface SecretDiff {
 }
 
 export interface SideSummary {
+  writes?: "all" | "some" | "none"; // the preset's write policy for this side
   kind?: "vault" | "file";
+  /** "1": a KV v1 mount, compared but never written */
+  kv_version?: string;
   conn_id: string;
   mount: string;
   prefix: string;
@@ -124,6 +151,7 @@ export interface SideSelection {
   mount: string | null;
   prefix: string;
   fileId?: string | null; // an opened export file instead of a Vault connection
+  kvVersion?: string; // "1": a KV v1 mount, for comparing only
 }
 
 export type SyncDirection = "left_to_right" | "right_to_left";
@@ -175,13 +203,16 @@ export interface ChangePlan {
   status: PlanStatus;
 }
 
-export type ResultStatus = "applied" | "noop" | "conflict" | "denied" | "invalid" | "error";
+export type ResultStatus = "applied" | "noop" | "conflict" | "denied" | "invalid" | "error" | "skipped";
 
 export interface ChangeResult {
   path: string;
   direction: SyncDirection;
   action?: "write" | "delete";
   target: string;
+  target_conn_id?: string; // where it was written (for an undo plan)
+  target_mount?: string;
+  target_path?: string;
   status: ResultStatus;
   overridden: string[];
   old_version: number | null;
@@ -367,14 +398,38 @@ export interface ExpiryResult {
            denied: string[]; truncated: boolean; unreadable: number }[];
 }
 
-export interface Rewrite { left: string; right: string }
+export interface Rewrite {
+  left: string;
+  right: string;
+  /** Only in keys matching this glob (default "*") */
+  key?: string;
+  /** Only in secrets under this path (default "**") */
+  path?: string;
+}
+
+/** A list compared regardless of order: the whole value, a field inside it, or text split on a separator */
+export interface UnorderedRule { key: string; path: string; field?: string | null; separator?: string | null }
+
+/** A regex for parts of a value that change on their own; a key differing only there is ignored */
+export interface VolatileRule { key: string; path: string; pattern: string }
+
+export interface IgnoreRule {
+  key: string;
+  path: string;
+  /** Only this field inside the key's JSON or YAML value, e.g. "db.password" or "tls.*" */
+  field?: string | null;
+}
 
 export interface ProfileRules {
   mappings: { left: string; right: string }[];
   ignore_paths: string[];
-  ignore_keys: { key: string; path: string }[];
+  ignore_keys: IgnoreRule[];
   /** Words read as their counterpart before values are compared, and when copying */
   rewrites?: Rewrite[];
+  /** Keys compared as text only: no certificate, PEM or base64 comparator */
+  exact_keys?: { key: string; path: string }[];
+  unordered_keys?: UnorderedRule[];
+  volatile?: VolatileRule[];
 }
 
 /** What the profile builder found by reading both sides (paths, words and counts; no values) */
@@ -384,6 +439,8 @@ export interface ProfileSuggestions {
   truncated: boolean;
   mappings: { left: string; right: string; pairs: [string, string][]; reason: string }[];
   rewrites: { left: string; right: string; keys: number; secrets: string[]; reason: string }[];
+  unordered?: { key: string; separator: string | null; keys: number; secrets: string[]; reason: string }[];
+  volatile?: { key: string; pattern: string; what: string; keys: number; secrets: string[]; reason: string }[];
   before: Record<string, number>;
   after: Record<string, number>;
 }
@@ -407,6 +464,8 @@ export interface PlanVault {
   mount: string;
   prefix: string;
   identity: string;
+  entity_id?: string; // the creator's Vault entity ID and token accessor (lookup-self)
+  accessor?: string;
 }
 
 export interface PlanChange {
@@ -418,14 +477,20 @@ export interface PlanChange {
   source_version: number;
   target_version: number | null;
   keys: { key: string; action: "add" | "update" | "remove"; override?: boolean }[];
-  set?: Record<string, unknown> | null; // typed values, for keys marked override
+  set?: Record<string, unknown> | null; // typed values, in plans made before they were asked again
+  typed?: Record<string, string> | null; // per typed key, a check code: the value is typed again when applying
 }
 
 export interface SyncPlan {
   format: "lockstep.sync-plan";
-  version: 1;
+  version: 1 | 2;
   id: string;
   created_at: string;
+  issuer?: { name: string; key_id: string } | null; // the installation that made it
+  approvals?: { by: string; entities: Record<string, string>; at: string; signature: string }[];
+  audience?: string[]; // installations that may apply it (empty: any that trusts the issuer)
+  not_before?: string | null;
+  expires_at?: string | null;
   note: string;
   profile: string | null;
   left: PlanVault;
@@ -442,10 +507,45 @@ export interface PlanCheck {
   message: string;
   changes: { path: string; right_path: string; direction: SyncDirection; source: string; target: string;
              status: PlanCheckStatus; problems: string[] }[];
+  /** Four-eyes: how many approvals this installation asks for, and which of the plan's count */
+  approvals?: { required: number; approved_by: string[]; problems: string[] } | null;
 }
+
+// ---- Undo plans: put back what an apply changed (old versions read from Vault's history)
+export interface UndoEntry {
+  vault: PlanVault;
+  path: string;
+  action: "restore" | "delete" | "undelete";
+  restore_version: number | null;
+  current_version: number;
+}
+export interface UndoPlan {
+  format: "lockstep.undo-plan";
+  version: 1;
+  id: string;
+  created_at: string;
+  issuer?: { name: string; key_id: string } | null;
+  expires_at?: string | null;
+  created_by: string;
+  undoes?: string | null;
+  entries: UndoEntry[];
+  signature: string;
+}
+export interface UndoEntryCheck {
+  target: string;
+  action: string;
+  status: "ready" | "stale" | "denied" | "error" | "applied" | "skipped";
+  message: string;
+  new_version?: number | null;
+}
+export interface UndoCheck { status: "ready" | "stale" | "denied" | "error"; message: string; entries: UndoEntryCheck[] }
+export interface UndoApplyResult { plan_id: string; outcome: "applied" | "partially_applied" | "not_applied"; message: string; entries: UndoEntryCheck[] }
 
 export interface PlanApplyResult extends ApplyResult {
   plan_id: string;
+  stopped?: boolean;
+  outcome?: "applied" | "partially_applied" | "not_applied";
+  message?: string;
 }
 
 // ---- Secret-engine exports (files with values) and imports
@@ -491,6 +591,7 @@ export interface LoadedFile {
 export interface ExportResult {
   filename: string;
   file: Record<string, unknown>;
+  scheme: "key" | "passphrase" | "age" | "none";
   key: string | null;
   secrets: number;
   keys: number;
@@ -563,7 +664,9 @@ export interface ExplainResult {
   mode: "policies" | "vault";
   root: boolean;
   vault_version?: string | null;
+  product?: string | null;
   evaluation?: string;
+  evaluation_known?: boolean;
   columns: { id: PolicyColumn; label: string }[];
   rules: PolicyRule[];
   rows: { path: string; cells: Record<PolicyColumn, PolicyCell> }[];
@@ -768,11 +871,15 @@ export interface ConfigPair {
   fields: { field: string; left: unknown; right: unknown }[]; left: Record<string, unknown> | null; right: Record<string, unknown> | null;
   /** Differences not counted: fields only one server returns (Vault vs OpenBao, or two versions) */
   set_aside?: { field: string; left: unknown; right: unknown; reason: string }[];
+  not_compared?: { field: string; reason: string }[];
+  copyable?: boolean; // an engine object Lockstep can copy to the other side
 }
 export interface ConfigCompare {
   overview: { left: VaultOverview; right: VaultOverview };
-  mounts: ConfigPair[]; auth: ConfigPair[]; engines: ConfigPair[]; summary: Record<string, number>;
+  mounts: ConfigPair[]; auth: ConfigPair[]; engines: ConfigPair[]; system: ConfigPair[]; summary: Record<string, number>;
   missing: { left: string[]; right: string[] };
+  truncated: { left: string[]; right: string[] }; // lists cut off at the limit
+  warnings: { left: string[]; right: string[] }; // e.g. no audit device
   profile?: string | null;
 }
 
@@ -801,4 +908,19 @@ export interface AuthUsersCompare {
   config?: { field: string; left: unknown; right: unknown }[];
   summary: Record<AuthUserPair["status"], number>;
   missing: { left: string[]; right: string[] };
+}
+
+// ---- Environment matrix: one baseline against several environments (statuses only)
+export type MatrixCellStatus = "equal" | "different" | "missing" | "extra" | "not_compared" | "absent";
+export interface MatrixCell { status: MatrixCellStatus; reason: string }
+export interface MatrixRow { path: string; key: string | null; cells: MatrixCell[]; odd: number; unknown: number }
+export interface MatrixEnv {
+  name: string; mount: string; prefix: string; kv_version: string; secret_count: number; truncated: boolean;
+  denied: string[]; error: string | null; counts: Record<string, number>;
+}
+export interface MatrixResult {
+  baseline: { name: string; mount: string; prefix: string; kv_version: string; secret_count: number; truncated: boolean; denied: string[] };
+  environments: MatrixEnv[];
+  rows: MatrixRow[];
+  summary: Record<string, number>;
 }

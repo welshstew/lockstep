@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, type SideRef } from "../api";
 import { emptyRules, ruleEffect, validateRules } from "../profiles";
-import type { Profile, ProfileRules, ProfileSuggestions, Rewrite } from "../types";
+import type { IgnoreRule, Profile, ProfileRules, ProfileSuggestions, Rewrite, UnorderedRule, VolatileRule } from "../types";
 
 interface Props {
   initial: Profile | null;
@@ -22,6 +22,7 @@ function countLine(c: Counts): string {
     `${c.equal ?? 0} equal`, `${c.different ?? 0} different`,
     `${c.left_only ?? 0} only on the left`, `${c.right_only ?? 0} only on the right`,
   ];
+  if (c.not_compared) parts.push(`${c.not_compared} not compared`);
   if (c.rewritten_keys) parts.push(`${plural(c.rewritten_keys, "key")} equal after rewrites`);
   if (c.ignored_keys) parts.push(`${plural(c.ignored_keys, "key difference")} ignored`);
   return parts.join(" · ");
@@ -35,7 +36,10 @@ export function ProfileEditor({ initial, takenNames, current, sides, onSave, onC
   const [description, setDescription] = useState(initial?.description ?? "");
   const [mappings, setMappings] = useState(initial?.rules.mappings ?? []);
   const [rewrites, setRewrites] = useState<Rewrite[]>(initial?.rules.rewrites ?? []);
-  const [ignoreKeys, setIgnoreKeys] = useState(initial?.rules.ignore_keys ?? []);
+  const [ignoreKeys, setIgnoreKeys] = useState<IgnoreRule[]>(initial?.rules.ignore_keys ?? []);
+  const [exactKeys, setExactKeys] = useState(initial?.rules.exact_keys ?? []);
+  const [unordered, setUnordered] = useState<UnorderedRule[]>(initial?.rules.unordered_keys ?? []);
+  const [volatile, setVolatile] = useState<VolatileRule[]>(initial?.rules.volatile ?? []);
   const [ignorePaths, setIgnorePaths] = useState((initial?.rules.ignore_paths ?? []).join("\n"));
   const hasMounts = !!(initial?.left_mount || initial?.right_mount);
   const [keepMounts, setKeepMounts] = useState(hasMounts);
@@ -51,10 +55,21 @@ export function ProfileEditor({ initial, takenNames, current, sides, onSave, onC
   const rules: ProfileRules = useMemo(() => ({
     ...emptyRules(),
     mappings: mappings.map((m) => ({ left: m.left.trim(), right: m.right.trim() })).filter((m) => m.left || m.right),
-    rewrites: rewrites.map((w) => ({ left: w.left.trim(), right: w.right.trim() })).filter((w) => w.left || w.right),
-    ignore_keys: ignoreKeys.map((k) => ({ key: k.key.trim(), path: k.path.trim() || "**" })).filter((k) => k.key),
+    rewrites: rewrites.map((w) => ({
+      left: w.left.trim(), right: w.right.trim(),
+      ...(w.key?.trim() && w.key.trim() !== "*" ? { key: w.key.trim() } : {}),
+      ...(w.path?.trim() && w.path.trim() !== "**" ? { path: w.path.trim() } : {}),
+    })).filter((w) => w.left || w.right),
+    ignore_keys: ignoreKeys.map((k) => ({ key: k.key.trim(), path: k.path.trim() || "**", ...(k.field?.trim() ? { field: k.field.trim() } : {}) }))
+      .filter((k) => k.key),
     ignore_paths: ignorePaths.split("\n").map((l) => l.trim()).filter(Boolean),
-  }), [mappings, rewrites, ignoreKeys, ignorePaths]);
+    exact_keys: exactKeys.map((k) => ({ key: k.key.trim(), path: k.path.trim() || "**" })).filter((k) => k.key),
+    unordered_keys: unordered.map((k) => ({
+      key: k.key.trim(), path: k.path.trim() || "**",
+      ...(k.field?.trim() ? { field: k.field.trim() } : {}), ...(k.separator ? { separator: k.separator } : {}),
+    })).filter((k) => k.key),
+    volatile: volatile.map((v) => ({ key: v.key.trim() || "*", path: v.path.trim() || "**", pattern: v.pattern })).filter((v) => v.pattern),
+  }), [mappings, rewrites, ignoreKeys, ignorePaths, exactKeys, unordered, volatile]);
   const valid = validateRules(rules) === null;
   const effect = useMemo(() => (found && valid ? ruleEffect(rules, found.left_paths, found.right_paths) : null), [found, rules, valid]);
   useEffect(() => { setPreview(null); }, [rules]);
@@ -91,6 +106,10 @@ export function ProfileEditor({ initial, takenNames, current, sides, onSave, onC
   const hasMapping = (m: { left: string; right: string }) => mappings.some((x) => x.left.trim() === m.left && x.right.trim() === m.right);
   const hasRewrite = (w: Rewrite) => rewrites.some((x) => x.left.trim() === w.left && x.right.trim() === w.right);
   const addMapping = (m: { left: string; right: string }) => { if (!hasMapping(m)) setMappings((ms) => [...ms.filter((x) => x.left || x.right), { left: m.left, right: m.right }]); };
+  const hasUnordered = (u: { key: string; separator: string | null }) => unordered.some((x) => x.key.trim() === u.key && (x.separator || null) === (u.separator || null));
+  const addUnordered = (u: { key: string; separator: string | null }) => { if (!hasUnordered(u)) setUnordered((us) => [...us.filter((x) => x.key), { key: u.key, path: "", ...(u.separator ? { separator: u.separator } : {}) }]); };
+  const hasVolatile = (v: { key: string; pattern: string }) => volatile.some((x) => x.key.trim() === v.key && x.pattern === v.pattern);
+  const addVolatile = (v: { key: string; pattern: string }) => { if (!hasVolatile(v)) setVolatile((vs) => [...vs.filter((x) => x.pattern), { key: v.key, path: "", pattern: v.pattern }]); };
   const addRewrite = (w: Rewrite) => { if (!hasRewrite(w)) setRewrites((ws) => [...ws.filter((x) => x.left || x.right), { left: w.left, right: w.right }]); };
 
   function save(e: React.FormEvent) {
@@ -108,8 +127,11 @@ export function ProfileEditor({ initial, takenNames, current, sides, onSave, onC
     ref.current?.close();
   }
 
-  const suggestionCount = (found?.mappings.length ?? 0) + (found?.rewrites.length ?? 0);
-  const allAdded = !!found && found.mappings.every(hasMapping) && found.rewrites.every(hasRewrite);
+  const foundUnordered = found?.unordered ?? [];
+  const foundVolatile = found?.volatile ?? [];
+  const suggestionCount = (found?.mappings.length ?? 0) + (found?.rewrites.length ?? 0) + foundUnordered.length + foundVolatile.length;
+  const allAdded = !!found && found.mappings.every(hasMapping) && found.rewrites.every(hasRewrite)
+    && foundUnordered.every(hasUnordered) && foundVolatile.every(hasVolatile);
 
   return (
     <dialog ref={ref} className="review profile-editor" onClose={onClose}>
@@ -134,8 +156,9 @@ export function ProfileEditor({ initial, takenNames, current, sides, onSave, onC
                   <p className="subtle">
                     {sides
                       ? <>Lockstep lists every secret in {leftName} and {rightName} and compares them on the server. It suggests
-                        rules from folders that look renamed, and from words that differ between environments inside values,
-                        such as <code>test</code> and <code>dev</code>. You see paths and counts; values stay hidden.</>
+                        rules from folders that look renamed, from words that differ between environments inside values,
+                        such as <code>test</code> and <code>dev</code>, from lists in a different order, and from values that differ
+                        only in a timestamp, date or UUID. You see paths, key names and counts; values stay hidden.</>
                       : <>Choose a mount on both sides first, and Lockstep can read them and suggest the rules.</>}
                   </p>
                 </div>
@@ -152,7 +175,7 @@ export function ProfileEditor({ initial, takenNames, current, sides, onSave, onC
                     {found.truncated && " Some folders hold more secrets than the limit, so not everything was read."}
                   </p>
                   {suggestionCount === 0 ? (
-                    <p className="subtle">Nothing more to suggest: no folders look renamed, and no environment or folder words explain the values that differ.</p>
+                    <p className="subtle">Nothing more to suggest: no folders look renamed, and no environment or folder words, list order or timestamps explain the values that differ.</p>
                   ) : (
                     <>
                       <ul className="suggestions">
@@ -163,6 +186,24 @@ export function ProfileEditor({ initial, takenNames, current, sides, onSave, onC
                             <p>{m.reason}</p>
                             <button type="button" className="btn small" disabled={hasMapping(m)} onClick={() => addMapping(m)}>
                               {hasMapping(m) ? "Added" : "Add mapping"}</button>
+                          </li>
+                        ))}
+                        {foundUnordered.map((u) => (
+                          <li key={`u${u.key}|${u.separator ?? ""}`}>
+                            <div className="suggestion-rule"><span className="kind">Unordered</span>
+                              <code>{u.key}</code>{u.separator && <span className="subtle">split on <code>{u.separator}</code></span>}</div>
+                            <p>{u.reason}</p>
+                            <button type="button" className="btn small" disabled={hasUnordered(u)} onClick={() => addUnordered(u)}>
+                              {hasUnordered(u) ? "Added" : "Add unordered list"}</button>
+                          </li>
+                        ))}
+                        {foundVolatile.map((v) => (
+                          <li key={`v${v.key}|${v.pattern}`}>
+                            <div className="suggestion-rule"><span className="kind">Volatile</span>
+                              <code>{v.key}</code><span className="subtle">{v.what}</span></div>
+                            <p>{v.reason}</p>
+                            <button type="button" className="btn small" disabled={hasVolatile(v)} onClick={() => addVolatile(v)}>
+                              {hasVolatile(v) ? "Added" : "Add volatile pattern"}</button>
                           </li>
                         ))}
                         {found.rewrites.map((w) => (
@@ -179,7 +220,7 @@ export function ProfileEditor({ initial, takenNames, current, sides, onSave, onC
                         <span className="subtle">With every suggestion: {countLine(found.after)}.</span>
                         <span className="spacer" />
                         <button type="button" className="btn small" disabled={allAdded}
-                                onClick={() => { found.mappings.forEach(addMapping); found.rewrites.forEach(addRewrite); }}>Add all</button>
+                                onClick={() => { found.mappings.forEach(addMapping); found.rewrites.forEach(addRewrite); foundUnordered.forEach(addUnordered); foundVolatile.forEach(addVolatile); }}>Add all</button>
                       </div>
                     </>
                   )}
@@ -211,7 +252,9 @@ export function ProfileEditor({ initial, takenNames, current, sides, onSave, onC
               Words that name the environment or the application inside values. Each left word is read as its right word before
               comparing, so <code>logs.test.internal</code> matches <code>logs.dev.internal</code>, while a wrong host still shows as
               different. Whole words, case-sensitive: <code>test</code> never touches <code>latest</code>. Copies write the target
-              side's word. Certificates, keys and base64 data are never rewritten.
+              side's word. Certificates, keys and base64 data are never rewritten. Limit a rewrite to some keys (<code>*host*</code>) so it never
+              changes a word inside a password or a token. A rewrite can be a pattern: <code>{"{app}"}-test-db</code> ⇄ <code>{"{app}"}-dev-db</code>,
+              where <code>{"{app}"}</code> stands for one word (letters and digits) next to a <code>-</code>, <code>.</code>, <code>_</code> or <code>/</code>.
             </p>
             {rewrites.map((w, i) => (
               <div className="row rule-row" key={i}>
@@ -220,6 +263,13 @@ export function ProfileEditor({ initial, takenNames, current, sides, onSave, onC
                 <span className="map-arrow">⇄</span>
                 <input className="grow mono" type="text" aria-label={`Rewrite ${i + 1} right word`} value={w.right} placeholder="word on the right, e.g. dev"
                        onChange={(e) => setRewrites(rewrites.map((x, j) => (j === i ? { ...x, right: e.target.value } : x)))} />
+                <span className="subtle">in keys</span>
+                <input className="mono field-input" type="text" aria-label={`Rewrite ${i + 1} keys`} value={w.key ?? ""} placeholder="* (all)"
+                       title="Only in keys matching this pattern, such as *host* or *_url"
+                       onChange={(e) => setRewrites(rewrites.map((x, j) => (j === i ? { ...x, key: e.target.value } : x)))} />
+                <span className="subtle">under</span>
+                <input className="mono field-input" type="text" aria-label={`Rewrite ${i + 1} path`} value={w.path ?? ""} placeholder="** (everywhere)"
+                       onChange={(e) => setRewrites(rewrites.map((x, j) => (j === i ? { ...x, path: e.target.value } : x)))} />
                 <button type="button" className="btn ghost icon small" aria-label={`Remove rewrite ${i + 1}`}
                         onClick={() => setRewrites(rewrites.filter((_, j) => j !== i))}>✕</button>
               </div>
@@ -227,11 +277,15 @@ export function ProfileEditor({ initial, takenNames, current, sides, onSave, onC
             <button type="button" className="btn small" onClick={() => setRewrites([...rewrites, { left: "", right: "" }])}>＋ Add rewrite</button>
 
             <h3 className="editor-h">Ignored keys</h3>
-            <p className="subtle">Keys meant to differ, such as credentials or a log level. They're still shown, marked <em>ignored</em>, but don't make a secret count as different.</p>
+            <p className="subtle">Keys meant to differ, such as credentials or a log level. They're still shown, marked <em>ignored</em>, but don't make a secret count as different. For a key holding JSON or YAML, a <em>field</em> ignores only that part of it (<code>db.password</code>, <code>tls.*</code>).</p>
             {ignoreKeys.map((k, i) => (
               <div className="row rule-row" key={i}>
                 <input className="grow mono" type="text" aria-label={`Ignored key ${i + 1}`} value={k.key} placeholder="key pattern, e.g. host or *_url"
                        onChange={(e) => setIgnoreKeys(ignoreKeys.map((x, j) => (j === i ? { ...x, key: e.target.value } : x)))} />
+                <span className="subtle">field</span>
+                <input className="mono field-input" type="text" aria-label={`Ignored key ${i + 1} field`} value={k.field ?? ""} placeholder="(whole key)"
+                       title="Only this field inside a JSON or YAML value, such as db.password or tls.*"
+                       onChange={(e) => setIgnoreKeys(ignoreKeys.map((x, j) => (j === i ? { ...x, field: e.target.value } : x)))} />
                 <span className="subtle">under</span>
                 <input className="grow mono" type="text" aria-label={`Ignored key ${i + 1} path`} value={k.path} placeholder="** (everywhere)"
                        onChange={(e) => setIgnoreKeys(ignoreKeys.map((x, j) => (j === i ? { ...x, path: e.target.value } : x)))} />
@@ -240,6 +294,60 @@ export function ProfileEditor({ initial, takenNames, current, sides, onSave, onC
               </div>
             ))}
             <button type="button" className="btn small" onClick={() => setIgnoreKeys([...ignoreKeys, { key: "", path: "" }])}>＋ Add ignored key</button>
+
+            <h3 className="editor-h">Compared as text</h3>
+            <p className="subtle">Certificates, PEM and wrapped base64 that hold the same thing are equal even when the text differs in line endings or wrapping. For a key whose service reads the text as it is, compare it as text instead.</p>
+            {exactKeys.map((k, i) => (
+              <div className="row rule-row" key={i}>
+                <input className="grow mono" type="text" aria-label={`Compared as text ${i + 1}`} value={k.key} placeholder="key pattern, e.g. tls_*"
+                       onChange={(e) => setExactKeys(exactKeys.map((x, j) => (j === i ? { ...x, key: e.target.value } : x)))} />
+                <span className="subtle">under</span>
+                <input className="grow mono" type="text" aria-label={`Compared as text ${i + 1} path`} value={k.path} placeholder="** (everywhere)"
+                       onChange={(e) => setExactKeys(exactKeys.map((x, j) => (j === i ? { ...x, path: e.target.value } : x)))} />
+                <button type="button" className="btn ghost icon small" aria-label={`Remove compared as text ${i + 1}`}
+                        onClick={() => setExactKeys(exactKeys.filter((_, j) => j !== i))}>✕</button>
+              </div>
+            ))}
+            <button type="button" className="btn small" onClick={() => setExactKeys([...exactKeys, { key: "", path: "" }])}>＋ Add key</button>
+
+            <h3 className="editor-h">Unordered lists</h3>
+            <p className="subtle">Lists whose order doesn't matter, such as names on a certificate, scopes or hosts: the same items in another order are equal. A list inside JSON or YAML takes a <em>field</em> (<code>tls.sans</code>); a list in plain text takes a <em>separator</em> (<code>,</code> for <code>a.com, b.com</code>).</p>
+            {unordered.map((k, i) => (
+              <div className="row rule-row" key={i}>
+                <input className="grow mono" type="text" aria-label={`Unordered list ${i + 1}`} value={k.key} placeholder="key pattern, e.g. allowed_hosts"
+                       onChange={(e) => setUnordered(unordered.map((x, j) => (j === i ? { ...x, key: e.target.value } : x)))} />
+                <span className="subtle">field</span>
+                <input className="mono field-input" type="text" aria-label={`Unordered list ${i + 1} field`} value={k.field ?? ""} placeholder="(whole key)"
+                       onChange={(e) => setUnordered(unordered.map((x, j) => (j === i ? { ...x, field: e.target.value } : x)))} />
+                <span className="subtle">split on</span>
+                <input className="mono sep-input" type="text" aria-label={`Unordered list ${i + 1} separator`} value={k.separator ?? ""} placeholder="—" maxLength={8}
+                       onChange={(e) => setUnordered(unordered.map((x, j) => (j === i ? { ...x, separator: e.target.value } : x)))} />
+                <span className="subtle">under</span>
+                <input className="grow mono" type="text" aria-label={`Unordered list ${i + 1} path`} value={k.path} placeholder="** (everywhere)"
+                       onChange={(e) => setUnordered(unordered.map((x, j) => (j === i ? { ...x, path: e.target.value } : x)))} />
+                <button type="button" className="btn ghost icon small" aria-label={`Remove unordered list ${i + 1}`}
+                        onClick={() => setUnordered(unordered.filter((_, j) => j !== i))}>✕</button>
+              </div>
+            ))}
+            <button type="button" className="btn small" onClick={() => setUnordered([...unordered, { key: "", path: "" }])}>＋ Add unordered list</button>
+
+            <h3 className="editor-h">Volatile values</h3>
+            <p className="subtle">Parts of a value that change on their own, such as timestamps or build numbers, as a regular expression. A key that differs only there is still shown, marked <em>ignored</em>.</p>
+            {volatile.map((v, i) => (
+              <div className="row rule-row" key={i}>
+                <input className="mono key-input" type="text" aria-label={`Volatile pattern ${i + 1} keys`} value={v.key} placeholder="* (all)"
+                       onChange={(e) => setVolatile(volatile.map((x, j) => (j === i ? { ...x, key: e.target.value } : x)))} />
+                <span className="subtle">match</span>
+                <input className="grow mono" type="text" aria-label={`Volatile pattern ${i + 1}`} value={v.pattern} placeholder="regex, e.g. \d{4}-\d{2}-\d{2}T[0-9:.]+Z"
+                       onChange={(e) => setVolatile(volatile.map((x, j) => (j === i ? { ...x, pattern: e.target.value } : x)))} />
+                <span className="subtle">under</span>
+                <input className="mono field-input" type="text" aria-label={`Volatile pattern ${i + 1} path`} value={v.path} placeholder="** (everywhere)"
+                       onChange={(e) => setVolatile(volatile.map((x, j) => (j === i ? { ...x, path: e.target.value } : x)))} />
+                <button type="button" className="btn ghost icon small" aria-label={`Remove volatile pattern ${i + 1}`}
+                        onClick={() => setVolatile(volatile.filter((_, j) => j !== i))}>✕</button>
+              </div>
+            ))}
+            <button type="button" className="btn small" onClick={() => setVolatile([...volatile, { key: "", path: "", pattern: "" }])}>＋ Add volatile pattern</button>
 
             <h3 className="editor-h">Ignored paths</h3>
             <label className="field"><span className="subtle">One pattern per line. Matching secrets are left out of the comparison.</span>
@@ -257,7 +365,8 @@ export function ProfileEditor({ initial, takenNames, current, sides, onSave, onC
           <aside className="explain" aria-label="What this profile does">
             <h3 className="editor-h">What this profile does</h3>
             {!valid && <div className="notice warn">{validateRules(rules)}</div>}
-            {valid && rules.mappings.length + (rules.rewrites?.length ?? 0) + rules.ignore_keys.length + rules.ignore_paths.length === 0 && (
+            {valid && rules.mappings.length + (rules.rewrites?.length ?? 0) + rules.ignore_keys.length + rules.ignore_paths.length + (rules.exact_keys?.length ?? 0)
+              + (rules.unordered_keys?.length ?? 0) + (rules.volatile?.length ?? 0) === 0 && (
               <p>No rules yet. Paths are compared as they are, and every difference counts.
                 {sides && !found && <> Press <strong>Read both sides</strong> to see what Lockstep suggests.</>}</p>
             )}
@@ -280,7 +389,7 @@ export function ProfileEditor({ initial, takenNames, current, sides, onSave, onC
                   const s = found?.rewrites.find((x) => x.left === w.left && x.right === w.right);
                   return (
                     <li key={`r${i}`}>
-                      <strong>Reads</strong> <code className="map-l">{w.left}</code> in values on the left as <code className="map-r">{w.right}</code>, before comparing.
+                      <strong>Reads</strong> <code className="map-l">{w.left}</code> in values on the left as <code className="map-r">{w.right}</code>, before comparing{w.key && w.key !== "*" ? <>, in keys matching <code>{w.key}</code></> : null}{w.path && w.path !== "**" ? <> under <code>{w.path}</code></> : null}.
                       {s && <> That makes {plural(s.keys, "differing key")} equal.</>}
                       {" "}Anything else that differs in the same value still counts. Copying to the right writes <code>{w.right}</code>; copying to the left writes <code>{w.left}</code>.
                     </li>
@@ -290,6 +399,21 @@ export function ProfileEditor({ initial, takenNames, current, sides, onSave, onC
                   <li key={`k${i}`}>
                     <strong>Ignores</strong> differences in <code>{k.key}</code>{k.path && k.path !== "**" ? <> under <code>{k.path}</code></> : " everywhere"}
                     {effect && <> ({plural(effect.ignoredKeys[i], "secret")} in scope)</>}. The key is still shown, marked ignored. Use this for values that must differ, such as credentials.
+                  </li>
+                ))}
+                {(rules.unordered_keys ?? []).map((k, i) => (
+                  <li key={`u${i}`}>
+                    <strong>Compares</strong> {k.field ? <>the list at <code>{k.field}</code> in </> : k.separator ? <>the <code>{k.separator}</code>-separated items in </> : null}<code>{k.key}</code>{k.path && k.path !== "**" ? <> under <code>{k.path}</code></> : " everywhere"} regardless of order. The same items count, duplicates included.
+                  </li>
+                ))}
+                {(rules.volatile ?? []).map((v, i) => (
+                  <li key={`v${i}`}>
+                    <strong>Blanks</strong> text matching <code>{v.pattern}</code> in <code>{v.key}</code>{v.path && v.path !== "**" ? <> under <code>{v.path}</code></> : " everywhere"} on both sides. A key that differs only there is marked ignored.
+                  </li>
+                ))}
+                {(rules.exact_keys ?? []).map((k, i) => (
+                  <li key={`x${i}`}>
+                    <strong>Compares</strong> <code>{k.key}</code>{k.path && k.path !== "**" ? <> under <code>{k.path}</code></> : " everywhere"} as text: a certificate or base64 value written differently counts as different.
                   </li>
                 ))}
                 {rules.ignore_paths.map((p, i) => (

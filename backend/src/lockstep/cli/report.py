@@ -27,6 +27,9 @@ FORMAT = 1
 # JSON Schema for the report, so editors can complete and check `action:` values. Published
 # at this URL by the website build (scripts/build_site.py); `lockstep schema` prints it.
 SCHEMA_URL = "https://getlockstep.cloud/schemas/lockstep-report-v1.json"
+DriftState = Literal["new", "known", "waived"]
+_DRIFT_HELP = ("With --baseline or --waivers: new (not in the baseline), known (in the baseline with the "
+               "same status) or waived.")
 KeyAction = Literal["skip", "copy-to-right", "copy-to-left"]
 SecretAction = Literal["per-key", "skip", "copy-to-right", "copy-to-left"]
 _KEY_ACTIONS = {
@@ -48,7 +51,8 @@ def _enum_help(options: dict[str, str]) -> dict:
             "markdownEnumDescriptions": [f"`{k}`: {v}" for k, v in options.items()]}
 DIRECTION: dict[str, Direction] = {"copy-to-right": "left_to_right", "copy-to-left": "right_to_left"}
 # A key can be copied from the side that has it
-COPYABLE = {"copy-to-right": ("left_only", "different"), "copy-to-left": ("right_only", "different")}
+COPYABLE = {"copy-to-right": ("left_only", "different", "not_compared"),
+            "copy-to-left": ("right_only", "different", "not_compared")}
 
 HEADER = """\
 # yaml-language-server: $schema={schema}
@@ -100,13 +104,17 @@ class ReportKey(BaseModel):
 
     model_config = ConfigDict(extra="forbid")  # catches typos such as `acton:`
     key: str = Field(description="Key name.")
-    status: str = Field(description="different, left_only or right_only (unknown if a side couldn't be read).")
+    status: str = Field(description="different, left_only, right_only or not_compared (a keystore whose password "
+                                    "isn't in the secret); unknown if a side couldn't be read.")
     type_differs: bool = Field(default=False, description='The values have different JSON types, e.g. 5432 vs "5432".')
     ignored: bool = Field(default=False, description="A profile rule says this difference doesn't count.")
+    reason: str = Field(default="", description="Why the key has this status, e.g. \"different at `db.host`\". Never a value.")
+    paths: list[str] = Field(default_factory=list, description="Fields inside a JSON or YAML value that differ (names only).")
     left_holds: str | None = Field(default=None, description="What the left value is (certificate, keystore...), without the value.")
     right_holds: str | None = Field(default=None, description="What the right value is, without the value.")
     action: KeyAction = Field(default="skip", description="What `lockstep apply` does with this key.",
                               json_schema_extra=_enum_help(_KEY_ACTIONS))
+    drift: DriftState | None = Field(default=None, description=_DRIFT_HELP)
 
 
 class ReportMeta(BaseModel):
@@ -124,7 +132,8 @@ class ReportSecret(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     path: str = Field(description="The secret's path relative to the prefixes (the right side's form under a mapping).")
-    status: str = Field(description="equal, different, left_only, right_only, no_access or error.")
+    status: str = Field(description="equal, different, left_only, right_only, not_compared (nothing differs, but "
+                                    "a key couldn't be compared), no_access or error.")
     action: SecretAction = Field(default="per-key", description="What `lockstep apply` does with the whole secret.",
                                  json_schema_extra=_enum_help(_SECRET_ACTIONS))
     note: str | None = Field(default=None, description="Why the comparison couldn't be completed for this secret.")
@@ -134,6 +143,22 @@ class ReportSecret(BaseModel):
     keys: list[ReportKey] = Field(default=[], description="Keys that differ, each with an action.")
     custom_metadata: list[ReportMeta] = Field(default=[], description="Custom metadata keys that differ "
                                               "(with --custom-metadata). Informational: `lockstep apply` doesn't copy metadata.")
+    drift: DriftState | None = Field(default=None, description=_DRIFT_HELP + " Set on the secret when it's "
+                                     "on one side only, or no key is named.")
+
+
+class DriftCheck(BaseModel):
+    """The drift check of this run (with --baseline or --waivers)."""
+
+    model_config = ConfigDict(extra="ignore")
+    fail_on: str = Field(description="any, new or changed: which drift fails the run.")
+    baseline: str | None = Field(default=None, description="The baseline file compared with.")
+    failed: bool = Field(description="Whether this run failed the check (exit code 1).")
+    new: int = 0
+    known: int = 0
+    waived: int = 0
+    resolved: list[str] = Field(default=[], description="Drift in the baseline that's gone now.")
+    expired_waivers: list[str] = Field(default=[], description="Waivers past their expiry date; they fail the run.")
 
 
 class Report(BaseModel):
@@ -152,6 +177,7 @@ class Report(BaseModel):
     summary: dict[str, int] = Field(default={}, description="Counts per status.")
     warnings: list[str] = Field(default=[], description="Folders that couldn't be listed, truncation.")
     secrets: list[ReportSecret] = Field(default=[], description="Secrets that differ.")
+    drift_check: DriftCheck | None = Field(default=None, description="The drift check, with --baseline or --waivers.")
 
     @model_validator(mode="after")
     def _version(self):
@@ -209,6 +235,7 @@ def build(result: Comparison, left: ReportSide, right: ReportSide, profile: str 
 
     def secret(d: SecretDiff) -> ReportSecret:
         keys = [ReportKey(key=k.key, status=k.status, type_differs=k.type_differs, ignored=k.ignored,
+                          reason=k.reason, paths=k.paths,
                           left_holds=_holds((d.badges.get(k.key) or {}).get("left")),
                           right_holds=_holds((d.badges.get(k.key) or {}).get("right")))
                 for k in d.keys if k.status != "equal"]
@@ -235,7 +262,8 @@ def build(result: Comparison, left: ReportSide, right: ReportSide, profile: str 
 _ACTION_LINE = re.compile(r"^(\s*(?:- )?action: )(per-key|skip)$", re.M)
 
 
-def dump(report: Report, filename: str) -> str:
+def as_data(report: Report) -> dict:
+    """The report as plain data, without empty noise (the YAML and JSON reports)."""
     data = report.model_dump(exclude_none=True, exclude_defaults=False)
     if not data["warnings"]:
         del data["warnings"]
@@ -243,13 +271,18 @@ def dump(report: Report, filename: str) -> str:
         del data["rewrites"]
     for s in data["secrets"]:  # keep the file short: drop empty/false noise per key
         for k in s["keys"]:
-            for f in ("type_differs", "ignored"):
+            for f in ("type_differs", "ignored", "reason", "paths"):
                 if not k[f]:
                     del k[f]
         if not s["keys"]:
             del s["keys"]
         if not s.get("custom_metadata"):
             s.pop("custom_metadata", None)
+    return data
+
+
+def dump(report: Report, filename: str) -> str:
+    data = as_data(report)
     body = yaml.safe_dump(data, sort_keys=False, allow_unicode=True, width=1000, default_flow_style=False)
 
     def hint(m: re.Match) -> str:

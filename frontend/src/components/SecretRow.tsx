@@ -10,11 +10,17 @@ import type { Badge, ExportDoc, KeyChange, KeyDiff, KeyHistory, KeyStatus, Profi
 import type { InspectTarget } from "./Inspector";
 import { formatValue, typeName, ValueCell } from "./ValueCell";
 
+/** A key's reason, with `names` shown as code. */
+function reasonText(reason: string) {
+  return reason.split("`").map((part, i) => (i % 2 ? <code key={i}>{part}</code> : part));
+}
+
 export const STATUS_LABEL: Record<string, string> = {
   equal: "Equal",
   different: "Different",
   left_only: "Left only",
   right_only: "Right only",
+  not_compared: "Not compared",
   no_access: "No access",
   error: "Error",
   unknown: "Unknown",
@@ -87,9 +93,10 @@ function unavailableFor(k: KeyDiff, side: "left" | "right", info: SideInfo) {
 function summaryText(s: SecretDiff): string {
   const n = (st: KeyStatus) => s.keys.filter((k) => k.status === st).length;
   if (s.status === "equal") return `${s.keys.length} key${s.keys.length === 1 ? "" : "s"}`;
-  if (s.status === "different") {
+  if (s.status === "different" || s.status === "not_compared") {
     const parts = [n("different") && `${n("different")} differ`, n("left_only") && `${n("left_only")} left only`,
-                   n("right_only") && `${n("right_only")} right only`].filter(Boolean);
+                   n("right_only") && `${n("right_only")} right only`,
+                   n("not_compared") && `${n("not_compared")} not compared`].filter(Boolean);
     return `${parts.join(", ")} of ${s.keys.length}`;
   }
   return `${s.keys.length} key${s.keys.length === 1 ? "" : "s"}`;
@@ -181,7 +188,9 @@ function StagedCell({ side, kind, value, reveal, onEdit, onUndo }: {
 
 export function SecretRow({ secret, left, right, reveal, open, onToggle, changeset, onChangeset, onInspect, sideNames, ignoreMode, draft, onDraft, fileDocs, onDestroy, canDestroy, readOnly }: Props) {
   // An export file side is read-only and has no history; its values are in the opened file.
-  const isFile = { left: left.kind === "file", right: right.kind === "file" };
+  // Export files and KV v1 mounts are never written
+  const isFile = { left: left.kind === "file" || left.kv_version === "1" || left.writes === "none",
+                   right: right.kind === "file" || right.kv_version === "1" || right.writes === "none" };
   const fileData = (s: SideSummary, path: string) => {
     const d = fileDocs?.[s === left ? "left" : "right"];
     return d?.secrets.find((x) => x.path === path)?.data ?? null;
@@ -456,7 +465,11 @@ export function SecretRow({ secret, left, right, reveal, open, onToggle, changes
                             onClick={() => onDraft!(toggleIgnoreKey(draft!, k.key, "**"))}>Ignore everywhere</button>
                   </span>
                 )}
-                {k.type_differs && (
+                {k.reason && (k.status !== "equal" || k.reason !== "same value") ? (
+                  <span className="subtle key-reason" title={k.paths && k.paths.length > 3 ? `Differs at: ${k.paths.join(", ")}` : undefined}>
+                    {reasonText(k.reason)}
+                  </span>
+                ) : k.type_differs && (
                   <span className="subtle" title="The values look alike but are stored as different JSON types">
                     type differs{values ? `: ${typeName(values.left?.[k.key])} vs ${typeName(values.right?.[k.key])}` : ""}
                   </span>

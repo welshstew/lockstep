@@ -42,6 +42,25 @@ k -n "$NS" delete pod probe --ignore-not-found --now >/dev/null 2>&1 || true
 "$ENGINE" exec "$K3S" sh -c "kubectl -n $NS run probe --image=localhost/lockstep:0.6.0 --image-pull-policy=Never \
   --restart=Never --rm -i --quiet --command -- python -c \"\$(cat /tmp/incluster_check.py)\""
 
+log "Drift check: one run of the CronJob, signed in as $NS/lockstep-drift-check"
+k -n "$NS" delete job drift-now --ignore-not-found >/dev/null
+k -n "$NS" create job drift-now --from=cronjob/lockstep-drift-check >/dev/null
+for _ in $(seq 1 60); do
+  code=$(k -n "$NS" get pods -l job-name=drift-now -o jsonpath='{.items[0].status.containerStatuses[0].state.terminated.exitCode}' 2>/dev/null || true)
+  [[ -n $code ]] && break; sleep 2
+done
+logs=$(k -n "$NS" logs job/drift-now)
+echo "$logs" | grep -E '^(Left|Right):|secrets:|Waiver'
+# 0 (no drift) or 1 (drift): it compared. 2 would mean it couldn't sign in or compare.
+[[ $code == 0 || $code == 1 ]] || { echo "drift check exited ${code:-?}:"; echo "$logs" | tail -5; exit 1; }
+grep -q "Waiver for nothing/\* matches nothing now" <<<"$logs" || { echo "waivers weren't read"; exit 1; }
+echo "drift check ran (exit $code)"
+k -n "$NS" delete job drift-now >/dev/null
+
+log "/metrics"
+"$ENGINE" exec "$K3S" sh -c "kubectl -n $NS run metrics-probe --image=localhost/lockstep:0.6.0 --image-pull-policy=Never \
+  --restart=Never --rm -i --quiet --command -- python -c \"import urllib.request; t=urllib.request.urlopen('http://lockstep/metrics').read().decode(); assert 'lockstep_http_requests_total' in t, t[:300]; print('metrics served')\""
+
 log "Upgrade keeps the generated session key"
 before=$(k -n "$NS" get secret lockstep-session -o jsonpath='{.data.session-key}')
 helm upgrade lockstep /charts/lockstep -n "$NS" -f /values.yaml --set replicaCount=3 --wait --timeout 4m | grep REVISION

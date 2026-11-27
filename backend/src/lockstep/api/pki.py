@@ -27,6 +27,7 @@ from ..session import SessionData, load_session
 from ..vault import VaultClient, VaultError, _q
 from .connections import client_for, get_connection, vault_http_error
 from .guard import require_writable
+from .. import writepolicy
 
 router = APIRouter(prefix="/api/pki", tags=["pki"])
 audit = logging.getLogger("lockstep.audit")
@@ -133,6 +134,9 @@ async def issue(body: IssueRequest, session: Sess, settings: Conf):
     require_writable(settings)
     conn = get_connection(session, body.conn_id)
     mount = body.mount.strip("/")
+    writepolicy.check(settings, conn, [f"{mount}/issue/{body.role}",
+                                       *([f"{body.store.mount.strip('/')}/{body.store.path.strip('/')}"] if body.store else [])],
+                      event="pki.issue")
     async with client_for(conn, settings) as v:
         try:
             d = (await v.request("POST", f"{mount}/issue/{_q(body.role)}", json={
@@ -154,7 +158,7 @@ async def issue(body: IssueRequest, session: Sess, settings: Conf):
                 raise vault_http_error(e) from e
     info = describe(d["certificate"])
     audit.info(json.dumps({"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "event": "pki.issue",
-                           "outcome": "applied", "actor": {"identity": conn.display_name, "auth": conn.auth_method},
+                           "outcome": "applied", "actor": {"identity": conn.display_name, "auth": conn.auth_method, "entity_id": conn.entity_id, "accessor": conn.accessor},
                            "target": {"vault": conn.name, "url": conn.url, "mount": mount, "role": body.role},
                            "serial": d.get("serial_number"), "subject": info["subject"],
                            "stored": stored}, sort_keys=True))

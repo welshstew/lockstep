@@ -261,6 +261,36 @@ def test_cli_policy_compare(two_vaults, vaults, monkeypatch, tmp_path, capsys):
     assert '"mappings"' in capsys.readouterr().out
 
 
+def test_cli_policy_diff_against_a_directory(two_vaults, vaults, monkeypatch, tmp_path, capsys):
+    tag, a, _, put = two_vaults
+    put(a, f"t{tag}-same", 'path "app-config/data/x/*" { capabilities = ["read"] }')
+    put(a, f"t{tag}-drifted", 'path "app-config/data/y/*" { capabilities = ["read", "update"] }')
+    put(a, f"t{tag}-vault-only", 'path "app-config/data/z/*" { capabilities = ["list"] }')
+    d = tmp_path / "policies"
+    (d / "team").mkdir(parents=True)
+    # the same meaning, written differently: JSON, other order, comments
+    (d / f"t{tag}-same.json").write_text('{"path": {"app-config/data/x/*": {"capabilities": ["read"]}}}')
+    (d / "team" / f"t{tag}-drifted.hcl").write_text('# reviewed\npath "app-config/data/y/*" { capabilities = ["read"] }\n')
+    (d / f"t{tag}-file-only.hcl").write_text('path "app-config/data/w/*" { capabilities = ["read"] }\n')
+    (d / "README.md").write_text("not a policy")
+    for var in ("VAULT_ADDR", "VAULT_TOKEN", "VAULT_NAMESPACE", "LOCKSTEP_VAULT_TOKEN"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("LOCKSTEP_VAULT_TOKEN", "root-a")
+    from lockstep.cli import main
+    base = ["policy", "diff", "--dir", str(d), "--vault-addr", vaults[0], "--ignore", "default", "--ignore", "lockstep-*"]
+    assert main(base) == 1
+    out = capsys.readouterr().out
+    assert f"only in Vault t{tag}-vault-only" in out
+    assert f"different     t{tag}-drifted" in out and 'path "app-config/data/y/*"  [read] → [read, update]' in out
+    assert f"only in files t{tag}-file-only" in out and f"t{tag}-same" not in out
+    assert main([*base, "--files-only", "--show-equal"]) == 1
+    out = capsys.readouterr().out
+    assert f"equal         t{tag}-same" in out and "only in Vault" not in out
+    (d / f"t{tag}-drifted.json").write_text("{}")
+    assert main([*base, "--files-only"]) == 2
+    assert "Two files are policy" in capsys.readouterr().err
+
+
 def test_the_builtin_default_policy_raises_no_admin_warnings(client, connect):
     root = connect(token="root-a")
     out = explain(client, root, names=["default"])

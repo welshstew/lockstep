@@ -31,6 +31,7 @@ from ..session import SessionData, load_session
 from ..vault import VaultClient, VaultError, _q
 from .connections import client_for, get_connection, vault_http_error
 from .guard import require_writable
+from .. import writepolicy
 
 router = APIRouter(prefix="/api/authusers", tags=["auth users"])
 audit = logging.getLogger("lockstep.audit")
@@ -211,6 +212,7 @@ async def write_user(body: UserWrite, session: Sess, settings: Conf):
                                                     "(LOCKSTEP_USER_WRITE). It's meant for development Vaults."})
     conn = get_connection(session, body.conn_id)
     mount = body.mount.strip("/")
+    writepolicy.check(settings, conn, f"auth/{mount}/users/{body.username}", event="userpass.write")
     password = body.password or generate_password()
     async with client_for(conn, settings) as v:
         try:
@@ -239,7 +241,7 @@ async def write_user(body: UserWrite, session: Sess, settings: Conf):
         except VaultError as e:
             raise vault_http_error(e) from e
     audit.info(json.dumps({"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "event": f"userpass.{body.action}",
-                           "outcome": "applied", "actor": {"identity": conn.display_name, "auth": conn.auth_method},
+                           "outcome": "applied", "actor": {"identity": conn.display_name, "auth": conn.auth_method, "entity_id": conn.entity_id, "accessor": conn.accessor},
                            "target": {"vault": conn.name, "url": conn.url, "mount": mount, "user": body.username},
                            "generated": body.password is None}, sort_keys=True))
     return {"username": body.username, "mount": mount, "action": body.action,

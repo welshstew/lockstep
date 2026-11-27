@@ -33,3 +33,37 @@ spec:
     {{- toYaml . | nindent 4 }}
     {{- end }}
 {{- end }}
+{{- if and .Values.networkPolicy.enabled .Values.driftCheck.enabled }}
+---
+# The drift check takes no traffic; it reaches DNS, the Vaults and (driftCheck.egress) the Pushgateway.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "lockstep.driftName" . }}
+  labels:
+    {{- include "lockstep.labels" . | nindent 4 }}
+    app.kubernetes.io/component: drift-check
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "lockstep.driftSelectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    {{- if .Values.networkPolicy.allowDns }}
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - {port: 53, protocol: UDP}
+        - {port: 53, protocol: TCP}
+    {{- end }}
+    {{- with .Values.networkPolicy.vaultEgress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with .Values.driftCheck.egress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}

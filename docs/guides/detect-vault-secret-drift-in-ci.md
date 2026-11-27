@@ -25,6 +25,52 @@ The best way to get a token is the pipeline's own identity token. With Vault's J
 
 ## GitHub Actions
 
+The Lockstep action does the whole job in one step:
+- it logs in to Vault with the job's OIDC token;
+- it compares, against a baseline if you give one;
+- it uploads SARIF to code scanning;
+- it comments a summary on the pull request, and updates that comment on later runs;
+- it writes the summary to the job's page.
+
+```yaml
+name: vault-drift
+on:
+  pull_request:
+    paths: [".lockstep/**"]
+  schedule: [{cron: "0 6 * * 1-5"}]   # weekday mornings
+  workflow_dispatch:
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write          # the OIDC token Vault's JWT auth takes
+      security-events: write   # SARIF upload (code scanning)
+      pull-requests: write     # the PR comment
+    steps:
+      - uses: actions/checkout@v4
+      - uses: welshstew/lockstep@v0.11.0
+        with:
+          left-addr: https://vault-prod.example.com
+          left-name: prod
+          right-addr: https://vault-staging.example.com
+          right-name: staging
+          mount: app-config
+          role: lockstep-ci
+          profile: .lockstep/prod-vs-staging.json
+          baseline: .lockstep/drift.json
+```
+
+- **Logging in:** the action asks GitHub for an OIDC token with the audience `vault` (input `audience`). It logs in with it at `auth/jwt` (input `jwt-mount`) as `role`, with `left-role` and `right-role` when they differ. Bind the role to your repository with `bound_claims`, as in [logging in to Vault with JWT from CI](vault-jwt-login-from-ci.md). With `auth: token`, it uses `left-token` and `right-token` from your secrets instead. Tokens and JWTs are masked in the log and never passed to other steps.
+- **The step fails** on drift that fails the check (exit 1), or when it couldn't compare (exit 2). `fail-on-drift: false` only reports. The outputs are `exit-code`, `new` (how many differences fail the check) and `report-dir`. The reports are `drift.yaml`, `drift.json`, `drift.sarif` and `drift.md`, so you can upload them with `actions/upload-artifact`.
+- **Code scanning** shows drift as alerts on the right side's `mount/path`, and closes them when the drift is gone. Uploading needs code scanning to be available for the repository (public repositories, or GitHub Advanced Security). Without it, set `sarif: false`.
+- **Pull requests from forks** get a read-only token, so the action can't comment there. The job summary still has the report.
+
+### Without the action
+
+The same check with the CLI, step by step:
+
 ```yaml
 name: vault-drift
 on:
@@ -37,7 +83,7 @@ jobs:
     permissions: {id-token: write, contents: read}
     steps:
       - name: Install the Lockstep CLI
-        run: pipx install "git+https://github.com/welshstew/lockstep@v0.10.1#subdirectory=backend"
+        run: pipx install "git+https://github.com/welshstew/lockstep@v0.11.0#subdirectory=backend"
 
       - name: Get an ID token for Vault (JWT auth)
         run: |
@@ -60,6 +106,10 @@ jobs:
         with: {name: vault-drift-report, path: drift.yaml}
 ```
 
+## Policies kept in Git
+
+If your ACL policies live in a repository, `lockstep policy diff --dir policies/` compares them with what Vault has, by meaning. A job that runs it fails when someone changed a policy by hand. See [policy diff](../cli.md#policies).
+
 ## GitLab CI and other systems
 
 Any runner with Python 3.13 or newer works the same way: install with `pipx`, get a token, run `lockstep compare`, and keep `drift.yaml` when the job fails. The CLI is also in the [container image](../cli.md#from-the-container-image) as `--entrypoint lockstep`. That image has no shell, so in CI systems that run your script inside the job image, install with pipx instead.
@@ -77,6 +127,25 @@ Build the profile in the web UI ([guide](build-a-comparison-profile.md)):
 2. **Pick what to ignore…** in the results takes care of the rest.
 
 Then export the profile as JSON and commit it next to the workflow. `--profile` accepts the export directly; use `--profile-name` if the file holds several profiles. The report records the profile's rewrites, so `lockstep apply` uses them when it copies.
+
+## Fail only on new drift
+
+Once some drift is accepted, a job that fails on every difference fails on every run. Record the accepted drift in a **baseline**, commit it, and the job fails only on differences that aren't in it:
+
+```sh
+lockstep baseline update drift.json …        # the same options as compare
+lockstep compare … --baseline drift.json -o drift.sarif -o drift.md
+```
+
+The baseline holds paths, key names and statuses, never values. `--waivers` accepts single differences with an owner, a reason and an expiry date. `drift.sarif` goes to GitHub code scanning, and `drift.md` is a summary for a pull request comment. See [drift checks in CI](../cli.md#drift-checks-in-ci).
+
+## On a schedule, in Kubernetes
+
+To check on a schedule rather than in a pipeline, the Helm chart's `driftCheck` CronJob runs the same `lockstep compare`, signed in as its own service account, with a baseline, waivers and a profile. With `--pushgateway` it pushes gauges to a Prometheus Pushgateway (`lockstep_drift_new_keys`, `lockstep_compare_success` and more), so an alert fires when new drift appears or the check stops running. See [drift monitoring](../drift-monitoring.md) for the values and alert rules.
+
+## More than two environments
+
+`lockstep matrix environments.yaml` compares one baseline with up to 12 environments at once, each under its own profile, reading the baseline only once. It exits like `compare` (0 no differences, 1 differences, 2 couldn't run) and writes the grid as text, JSON, YAML, Markdown or CSV, so one job can watch every environment. Rows that differ in only one environment come first. See [environment matrix](../cli.md#environment-matrix).
 
 ## Fixing the drift
 

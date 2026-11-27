@@ -48,3 +48,31 @@ topologySpreadConstraints:
     topologyKey: kubernetes.io/hostname
     whenUnsatisfiable: ScheduleAnyway
     labelSelector: {matchLabels: {app.kubernetes.io/name: lockstep}}
+metrics:
+  enabled: true
+  tokenSecret: {name: lockstep-metrics, key: token}
+  serviceMonitor: {enabled: true, labels: {release: kube-prometheus-stack}}
+driftCheck:
+  enabled: true
+  schedule: "*/30 * * * *"
+  left: {addr: https://vault.prod.example.com, mount: app-config, prefix: services, name: prod, role: lockstep-drift}
+  right:
+    addr: https://vault.staging.example.com
+    namespace: team-a
+    mount: app-config
+    prefix: services
+    name: "staging: team a"
+    tokenSecret: {name: vault-staging-token, key: token}
+  profile: Prod vs staging
+  baselineConfigMap: {name: drift-baseline, key: drift.json}
+  waivers:
+    - {path: "billing/*", key: feature_flags, owner: team-billing, reason: staging tries the new checkout, expires: "2027-01-31"}
+  pushgateway: {url: "http://pushgateway.monitoring:9091"}
+  extraArgs: [--custom-metadata]
+  egress:
+    - to: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: monitoring}}}]
+      ports: [{port: 9091, protocol: TCP}]
+exportMode: encrypted
+exportRecipients:
+  - name: Platform
+    recipients: ["age18aruncj56khn9jaw30aj3v4ugfusg6tk4yjfckdnf3fk2dkkwfsq5knfvw"]

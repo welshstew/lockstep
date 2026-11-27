@@ -51,7 +51,7 @@ Values stay hidden until you turn on **Show values**, and then only for the secr
 The same comparison runs from a terminal with the [`lockstep` CLI](../cli.md), which logs in the way the `vault` CLI does:
 
 ```sh
-pipx install "git+https://github.com/welshstew/lockstep@v0.10.1#subdirectory=backend"
+pipx install "git+https://github.com/welshstew/lockstep@v0.11.0#subdirectory=backend"
 
 lockstep compare \
   --left-addr https://vault-prod.example.com --left-name prod \
@@ -70,12 +70,26 @@ A **comparison profile** lines the two sides up:
 
 In the web UI, **Read both sides** in the profile editor suggests the mappings and rewrites from what's in the two Vaults. Profiles also work with `lockstep compare --profile`. See [Building a comparison profile](build-a-comparison-profile.md).
 
+### More than two environments
+
+Comparing prod with staging, then with dev, then with each preview environment, one pair at a time, hides the most useful signal: which environment is the odd one out. The **Matrix** tab compares one baseline with up to 12 environments at once, each under its own comparison profile, and puts the rows that differ in only one environment first. **Open in Compare** opens any pair side by side. On the command line, `lockstep matrix environments.yaml` does the same from a file and exits like `compare`, so it works in CI. See [environment matrix](../usage.md#environment-matrix).
+
+### KV v1 mounts and namespaces
+
+- **KV v1** mounts are offered as *KV v1, read-only*. Lockstep compares them like KV v2 and can copy from one into a KV v2 mount, which is how a migration off KV v1 usually goes. It never writes a KV v1 mount.
+- **Namespaces** (Vault Enterprise, OpenBao 2.3 and later): a side lists the child namespaces it can see and moves into one with the same sign-in, so comparing the same path in two namespaces takes one sign-in.
+
+### Configuration, not only secrets
+
+Two clusters can hold the same secrets and still behave differently. The **Configuration** tab (and `lockstep config compare`) compares their setup by name: secrets engines and auth methods with their tuning, engine roles and keys, and system settings such as audit devices (with a warning when a Vault has none), password policies, token roles, quotas, MFA, plugins and identity entities. Fields that hold secrets are never compared or shown. See [configuration](../usage.md#8-configuration).
+
 ## Permissions
 
 Comparing needs read-only access: `list` and `read` on the mount's metadata, and `read` on its data. The [security guide](../security.md#vault-policies) has a ready-made policy. Lockstep never needs more than the person or role using it already has.
 
 ## Next steps
 
+- [Promoting secrets from dev to prod with approvals](promote-vault-secrets-with-approvals.md)
 - [Syncing secrets between Vault environments safely](sync-vault-secrets-between-environments.md)
 - [Detecting secret drift between Vault environments in CI](detect-vault-secret-drift-in-ci.md)
 - [Try the live demo](https://demo.getlockstep.cloud): sign in as `alice` / `password` on both sides, choose `app-config`, then press Compare.

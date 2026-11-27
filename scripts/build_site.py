@@ -35,10 +35,10 @@ BASE = "https://getlockstep.cloud"
 REPO = "https://github.com/welshstew/lockstep"
 
 # docs/<name>.md published at /docs/<name>/, in this order
-DOCS = ["usage", "cli", "authentication", "configuration", "kubernetes", "security"]
+DOCS = ["usage", "cli", "authentication", "configuration", "kubernetes", "drift-monitoring", "security"]
 # docs/guides/<name>.md published at /guides/<name>/: these first, in this order, then any others
 GUIDES = ["vault-secrets-in-development-environments", "compare-hashicorp-vault-clusters", "sync-vault-secrets-between-environments",
-          "detect-vault-secret-drift-in-ci", "export-import-vault-secrets", "migrate-vault-to-openbao",
+          "promote-vault-secrets-with-approvals", "detect-vault-secret-drift-in-ci", "export-import-vault-secrets", "migrate-vault-to-openbao",
           "build-a-comparison-profile", "compare-environments-after-a-rename", "vault-jwt-login-from-ci"]
 
 
@@ -187,11 +187,36 @@ def _nav(pages: list[Page], current: Page | None) -> str:
     </nav>"""
 
 
+_LIST_ITEM = re.compile(r"^(\s*)([-*+]|\d+\.)\s")
+
+
+def _lists_after_text(text: str) -> str:
+    """Read lists the way GitHub does. Python-Markdown needs a blank line before a list that
+    follows a line of text (or the items run into the paragraph), and four spaces, not two, to
+    nest a list or a paragraph under an item. Outside code fences that aren't in a list."""
+    out: list[str] = []
+    fence = in_list = False
+    for line in text.split("\n"):
+        indent = len(line) - len(line.lstrip(" "))
+        if line.lstrip().startswith(("```", "~~~")):
+            fence = not fence
+        elif not fence and line.strip() and indent == 0:
+            item = bool(_LIST_ITEM.match(line))
+            if item and out and out[-1].strip() and not _LIST_ITEM.match(out[-1]) \
+                    and not out[-1].startswith((" ", "\t", "|", ">", "#")):
+                out.append("")
+            in_list = item
+        if in_list and indent and line.strip():
+            line = " " * indent + line  # two spaces under an item become four
+        out.append(line)
+    return "\n".join(out)
+
+
 def render(page: Page, pages: list[Page], by_path: dict[str, Page]) -> str:
     md = markdown.Markdown(extensions=["tables", "fenced_code", "toc", "sane_lists"],
                            extension_configs={"toc": {"slugify": _slug, "permalink": False}})
     source = re.sub(r"<!--\s*description:.*?-->\n?", "", page.text, count=1, flags=re.S)
-    body = _rewrite(md.convert(source), page, by_path)
+    body = _rewrite(md.convert(_lists_after_text(source)), page, by_path)
     edit = f"{REPO}/blob/main/{page.repo_path}"
     title = page.title if page.section == "guides" else f"{page.title} · Lockstep docs"
     return (HEAD.format(title=html.escape(title), description=html.escape(page.description, quote=True),

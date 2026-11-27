@@ -63,10 +63,16 @@ spec:
               value: {{ .Values.allowCustomConnections | quote }}
             - name: LOCKSTEP_CUSTOM_URL_PATTERNS
               value: {{ toJson .Values.customUrlPatterns | quote }}
+            - name: LOCKSTEP_CUSTOM_ALLOW_PRIVATE
+              value: {{ .Values.customAllowPrivate | quote }}
             - name: LOCKSTEP_MAX_TREE_SECRETS
               value: {{ .Values.maxTreeSecrets | quote }}
             - name: LOCKSTEP_EXPORT_MODE
               value: {{ .Values.exportMode | quote }}
+            {{- with .Values.exportRecipients }}
+            - name: LOCKSTEP_EXPORT_RECIPIENTS
+              value: {{ toJson . | quote }}
+            {{- end }}
             - name: LOCKSTEP_ALLOW_DESTROY
               value: {{ .Values.allowDestroy | quote }}
             - name: LOCKSTEP_READ_ONLY
@@ -75,8 +81,46 @@ spec:
               value: {{ .Values.policyApply | quote }}
             - name: LOCKSTEP_USER_WRITE
               value: {{ .Values.userWrite | quote }}
+            - name: LOCKSTEP_API_DOCS
+              value: {{ .Values.apiDocs | quote }}
+            - name: LOCKSTEP_AUDIT_REVEALS
+              value: {{ .Values.auditReveals | quote }}
             - name: LOCKSTEP_ALLOW_CLIPBOARD
               value: {{ .Values.allowClipboard | quote }}
+            - name: LOCKSTEP_METRICS
+              value: {{ ternary "on" "off" .Values.metrics.enabled | quote }}
+            {{- if and .Values.metrics.enabled .Values.metrics.tokenSecret.name }}
+            - name: LOCKSTEP_METRICS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.metrics.tokenSecret.name }}
+                  key: {{ .Values.metrics.tokenSecret.key }}
+            {{- end }}
+            {{- with .Values.plans }}
+            {{- if .issuer }}
+            - name: LOCKSTEP_PLAN_ISSUER
+              value: {{ .issuer | quote }}
+            {{- end }}
+            - name: LOCKSTEP_PLAN_TTL_HOURS
+              value: {{ .ttlHours | default 168 | quote }}
+            - name: LOCKSTEP_PLAN_APPROVALS
+              value: {{ .approvals | default 0 | quote }}
+            {{- if .trustedKeys }}
+            - name: LOCKSTEP_PLAN_TRUSTED_KEYS
+              value: {{ toJson .trustedKeys | quote }}
+            {{- end }}
+            {{- if and .signingKeySecret .signingKeySecret.name }}
+            - name: LOCKSTEP_PLAN_SIGNING_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .signingKeySecret.name }}
+                  key: {{ .signingKeySecret.key | default "signing-key" }}
+            {{- end }}
+            {{- end }}
+            - name: LOCKSTEP_LOG_LEVEL
+              value: {{ .Values.logging.level | quote }}
+            - name: LOCKSTEP_LOG_FORMAT
+              value: {{ .Values.logging.format | quote }}
             - name: LOCKSTEP_VAULT_TLS_VERIFY
               value: {{ .Values.vaultTls.verify | quote }}
             {{- if or .Values.vaultTls.caBundle.configMap .Values.vaultTls.caBundle.secret }}

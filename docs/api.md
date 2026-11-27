@@ -1,6 +1,6 @@
 # HTTP API
 
-The web UI uses this API, and you can script against it too. Interactive documentation (OpenAPI) is served at `/api/docs`.
+The web UI uses this API, and you can script against it too. Interactive documentation (OpenAPI) is served at `/api/docs`, unless the server turns it off (`LOCKSTEP_API_DOCS=off`; the public demo does).
 
 **Rules:**
 - **Sessions:** a session is the encrypted cookie set when you add a connection, so use a client that keeps cookies.
@@ -112,10 +112,14 @@ A plan is a signed JSON file (format `lockstep.sync-plan`, version 1) with no va
 
 | Method & path | Purpose |
 |---|---|
-| `POST /api/plans` | The `/api/sync/preview` body (without `reveal`) plus optional `"note"` and `"profile"`; returns the signed plan. Typed values (`set`) go into the plan as they are, and the plan says `"holds_values": true`. 409 if a change conflicts or can't be read, 400 if nothing would change |
+| `POST /api/plans` | The `/api/sync/preview` body (without `reveal`) plus optional `"note"`, `"profile"` and `"audience"` (installation names that may apply it); returns the signed plan. Typed values (`set`) don't go into the plan: each typed key gets a check code in `typed`, and `/check` and `/apply` take the values again as `"values": {"<change index>": {"<key>": value}}`. `/apply` answers 400 when one is missing or doesn't match the creator's. 409 if a change conflicts or can't be read, 400 if nothing would change |
 | `POST /api/plans/verify` | `{"plan"}`: returns `{"plan"}` if the signature is valid, else 400. No Vault access |
 | `POST /api/plans/report` | `{"plan"}`: the plan as Markdown |
+| `GET /api/plans/key` | This installation's plan-signing name, key ID and public key (`null` without `LOCKSTEP_PLAN_SIGNING_KEY`), for other installations' `LOCKSTEP_PLAN_TRUSTED_KEYS` |
 | `POST /api/plans/check` | `{"plan","left_conn_id","right_conn_id"}`: `{"status": "ready"\|"stale"\|"denied"\|"error","message","changes"}`. 409 if a connection isn't the Vault the plan names |
+| `POST /api/undo` | `{"writes": [{"conn_id","mount","path","action","old_version","new_version"}], "undoes"?}` (from an apply's results: `target_conn_id`, `target_mount`, `target_path`): a signed undo plan. 409 if a secret moved on or its old version is gone |
+| `POST /api/undo/check` | `{"plan","conn_ids"}`: `{"status","message","entries"}` |
+| `POST /api/undo/apply` | The same plus `"confirm": true`: puts the old versions back, stopping at the first that fails; `"outcome"` like a plan's |
 | `POST /api/plans/apply` | The same body plus `"confirm": true`; like `/api/sync/apply` plus `"plan_id"`. 409, with nothing written, unless the check is `ready` |
 
 ## Value tools

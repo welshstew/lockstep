@@ -3,10 +3,12 @@
 One person (who may only have read access) reviews staged copies and saves them as a plan.
 The plan is a signed JSON file: which secrets and keys go from where to where, and the
 source and target version each was at. Copied values are never in it: they're read fresh
-from the source when the plan is applied. The only values a plan can hold are ones the
-creator typed (overrides); a plan with any says so (`holds_values`), and anyone with the
-file can read them. Anyone with write access to the targets can later open the file, check
-it and apply it.
+from the source when the plan is applied. Values the creator typed (overrides) aren't in it
+either: the plan keeps a check code per typed key (an HMAC with this server's key, which
+can't be turned back into the value), and whoever applies the plan types the values again.
+A value that doesn't match what the creator typed is refused. Plans made before this held
+the typed values themselves (`set`, `holds_values`); they still apply as they are. Anyone
+with write access to the targets can later open the file, check it and apply it.
 
 A plan is all or nothing: if any source or target has changed since the plan was made, or
 the plan file was edited, nothing is written and the plan has to be made again.
@@ -27,20 +29,24 @@ import asyncio
 import hashlib
 import hmac
 import json
+import logging
 import time
 import uuid
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import PlainTextResponse
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, PrivateAttr, ValidationError
 
+from .. import plansign
 from ..config import Settings, get_settings
+from ..plansign import Issuer
 from ..rules import Rewrite
 from ..session import Connection, SessionData, load_session
 from .compare import FileSide, Side
 from .connections import get_connection
 from .guard import require_writable
+from .. import writepolicy
 from .sync import MAX_CHANGES, ApplyOut, Change, Direction, SyncRequest, _Ctx, apply_changes, evaluate
 
 router = APIRouter(prefix="/api/plans", tags=["plans"])
@@ -48,8 +54,9 @@ router = APIRouter(prefix="/api/plans", tags=["plans"])
 Sess = Annotated[SessionData, Depends(load_session)]
 Conf = Annotated[Settings, Depends(get_settings)]
 
+audit = logging.getLogger("lockstep.audit")
 FORMAT = "lockstep.sync-plan"
-VERSION = 1
+VERSION = 2  # 2: issuer, audience, not_before, expires_at, and the creators' entity IDs
 
 
 # --------------------------------------------------------------------------- models
@@ -62,6 +69,18 @@ class PlanVault(BaseModel):
     mount: str
     prefix: str = ""
     identity: str = ""  # who the creator was signed in as on this side (informational)
+    entity_id: str = ""  # the creator's Vault entity ID and token accessor on this side (from lookup-self,
+    accessor: str = ""   # which a token can't choose): to check against Vault's audit log
+
+
+class Approval(BaseModel):
+    """Someone other than the creator checked the plan and approved it. Signed separately, so an
+    approval never changes what the plan does."""
+    by: str  # display name
+    entities: dict[str, str]  # side -> the approver's Vault entity ID there (the sides the plan writes)
+    at: str
+    issuer: Issuer | None = None  # the installation that signed the approval
+    signature: str = ""
 
 
 class PlanKey(BaseModel):
@@ -79,7 +98,8 @@ class PlanChange(BaseModel):
     source_version: int
     target_version: int | None  # None: the target didn't exist
     keys: list[PlanKey] = Field(min_length=1)
-    set: dict[str, Any] | None = None  # typed values, for the keys marked override
+    set: dict[str, Any] | None = None  # typed values, in plans made before typed values were asked again
+    typed: dict[str, str] | None = None  # per typed key, a check code for the value (never the value)
 
     @property
     def copies(self) -> bool:
@@ -88,9 +108,13 @@ class PlanChange(BaseModel):
 
 class Plan(BaseModel):
     format: Literal["lockstep.sync-plan"] = FORMAT
-    version: Literal[1] = VERSION
+    version: Literal[1, 2] = VERSION
     id: str
     created_at: str
+    issuer: Issuer | None = None  # the installation that made it (version 2)
+    audience: list[str] = []  # the installations that may apply it (empty: any that trusts the issuer)
+    not_before: str | None = None
+    expires_at: str | None = None
     note: str = ""
     profile: str | None = None
     rewrites: list[Rewrite] = []  # the profile's value rewrites, applied again when the plan is applied
@@ -99,11 +123,14 @@ class Plan(BaseModel):
     changes: list[PlanChange] = Field(min_length=1, max_length=MAX_CHANGES)
     holds_values: bool = False  # some changes carry typed values: the file is as sensitive as they are
     signature: str = ""
+    approvals: list[Approval] = []  # outside the plan's signature (each is signed on its own)
+    _local: bool = PrivateAttr(default=True)  # issued by this installation (typed values can be checked)
 
 
 class CreateRequest(SyncRequest):
     note: str = Field(default="", max_length=2000)
     profile: str | None = Field(default=None, max_length=100)
+    audience: list[str] = Field(default=[], max_length=20)  # installations that may apply it
 
 
 class PlanFile(BaseModel):
@@ -113,6 +140,9 @@ class PlanFile(BaseModel):
 class CheckRequest(PlanFile):
     left_conn_id: str
     right_conn_id: str
+    # The typed values, entered again: {"<change index>": {"<key>": value}}. Check works without
+    # them (it can't tell whether they match yet); apply needs every one.
+    values: dict[str, dict[str, Any]] = {}
 
 
 class ApplyPlanRequest(CheckRequest):
@@ -121,6 +151,7 @@ class ApplyPlanRequest(CheckRequest):
 
 class VerifyOut(BaseModel):
     plan: Plan
+    local: bool  # made by this installation: typed values are checked against the creator's here
 
 
 class ChangeCheck(BaseModel):
@@ -133,14 +164,23 @@ class ChangeCheck(BaseModel):
     problems: list[str]
 
 
+class ApprovalsOut(BaseModel):
+    required: int  # how many this installation asks for, for the Vaults the plan writes
+    approved_by: list[str]  # the approvals that count
+    problems: list[str] = []  # approvals that don't count, and why
+
+
 class CheckOut(BaseModel):
     status: Literal["ready", "stale", "denied", "error"]
     message: str
     changes: list[ChangeCheck]
+    approvals: ApprovalsOut | None = None
 
 
 class ApplyPlanOut(ApplyOut):
     plan_id: str
+    outcome: Literal["applied", "partially_applied", "not_applied"] = "applied"
+    message: str = ""
 
 
 # --------------------------------------------------------------------------- signing
@@ -151,31 +191,100 @@ def _key(settings: Settings) -> bytes:
 
 
 def _canonical(data: dict) -> bytes:
-    body = {k: v for k, v in data.items() if k != "signature"}
+    body = {k: v for k, v in data.items() if k not in ("signature", "approvals")}
     return json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+
+
+def _approval_key(settings: Settings) -> bytes:
+    return hashlib.sha256(b"lockstep-plan-approval-v1\0" + settings.session_key.encode()).digest()
+
+
+def _approval_bytes(plan: Plan, a: Approval) -> bytes:
+    body = {"plan": plan.id, "plan_signature": plan.signature, "by": a.by, "entities": a.entities, "at": a.at,
+            "issuer": a.issuer.model_dump() if a.issuer else None}
+    return json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+
+
+def _written_sides(plan: Plan) -> list[str]:
+    return sorted({"right" if c.direction == "left_to_right" else "left" for c in plan.changes})
+
+
+def _approvals(plan: Plan, conns: dict[str, Connection], settings: Settings) -> ApprovalsOut:
+    """How many approvals the plan needs here, and which of its approvals count: signed by a trusted
+    installation, for this plan, and by someone whose Vault entity differs from the creator's on
+    every side the plan writes."""
+    sides = _written_sides(plan)
+    required = max(writepolicy.approvals_for(settings, conns[s]) for s in sides)
+    ok, problems = [], []
+    for a in plan.approvals:
+        try:
+            plansign.verify(_approval_bytes(plan, a), a.signature, a.issuer, settings, _approval_key(settings))
+        except HTTPException:
+            problems.append(f"The approval by {a.by} isn't valid here (edited, or signed by a server this one doesn't trust).")
+            continue
+        same = [s for s in sides if not a.entities.get(s) or a.entities.get(s) == getattr(plan, s).entity_id]
+        if same:
+            problems.append(f"The approval by {a.by} doesn't count: they made the plan, or had no Vault identity, on "
+                            f"{', '.join(_describe(getattr(plan, s)) for s in same)}.")
+            continue
+        if a.by not in ok:
+            ok.append(a.by)
+    return ApprovalsOut(required=required, approved_by=ok, problems=problems)
 
 
 def sign(plan: Plan, settings: Settings) -> Plan:
     data = plan.model_dump(mode="json")
-    plan.signature = hmac.new(_key(settings), _canonical(data), hashlib.sha256).hexdigest()
+    plan.signature = plansign.sign(_canonical(data), settings, _key(settings))
     return plan
+
+
+def _typed_key(settings: Settings) -> bytes:
+    return hashlib.sha256(b"lockstep-typed-value-v1\0" + settings.session_key.encode()).digest()
+
+
+def typed_check(settings: Settings, plan_id: str, target_path: str, key: str, value: Any) -> str:
+    """A check code for a typed value: keyed with this server's secret, so the plan file can't be
+    used to guess the value offline. Bound to the plan, the target and the key."""
+    msg = "\0".join((plan_id, target_path, key, json.dumps(value, sort_keys=True, separators=(",", ":"))))
+    return hmac.new(_typed_key(settings), msg.encode(), hashlib.sha256).hexdigest()[:32]
+
+
+def match_typed(settings: Settings, plan_id: str, target_path: str, key: str, code: str, value: Any) -> tuple[bool, Any]:
+    """Does a value typed at apply time match the creator's? A text that holds JSON (a number, a
+    list) also matches the JSON value the creator typed. Returns (matches, the value to write)."""
+    candidates = [value]
+    if isinstance(value, str):
+        try:
+            candidates.append(json.loads(value))
+        except ValueError:
+            pass
+    for v in candidates:
+        if hmac.compare_digest(typed_check(settings, plan_id, target_path, key, v), code):
+            return True, v
+    return False, value
+
+
+PLACEHOLDER = "\0lockstep: typed when the plan is applied\0"  # stands in for a value not entered yet (check only)
 
 
 def load_plan(raw: dict[str, Any], settings: Settings) -> Plan:
     """Parse an uploaded plan and check it was made by this server and not edited."""
     if raw.get("format") != FORMAT:
         raise HTTPException(400, detail={"message": "This isn't a Lockstep sync plan file."})
-    if raw.get("version") != VERSION:
+    if raw.get("version") not in (1, 2):
         raise HTTPException(400, detail={"message": f"Unsupported plan version {raw.get('version')!r}."})
-    want = hmac.new(_key(settings), _canonical(raw), hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(want, str(raw.get("signature", ""))):
-        raise HTTPException(400, detail={"message": (
-            "This plan file was changed after it was created, or was made by a different Lockstep "
-            "server. Nothing can be applied from it: create the plan again.")})
     try:
-        return Plan.model_validate(raw)
+        issuer = Issuer.model_validate(raw["issuer"]) if raw.get("issuer") else None
+    except ValidationError as e:
+        raise HTTPException(400, detail={"message": plansign.TAMPERED}) from e
+    local = plansign.verify(_canonical(raw), str(raw.get("signature", "")), issuer, settings, _key(settings))
+    try:
+        plan = Plan.model_validate(raw)
     except ValidationError as e:
         raise HTTPException(400, detail={"message": f"The plan file is malformed: {e.errors()[0]['msg']}"}) from e
+    plansign.check_valid(settings, plan.not_before, plan.expires_at, plan.audience)
+    plan._local = local
+    return plan
 
 
 # --------------------------------------------------------------------------- helpers
@@ -195,7 +304,8 @@ def _plan_vault(conn: Connection, side: Side, settings: Settings) -> PlanVault:
     vault, preset = _vault_of(conn, settings)
     mount, prefix = side.norm()
     return PlanVault(vault=vault, preset=preset, namespace=conn.namespace or None, mount=mount,
-                     prefix=prefix.rstrip("/"), identity=conn.display_name or conn.auth_method)
+                     prefix=prefix.rstrip("/"), identity=conn.display_name or conn.auth_method,
+                     entity_id=conn.entity_id, accessor=conn.accessor)
 
 
 def _matches(conn: Connection, pv: PlanVault, settings: Settings) -> bool:
@@ -206,14 +316,51 @@ def _describe(pv: PlanVault) -> str:
     return pv.vault + (f" (namespace {pv.namespace})" if pv.namespace else "")
 
 
-def _request(plan: Plan, left_conn_id: str, right_conn_id: str) -> SyncRequest:
+def typed_keys(plan: Plan) -> list[tuple[int, PlanChange, str]]:
+    """The (change index, change, key) of every value to type again when applying."""
+    return [(i, c, k.key) for i, c in enumerate(plan.changes) for k in c.keys
+            if k.override and k.key in (c.typed or {})]
+
+
+def _typed_values(plan: Plan, values: dict[str, dict[str, Any]], settings: Settings, require: bool) -> list[dict]:
+    """Each change's typed values: from an older plan's file, or entered again and checked
+    against the creator's. Missing ones are a placeholder when only checking."""
+    out: list[dict] = [dict(c.set or {}) for c in plan.changes]
+    missing, wrong = [], []
+    for i, c, key in typed_keys(plan):
+        where = f"{c.target_path} · {key}"
+        given = (values.get(str(i)) or {}).get(key)
+        if given is None or given == "":
+            if require:
+                missing.append(where)
+            out[i][key] = PLACEHOLDER
+            continue
+        if not plan._local:  # made elsewhere: the check code needs that installation's key
+            out[i][key] = given
+            continue
+        ok, value = match_typed(settings, plan.id, c.target_path, key, (c.typed or {})[key], given)
+        if not ok:
+            wrong.append(where)
+        out[i][key] = value
+    if wrong:
+        raise HTTPException(400, detail={"message": (
+            "These values don't match what the plan's creator typed: " + ", ".join(wrong)
+            + ". Nothing was written. Check them with whoever made the plan."), "typed": "mismatch"})
+    if missing:
+        raise HTTPException(400, detail={"message": "This plan writes values typed by hand, and they aren't in the file: "
+                                                    "type them again for " + ", ".join(missing) + ".", "typed": "missing"})
+    return out
+
+
+def _request(plan: Plan, left_conn_id: str, right_conn_id: str, typed: list[dict] | None = None) -> SyncRequest:
+    typed = typed or [dict(c.set or {}) for c in plan.changes]
     changes = [Change(path=c.path, right_path=c.right_path, direction=c.direction,
                       keys=[k.key for k in c.keys if not k.override and k.action != "remove"],
-                      set={k.key: (c.set or {})[k.key] for k in c.keys if k.override} or None,
+                      set={k.key: t[k.key] for k in c.keys if k.override and k.key in t} or None,
                       remove=[k.key for k in c.keys if k.action == "remove"] or None,
                       expected_target_version=c.target_version,
                       expected_source_version=c.source_version if c.copies else None)
-               for c in plan.changes]
+               for c, t in zip(plan.changes, typed)]
     return SyncRequest(left=Side(conn_id=left_conn_id, mount=plan.left.mount, prefix=plan.left.prefix),
                        right=Side(conn_id=right_conn_id, mount=plan.right.mount, prefix=plan.right.prefix),
                        changes=changes, rewrites=plan.rewrites)
@@ -233,6 +380,7 @@ async def _check(plan: Plan, req: SyncRequest, session: SessionData, settings: S
                 f"Connect the {which} side to {_describe(pv)}.")})
 
     async with _Ctx(req, session, settings) as ctx:
+        ctx.via_plan = True
         sem = asyncio.Semaphore(16)
 
         async def one(pc: PlanChange, c: Change) -> ChangeCheck:
@@ -291,6 +439,7 @@ async def create(body: CreateRequest, session: Sess, settings: Conf):
     lconn = get_connection(session, body.left.conn_id)
     rconn = get_connection(session, body.right.conn_id)
     async with _Ctx(body, session, settings) as ctx:
+        ctx.via_plan = True  # a Vault that changes only through approved plans still takes plans
         sem = asyncio.Semaphore(16)
 
         async def one(c: Change):
@@ -299,6 +448,7 @@ async def create(body: CreateRequest, session: Sess, settings: Conf):
 
         evaluated = await asyncio.gather(*(one(c) for c in body.changes))
 
+    plan_id = str(uuid.uuid4())
     changes: list[PlanChange] = []
     problems: list[str] = []
     for c, (ev, _, cas) in zip(body.changes, evaluated):
@@ -310,27 +460,37 @@ async def create(body: CreateRequest, session: Sess, settings: Conf):
         keys = [PlanKey(key=k.key, action=k.action, override=k.override) for k in ev.keys if k.action != "unchanged"]
         if not keys:
             continue  # already the same: nothing to plan
-        typed = {k.key: c.set[k.key] for k in keys if k.override and c.set}
+        # Typed values stay out of the file: a check code each, and they're typed again when applying
+        typed = {k.key: typed_check(settings, plan_id, ev.target.path, k.key, c.set[k.key])
+                 for k in keys if k.override and c.set and k.key in c.set}
         changes.append(PlanChange(path=ev.path, right_path=ev.right_path, direction=ev.direction,
                                   source_path=ev.source.path, target_path=ev.target.path,
                                   source_version=ev.source.version or 0, target_version=cas or None, keys=keys,
-                                  set=typed or None))
+                                  typed=typed or None))
     if problems:
         raise HTTPException(409, detail={"message": "Some changes can't go into a plan. Compare again, then retry: "
                                                     + " | ".join(problems)})
     if not changes:
         raise HTTPException(400, detail={"message": "Nothing to plan: the targets already have these values."})
 
-    plan = Plan(id=str(uuid.uuid4()), created_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    plan = Plan(id=plan_id, created_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                audience=[a.strip() for a in body.audience if a.strip()], **plansign.validity(settings),
                 note=body.note.strip(), profile=body.profile or None, rewrites=body.rewrites,
                 left=_plan_vault(lconn, body.left, settings), right=_plan_vault(rconn, body.right, settings),
-                changes=changes, holds_values=any(c.set for c in changes))
+                changes=changes)
     return sign(plan, settings)
 
 
 @router.post("/verify", response_model=VerifyOut)
 async def verify(body: PlanFile, settings: Conf):
-    return VerifyOut(plan=load_plan(body.plan, settings))
+    plan = load_plan(body.plan, settings)
+    return VerifyOut(plan=plan, local=plan._local)
+
+
+@router.get("/key")
+async def signing_key(settings: Conf):
+    """This installation's name and public key, for other installations' LOCKSTEP_PLAN_TRUSTED_KEYS."""
+    return plansign.public_key(settings)
 
 
 @router.post("/report", response_class=PlainTextResponse)
@@ -343,7 +503,48 @@ async def report(body: PlanFile, settings: Conf):
 @router.post("/check", response_model=CheckOut)
 async def check(body: CheckRequest, session: Sess, settings: Conf):
     plan = load_plan(body.plan, settings)
-    return await _check(plan, _request(plan, body.left_conn_id, body.right_conn_id), session, settings)
+    typed = _typed_values(plan, body.values, settings, require=False)
+    out = await _check(plan, _request(plan, body.left_conn_id, body.right_conn_id, typed), session, settings)
+    out.approvals = _approvals(plan, _conns(body, session), settings)
+    return out
+
+
+def _conns(body: CheckRequest, session: SessionData) -> dict[str, Connection]:
+    return {"left": get_connection(session, body.left_conn_id), "right": get_connection(session, body.right_conn_id)}
+
+
+class ApproveOut(BaseModel):
+    plan: Plan
+
+
+@router.post("/approve", response_model=ApproveOut)
+async def approve(body: CheckRequest, session: Sess, settings: Conf):
+    """Check the plan against the Vaults now and, if it's ready, add an approval from whoever is
+    signed in to the Vaults it writes. The approval is signed on its own: the plan is unchanged."""
+    plan = load_plan(body.plan, settings)
+    typed = _typed_values(plan, body.values, settings, require=False)
+    checked = await _check(plan, _request(plan, body.left_conn_id, body.right_conn_id, typed), session, settings)
+    if checked.status not in ("ready", "denied"):  # an approver needn't be able to write the targets
+        raise HTTPException(409, detail={"message": "Only a plan that checks out can be approved. " + checked.message})
+    conns = _conns(body, session)
+    sides = _written_sides(plan)
+    for s in sides:
+        if not conns[s].entity_id:
+            raise HTTPException(400, detail={"message": (
+                f"Approving needs a Vault identity (an entity) on {_describe(getattr(plan, s))}: sign in as a person "
+                "(userpass, LDAP, OIDC…), not with a root or orphan token.")})
+        if conns[s].entity_id == getattr(plan, s).entity_id:
+            raise HTTPException(409, detail={"message": "You made this plan: someone else has to approve it."})
+    k = plansign.keys(settings)
+    a = Approval(by=conns[sides[0]].display_name or conns[sides[0]].auth_method,
+                 entities={s: conns[s].entity_id for s in sides}, at=plansign.now_iso(),
+                 issuer=Issuer(name=k.name, key_id=k.own_id))
+    a.signature = plansign.sign(_approval_bytes(plan, a), settings, _approval_key(settings))
+    plan.approvals = [*plan.approvals, a]
+    audit.info(json.dumps({"ts": a.at, "event": "plan.approve", "outcome": "approved", "plan_id": plan.id,
+                           "actor": {"identity": a.by, "entities": a.entities,
+                                     "accessors": {s: conns[s].accessor for s in sides}}}, sort_keys=True))
+    return ApproveOut(plan=plan)
 
 
 @router.post("/apply", response_model=ApplyPlanOut)
@@ -352,13 +553,30 @@ async def apply(body: ApplyPlanRequest, session: Sess, settings: Conf):
     if not body.confirm:
         raise HTTPException(400, detail={"message": "Applying a plan requires confirm=true"})
     plan = load_plan(body.plan, settings)
-    req = _request(plan, body.left_conn_id, body.right_conn_id)
+    req = _request(plan, body.left_conn_id, body.right_conn_id, _typed_values(plan, body.values, settings, require=True))
     checked = await _check(plan, req, session, settings)
     if checked.status != "ready":
         raise HTTPException(409, detail={"message": checked.message, "check": checked.model_dump()})
+    ap = _approvals(plan, _conns(body, session), settings)
+    if len(ap.approved_by) < ap.required:
+        raise HTTPException(409, detail={"message": (
+            "This plan needs an approval from someone other than its creator before it's applied here: they open it in "
+            "Sync plans, check it and choose Approve." + (" " + " ".join(ap.problems) if ap.problems else "")),
+            "approvals": ap.model_dump()})
     async with _Ctx(req, session, settings) as ctx:
-        out = await apply_changes(ctx, req.changes, plan_id=plan.id)
-    return ApplyPlanOut(plan_id=plan.id, **out.model_dump())
+        ctx.via_plan = True
+        out = await apply_changes(ctx, req.changes, plan_id=plan.id, strict=True)
+    written, total = out.summary["applied"], len(out.results)
+    if not out.stopped:
+        outcome, message = "applied", f"Plan applied: {written} of {total} secret(s) written."
+    else:
+        bad = next(r for r in out.results if r.status not in ("applied", "noop", "skipped"))
+        where = f"{bad.target}: {bad.message or bad.status}"
+        outcome = "partially_applied" if written else "not_applied"
+        message = (f"{'Partially applied' if written else 'Not applied'}: {written} of {total} secret(s) written. "
+                   f"Stopped at {where}. The {out.summary['skipped']} after it weren't attempted. "
+                   "Compare again and make a new plan for what's left.")
+    return ApplyPlanOut(plan_id=plan.id, outcome=outcome, message=message, **out.model_dump())
 
 
 # --------------------------------------------------------------------------- report
@@ -374,7 +592,9 @@ def render_report(plan: Plan) -> str:
         "# Lockstep sync plan",
         "",
         f"- **Plan ID:** `{plan.id}`",
-        f"- **Created:** {plan.created_at}",
+        f"- **Created:** {plan.created_at}" + (f" by {_md(plan.issuer.name)}" if plan.issuer else ""),
+        *([f"- **Valid until:** {plan.expires_at}"] if plan.expires_at else []),
+        *([f"- **For:** {_md(', '.join(plan.audience))}"] if plan.audience else []),
         f"- **Left:** {_md(_describe(plan.left))} · `{plan.left.mount}/{plan.left.prefix}` "
         f"(created by {_md(plan.left.identity) or 'unknown'})",
         f"- **Right:** {_md(_describe(plan.right))} · `{plan.right.mount}/{plan.right.prefix}` "
@@ -388,7 +608,10 @@ def render_report(plan: Plan) -> str:
     lines += [
         "Copied values are not part of this plan: they're read from the source when it's applied. "
         + ("Keys marked *typed* are written with values typed by the plan's creator: the plan file "
-           "holds them (this report doesn't). " if plan.holds_values else "")
+           "holds them (this report doesn't). " if plan.holds_values else
+           "Keys marked *typed* are written with values typed by hand. They aren't in the plan: whoever "
+           "applies it types them again, and Lockstep checks they match the creator's. "
+           if typed_keys(plan) else "")
         + "If any secret below has changed since the plan was created, the plan can't be applied "
         "and has to be created again.",
         "",

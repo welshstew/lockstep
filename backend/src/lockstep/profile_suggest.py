@@ -14,6 +14,12 @@ Two kinds of suggestion, each with the reason it was made:
   ever considered, so a suggestion never reveals part of a value: it can only name a word the
   user can already see. A set of rewrites is kept when it makes keys equal, and each rewrite in
   it is reported with how many keys depend on it.
+
+* **Unordered lists,** for a key whose two values hold the same items in another order: a JSON or
+  YAML list, or text with items separated by commas.
+
+* **Volatile patterns,** for a key whose two values differ only in a timestamp, a date or a UUID.
+  Only these fixed patterns are suggested, so a suggestion names a pattern, never part of a value.
 """
 
 from __future__ import annotations
@@ -22,7 +28,8 @@ import json
 import re
 from dataclasses import dataclass, field
 
-from .rules import _OPAQUE, Mapping, Rewrite, Rules, compile_glob, pair_paths
+from .diff import structured
+from .rules import _OPAQUE, Mapping, Rewrite, Rules, UnorderedRule, VolatileRule, compile_glob, normalise, pair_paths
 
 ENV_WORDS = ("dev", "develop", "development", "test", "testing", "qa", "uat", "sit", "stage", "stg",
              "staging", "preprod", "pre-prod", "prod", "prd", "production", "sandbox", "perf", "nonprod")
@@ -47,6 +54,34 @@ class RewriteSuggestion:
     keys: int  # differing keys that are equal only with this rewrite (in the suggested set)
     secrets: list[str]  # where (pair paths, right-side form), up to 10
     reason: str
+
+
+@dataclass
+class UnorderedSuggestion:
+    key: str
+    separator: str | None
+    keys: int  # differing keys equal with it
+    secrets: list[str]
+    reason: str
+
+
+@dataclass
+class VolatileSuggestion:
+    key: str
+    pattern: str
+    what: str  # "a timestamp", "a date", "a UUID"
+    keys: int  # differing keys that differ only there
+    secrets: list[str]
+    reason: str
+
+
+# Fixed patterns for values that change on their own, most specific first
+VOLATILE_PATTERNS = [
+    ("a timestamp", r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?"),
+    ("a date", r"\d{4}-\d{2}-\d{2}"),
+    ("a UUID", r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"),
+]
+_GLOB_CHARS = re.compile(r"[*?\[\]]")
 
 
 @dataclass
@@ -227,7 +262,7 @@ def suggest_rewrites(values: ValuePairs, rules: Rules, paths: set[str]) -> list[
             r = Rules(rewrites=[*rules.rewrites, *(Rewrite(left=a, right=b) for a, b in extra)])
         except ValueError:
             return set()
-        return {i for i, (_, _, lv, rv) in enumerate(values.items) if r.rewrite(lv) == rv}
+        return {i for i, (path, key, lv, rv) in enumerate(values.items) if r.rewrite(lv, key=key, paths=(path,)) == rv}
 
     best = equal_with(chosen)
     if not best:
@@ -249,3 +284,70 @@ def suggest_rewrites(values: ValuePairs, rules: Rules, paths: set[str]) -> list[
                     f"Anything else that differs in those values still shows as different.")))
     out.sort(key=lambda s: -s.keys)
     return out[:MAX_SUGGESTIONS]
+
+
+# --------------------------------------------------------------------------- unordered lists, volatile values
+
+
+def _canon(v) -> str:
+    return json.dumps(v, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def _where(found: dict, values: "ValuePairs") -> tuple[int, list[str], str]:
+    idx = found["items"]
+    where = sorted({values.items[i][0] for i in idx})
+    keys = f"{_plural(len(idx), 'differing key')} ({', '.join(where[:3])}{', …' if len(where) > 3 else ''})"
+    return len(idx), where[:10], keys
+
+
+def suggest_value_rules(values: ValuePairs, rules: Rules) -> tuple[list[UnorderedSuggestion], list[VolatileSuggestion]]:
+    """Keys whose values hold the same items in another order, or differ only in a timestamp,
+    date or UUID, after the rules (and their rewrites) are applied. Each suggestion is checked
+    with the same code the comparison uses."""
+    unordered: dict[tuple[str, str | None], dict] = {}
+    volatile: dict[tuple[str, str], dict] = {}
+    known_u = {r.key for r in rules.unordered_keys}
+    known_v = {(r.key, r.pattern) for r in rules.volatile}
+    for i, (path, key, lv, rv) in enumerate(values.items):
+        if _GLOB_CHARS.search(key):
+            continue  # a key name that would be read as a pattern
+        lv = rules.rewrite(lv, key=key, paths=(path,))
+        if lv == rv:
+            continue
+        hit = False
+        if key not in known_u:
+            for sep in (None, ","):
+                rule = [UnorderedRule(key=key, separator=sep)]
+                (a, la), (b, lb) = normalise(lv, rule, [], structured), normalise(rv, rule, [], structured)
+                if (la or lb) and _canon(a) == _canon(b) and (sep is None or len(a) > 1):
+                    unordered.setdefault((key, sep), {"items": []})["items"].append(i)
+                    hit = True
+                    break
+        if hit:
+            continue
+        for what, pattern in VOLATILE_PATTERNS:
+            if (key, pattern) in known_v:
+                break
+            rule = [VolatileRule(key=key, pattern=pattern)]
+            a, b = normalise(lv, [], rule)[0], normalise(rv, [], rule)[0]
+            if _canon(a) == _canon(b):
+                volatile.setdefault((key, pattern), {"items": [], "what": what})["items"].append(i)
+                break
+    out_u = []
+    for (key, sep), found in unordered.items():
+        n, where, keys = _where(found, values)
+        how = "a list" if sep is None else "comma-separated items"
+        out_u.append(UnorderedSuggestion(
+            key=key, separator=sep, keys=n, secrets=where,
+            reason=(f"{key} holds {how} with the same items in a different order on each side: "
+                    f"{keys}. Compared regardless of order, {'it is' if n == 1 else 'they are'} equal.")))
+    out_v = []
+    for (key, pattern), found in volatile.items():
+        n, where, keys = _where(found, values)
+        out_v.append(VolatileSuggestion(
+            key=key, pattern=pattern, what=found["what"], keys=n, secrets=where,
+            reason=(f"{key} differs only in {found['what']}: {keys}. Ignoring {found['what']} there marks "
+                    f"{'it' if n == 1 else 'them'} ignored; any other difference in {key} still counts.")))
+    out_u.sort(key=lambda x: -x.keys)
+    out_v.sort(key=lambda x: -x.keys)
+    return out_u[:MAX_SUGGESTIONS], out_v[:MAX_SUGGESTIONS]

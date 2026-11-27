@@ -28,7 +28,7 @@ With [pipx](https://pipx.pypa.io/), which installs the CLI into its own virtual 
 
 ```sh
 # a release (recommended); the CLI is in v0.2.0 and later
-pipx install "git+https://github.com/welshstew/lockstep@v0.10.1#subdirectory=backend"
+pipx install "git+https://github.com/welshstew/lockstep@v0.11.0#subdirectory=backend"
 
 # or the latest code on main
 pipx install "git+https://github.com/welshstew/lockstep#subdirectory=backend"
@@ -39,7 +39,7 @@ lockstep --version
 [uv](https://docs.astral.sh/uv/) works the same way:
 
 ```sh
-uv tool install "git+https://github.com/welshstew/lockstep@v0.10.1#subdirectory=backend"
+uv tool install "git+https://github.com/welshstew/lockstep@v0.11.0#subdirectory=backend"
 ```
 
 To move to another release, run the same command with the new tag and `--force` (`pipx install --force ...`, `uv tool install --force ...`). To remove the CLI, run `pipx uninstall lockstep` or `uv tool uninstall lockstep`.
@@ -48,7 +48,7 @@ If you'd rather use a plain virtual environment:
 
 ```sh
 python3 -m venv ~/.venvs/lockstep
-~/.venvs/lockstep/bin/pip install "git+https://github.com/welshstew/lockstep@v0.10.1#subdirectory=backend"
+~/.venvs/lockstep/bin/pip install "git+https://github.com/welshstew/lockstep@v0.11.0#subdirectory=backend"
 ~/.venvs/lockstep/bin/lockstep --help
 ```
 
@@ -62,7 +62,7 @@ Every release image (`ghcr.io/welshstew/lockstep`, v0.2.0 and later, for amd64 a
 docker run --rm -it --entrypoint lockstep \
   -e VAULT_ADDR -e VAULT_TOKEN \
   -v "$PWD:/work" -w /work \
-  ghcr.io/welshstew/lockstep:0.10.1 \
+  ghcr.io/welshstew/lockstep:0.11.0 \
   compare --mount app-config -o report.yaml
 ```
 
@@ -80,7 +80,7 @@ A shell alias makes the image feel like an installed command:
 
 ```sh
 alias lockstep='docker run --rm -it --entrypoint lockstep -e VAULT_ADDR -e VAULT_TOKEN -e VAULT_NAMESPACE \
-  -e LOCKSTEP_LEFT_TOKEN -e LOCKSTEP_RIGHT_TOKEN -v "$PWD:/work" -w /work ghcr.io/welshstew/lockstep:0.10.1'
+  -e LOCKSTEP_LEFT_TOKEN -e LOCKSTEP_RIGHT_TOKEN -v "$PWD:/work" -w /work ghcr.io/welshstew/lockstep:0.11.0'
 ```
 
 ## Logging in
@@ -95,6 +95,7 @@ Each side looks for its settings in this order; the first one found wins.
 | Token | `LOCKSTEP_LEFT_TOKEN`, `--left-token-file`, `VAULT_TOKEN`, `~/.vault-token` | `LOCKSTEP_RIGHT_TOKEN`, `--right-token-file`, `VAULT_TOKEN`, `~/.vault-token` |
 
 - **Userpass or LDAP:** `--left-auth userpass --left-user alice` asks for the password, or reads it from `LOCKSTEP_LEFT_PASSWORD`. Use `--left-auth-mount` if the method isn't mounted at its default path. The token that login creates is revoked when the command finishes.
+- **Kubernetes:** `--left-auth kubernetes --left-role R` logs in with Vault's kubernetes auth method as the pod's service account, reading its token from `/var/run/secrets/kubernetes.io/serviceaccount/token` (or `--left-jwt-file`). `--left-auth-mount` defaults to `kubernetes`. The chart's [drift check](drift-monitoring.md) uses it.
 - **JWT:** `--left-auth jwt` logs in with Vault's JWT auth method, using the JWT in `LOCKSTEP_LEFT_JWT` or the file given by `--left-jwt-file`, for example a CI job's OIDC token. `--left-role` picks the Vault role (default: the mount's `default_role`) and `--left-auth-mount` the mount (default: `jwt`). The token that login creates is revoked when the command finishes.
 
   ```sh
@@ -144,16 +145,110 @@ Report written to report.yaml. Set actions in it, then run: lockstep apply repor
 | `--profile-name NAME` | which profile to use when the file holds several (the web UI's export can) |
 | `--left-name`, `--right-name` | labels used in the report (default: the host) |
 | `--left-ui-addr`, `--right-ui-addr` | the address people open the Vault UI at, if it differs from the API address the CLI uses |
-| `-o FILE` | write the report (`-o -` writes it to stdout, and the summary goes to stderr) |
+| `-o FILE` | write the report (`-o -` writes it to stdout, and the summary goes to stderr). Repeat it to write several formats; the format follows the extension (see [Drift checks in CI](#drift-checks-in-ci)) |
+| `--format` | `yaml`, `json`, `sarif`, `junit`, `markdown` or `csv` for every `-o`, instead of following the extension |
+| `--baseline FILE`, `--fail-on`, `--waivers FILE` | a drift check that fails only on new drift: see [Drift checks in CI](#drift-checks-in-ci) |
 | `--include-equal` | list equal secrets in the report too |
 | `-q` | no summary |
 
 **Exit codes**, like `diff`:
 - 0: the two sides are the same.
-- 1: there are differences.
+- 1: there are differences, or keys that couldn't be compared (`not_compared`), so a drift check never passes on a keystore it couldn't open.
 - 2: the comparison couldn't run.
 
-This makes `lockstep compare -q` usable as a drift check in CI.
+This makes `lockstep compare -q` usable as a drift check in CI. To fail only on drift that wasn't there before, use a baseline.
+
+**KV v1.** `--left-mount` or `--right-mount` can name a KV v1 mount: it's compared like KV v2, without versions. `lockstep apply` copies from it into KV v2, and refuses to write into it.
+
+## Drift checks in CI
+
+A pipeline that fails on every difference fails forever once one difference is accepted. A **baseline** records the drift you accept, so the run fails only on what's new:
+
+```sh
+# once, and again whenever you accept the drift as it is now
+lockstep baseline update drift.json --left-addr … --right-addr … --mount app-config --prefix services/billing
+git add drift.json
+
+# in the pipeline: exit 1 only for drift that isn't in drift.json
+lockstep compare --left-addr … --right-addr … --mount app-config --prefix services/billing \
+  --baseline drift.json -o drift.sarif -o drift.md
+```
+
+- **The baseline** is JSON, sorted, with one entry per differing key (or per secret, for one on one side only): its path, key and status. No values, no versions, no hashes of values, so it's safe to commit, and its diff in a pull request shows which drift was accepted. `baseline update` takes the same options as `compare`. An earlier `compare -o` report works as a baseline too. A baseline for other mounts or prefixes is refused (exit 2) rather than making everything new.
+- **`--fail-on`**:
+  - `any`: any drift exits 1. The default without `--baseline`.
+  - `new`: drift that isn't in the baseline, or is with another status (a key that was `left_only` and is now `different`). The default with `--baseline`.
+  - `changed`: new drift, or drift in the baseline that's gone (resolved). Use it to make sure the baseline is kept up to date.
+- **Waivers** accept one difference for a while, with who accepted it and why:
+
+  ```yaml
+  # waivers.yaml
+  - path: billing/*        # secret path as in the report; * and ** globs work
+    key: feature_flags     # leave out to waive the whole secret
+    owner: team-billing
+    reason: staging tries the new checkout flow
+    expires: 2027-01-31
+  ```
+
+  `--waivers waivers.yaml` doesn't fail on what a waiver covers. An expired waiver fails the run until it's renewed or removed, and the summary names waivers that match nothing any more.
+
+The summary adds a line like `Drift: 1 new, 4 known (in the baseline), 0 resolved.` and lists what's new. The YAML and JSON reports mark each key `drift: new`, `known` or `waived`, and add a `drift_check` section.
+
+**Formats.** `-o` follows the extension, or `--format` sets it. None of them holds a value.
+
+| Extension | Format | For |
+|---|---|---|
+| `.yaml`, `.yml` | the report | people, and `lockstep apply` |
+| `.json` | the report as JSON | scripts; `lockstep apply` reads it too |
+| `.sarif` | SARIF 2.1.0 | GitHub code scanning (`github/codeql-action/upload-sarif`) and other SARIF viewers. Drift that fails the run is an `error`, drift in the baseline a `note`, waived drift is suppressed with the waiver's reason. Each result's location is the right side's `mount/path`, and a fingerprint of the path and key lets the viewer follow it from run to run. |
+| `.xml` | JUnit XML | any CI's test tab: one test case per secret, failed when it has drift that fails the run, skipped when its drift is known or waived |
+| `.md` | Markdown | a pull request comment: counts, then a table with new drift first (at most 200 rows) |
+| `.prom` | Prometheus text | node_exporter's textfile collector: the [drift gauges](drift-monitoring.md#pushgateway-gauges), with their labels. `--pushgateway URL` pushes them instead. |
+| `.csv` | CSV | spreadsheets: one row per differing key. A cell that starts with `=`, `+`, `-` or `@` gets a leading `'`, so it's never run as a formula. |
+
+## Environment matrix
+
+`lockstep matrix FILE` compares one baseline, say prod, with several environments at once. Each environment is compared with the baseline under its own comparison profile, and the baseline is read only once. The result is a grid: a row per secret (is it there?) and per key (does it match?), a column per environment. Rows that differ in only one environment come first, because a key that differs in one place is the likeliest mistake. Rows where every environment differs come last: those are usually meant to differ, such as a password per environment.
+
+```yaml
+# environments.yaml
+baseline:
+  name: prod
+  addr: https://vault.prod.example.com
+  mount: app-config
+  prefix: services
+environments:                        # up to 12
+  - name: staging
+    addr: https://vault.staging.example.com
+    profile: profiles/prod-staging.yaml   # relative to this file, or a $LOCKSTEP_PROFILES name
+  - name: dev
+    addr: https://vault.dev.example.com
+    prefix: services-dev              # mount and prefix default to the baseline's
+  - name: preview
+    namespace: previews/pr-123        # no addr: the baseline's Vault
+```
+
+```console
+$ lockstep matrix environments.yaml -o matrix.md
+Baseline: prod (https://vault.prod.example.com) app-config/services
+  staging (https://vault.staging.example.com) app-config/services
+  dev (https://vault.dev.example.com) app-config/services-dev
+  preview (https://vault.prod.example.com) app-config/services
+
+                             staging  dev      preview
+  billing · feature_flags    =        ≠        =
+  payments                   =        =        missing
+  db · password              ≠        ≠        ≠
+
+= equal  ≠ different  missing: not in this environment  extra: only in this environment  ? not compared  · neither has it
+```
+
+- **Logins.** Each Vault logs in like the other commands: `LOCKSTEP_<NAME>_TOKEN`, with the name upper-cased and other characters turned into `_` (`LOCKSTEP_STAGING_TOKEN`), then `VAULT_TOKEN` or `~/.vault-token`. Or give an `auth:` block, either at the top of the file for every Vault or on one place: `{method: kubernetes, role: lockstep-drift}`, `{method: jwt, role: ci}` (the JWT from `LOCKSTEP_<NAME>_JWT` or `jwt_file`), `{method: userpass, user: alice}` (the password from `LOCKSTEP_<NAME>_PASSWORD`). Places on the same Vault and namespace with the same login share one sign-in. Tokens Lockstep minted by logging in are revoked at the end.
+- **Profiles.** `profile` takes a profile file (or `profile_name` to pick one from a file holding several) or a `$LOCKSTEP_PROFILES` name. A profile's right mount and prefix apply when the environment doesn't set its own.
+- **Output.** `-o` writes `.json`, `.yaml`, `.md` (a table for a pull request comment), `.csv` or `.txt`, and can be repeated. `--include-equal` lists the rows where everything matches too. None of them holds a value.
+- **Exit codes.** 0: every environment matches the baseline. 1: something differs, or couldn't be told. 2: something couldn't be compared, such as a bad file, a failed login or an environment whose listing failed. That environment's column says why, and the outputs are still written.
+
+The web UI's **Matrix** tab does the same with signed-in connections.
 
 ## The report
 
@@ -195,7 +290,7 @@ secrets:
 ```
 
 Each `keys` entry is a key that isn't equal on both sides:
-- `status` is `different`, `left_only` or `right_only`.
+- `status` is `different`, `left_only`, `right_only` or `not_compared` (a keystore whose password isn't in the secret). `not_compared` keys can be copied like `different` ones. `not_compared` makes `compare` exit 1, like a difference; `no_access` doesn't.
 - `type_differs` marks `5432` vs `"5432"`.
 - `ignored` marks a difference that a profile rule ignores.
 - `left_holds` / `right_holds` say what the value is (a certificate, a keystore and so on) without showing it.
@@ -296,13 +391,18 @@ Without a terminal, apply can't ask questions, so it refuses to run unless you p
 lockstep export --vault-addr https://vault-prod --mount app-config --prefix payments \
     --ignore-path 'legacy/**' --ignore-key 'password@services/**' -o payments.json --key-file payments.key
 
+# Or with a passphrase (asked twice, or $LOCKSTEP_EXPORT_PASSPHRASE), or to age public keys
+lockstep export --vault-addr https://vault-prod --mount app-config --prefix payments --passphrase -o payments.json
+lockstep export --vault-addr https://vault-prod --mount app-config --prefix payments -R platform-team.txt -o payments.json
+
 # Preview, then import into another Vault with rules
 lockstep import payments.json --vault-addr https://vault-test --mount app-config --prefix payments \
     --key-file payments.key --rules rules.yaml --replace application-dev-env=application-test-env --dry-run
 ```
 
-- **Export:** `--ignore-path GLOB` and `--ignore-key KEY[@PATH]` (repeatable) leave things out; `--profile` takes a comparison profile's ignore rules too. `--no-encrypt` writes plain text (with a warning), and `-o -` writes to stdout. The export file is created readable by you only.
-- **Import:** the key comes from `--key-file`, `LOCKSTEP_EXPORT_KEY`, or a prompt. `--rules FILE` reads import rules (YAML or JSON: `ignore_paths`, `ignore_keys`, `transforms`, the same file the web UI's **Save rules** writes; see `lockstep schema import-rules`). `--ignore-path`, `--ignore-key`, `--replace FIND=WITH` (values) and `--replace-path FIND=WITH` add to them. Text starting with `-` needs the `=` form: `--replace=-dev-=-test-`.
+- **Export:** `--ignore-path GLOB` and `--ignore-key KEY[@PATH]` (repeatable) leave things out; `--profile` takes a comparison profile's ignore rules too. Instead of a one-time key, `--passphrase` encrypts with a passphrase (from `LOCKSTEP_EXPORT_PASSPHRASE`, or asked twice), and `-r AGE_KEY` / `-R FILE` (repeatable) encrypt to age public keys, which `age -d` can open too. `--no-encrypt` writes plain text (with a warning), and `-o -` writes to stdout. A plain export is written as it's read (compact JSON), into a temporary file that replaces the target only once it's complete; an encrypted one holds only the compressed export in memory. The export file is created readable by you only.
+- **Import from the `vault` CLI:** the file can also be `vault kv get -format=json` output (one secret, its path the file name), a JSON object of `"path": output`, or a folder of such files, whose paths in the folder become the secret paths: `lockstep import ./dump --vault-addr … --mount app-config`.
+- **Import:** what opens an encrypted file comes from `--key-file` (the key, the passphrase, or an age identity file, whichever the file needs), `LOCKSTEP_EXPORT_KEY` (`LOCKSTEP_EXPORT_PASSPHRASE` for a passphrase), or a prompt. `--rules FILE` reads import rules (YAML or JSON: `ignore_paths`, `ignore_keys`, `transforms`, the same file the web UI's **Save rules** writes; see `lockstep schema import-rules`). `--ignore-path`, `--ignore-key`, `--replace FIND=WITH` (values) and `--replace-path FIND=WITH` add to them. Text starting with `-` needs the `=` form: `--replace=-dev-=-test-`.
 - **What import shows:** a preview: what the rules left out and changed, then per secret `new` or `update` with the keys (`--show-values` adds old and new values; it prints secrets). Then it asks once before writing, unless `--yes`. `--dry-run` stops after the preview.
 - **How it writes:** like `apply`. Values are merged into each target secret with check-and-set against the version the preview saw; keys only on the target are kept and nothing is deleted. `--audit-log FILE` appends a JSON line per write.
 - **`--delete-missing`:** make the target match the file. Imported secrets are written with only the file's keys (the preview shows other keys as `(remove)`), and secrets under `--prefix` that aren't in the file are soft-deleted (`delete` in the preview; `vault kv undelete` restores them). Entries with `"keep": true` and no data are left alone. See [deleting what isn't in the file](usage.md#deleting-what-isnt-in-the-file).
@@ -358,6 +458,29 @@ right only  orders-app
 - `--show-equal` lists equal policies too; `--json` prints the whole result, texts included.
 - **Exit codes,** like `compare`: 0 the same, 1 differences (or a policy couldn't be read), 2 couldn't compare. Use it in CI to catch access drift between clusters.
 
+`lockstep policy diff --dir DIR` compares the policy files kept in Git with a live Vault's policies, by the same meaning-aware comparison. It's "Git says X, Vault says Y" without `terraform plan`. A file's name without `.hcl` or `.json` is the policy's name. Files are found in subdirectories too, and two files for the same policy are refused. It logs in with the `--vault-*` options.
+
+```sh
+lockstep policy diff --dir ./policies --vault-addr https://vault-prod --ignore default
+```
+
+```text
+different     payments-app
+                path "app-config/data/payments/*"  [read] → [read, update]
+only in files orders-app
+only in Vault legacy-batch
+
+14 policies: 11 equal, 1 different, 1 only in files, 1 only in Vault.
+```
+
+- **Comparing:** comments, whitespace, rule order, HCL against JSON, and how capabilities are listed don't count.
+- **Options:**
+  - `--files-only` leaves out the policies that exist only in Vault, for a directory that holds some of them.
+  - `--ignore NAME` (`*` patterns, repeatable) leaves out more. `root` is always left out.
+  - `--profile`, `--map FILE=VAULT` and `--rewrite` work as for `policy compare`, with the files as the left side.
+  - `--show-equal` and `--json` work as for `policy compare`.
+- **Exit codes:** 0 the same, 1 differences, 2 couldn't compare. The token needs `list` on `sys/policies/acl` and `read` on `sys/policies/acl/*`.
+
 `lockstep policy suggest` suggests policies from a mount's layout, like the web UI's [Build & suggest](usage.md#build-and-suggest-policies), and prints them as HCL:
 
 ```sh
@@ -374,7 +497,7 @@ lockstep policy suggest --vault-addr https://vault-dev --mount app-config --patt
 
 ## Configuration
 
-`lockstep config compare` compares two Vaults' secrets engines and auth methods (type, plugin version, tuning, options, auth configuration) and the roles and keys of engines both have (PKI, database, Transit, SSH, Kubernetes, AWS, Azure, GCP, LDAP), with sensitive fields left out, like the web UI's [Configuration](usage.md#8-configuration) tab. It logs in with the `--left-*` and `--right-*` options.
+`lockstep config compare` compares two Vaults' secrets engines and auth methods (type, plugin version, tuning, options, auth configuration), the roles and keys of engines both have (PKI, database, Transit, SSH, Kubernetes, AWS, Azure, GCP, LDAP, and others such as TOTP, Consul and Nomad generically), and system settings (audit devices, password policies, token roles, quotas, MFA methods and enforcements, registered plugins, identity entities), with sensitive fields left out, like the web UI's [Configuration](usage.md#8-configuration) tab. It logs in with the `--left-*` and `--right-*` options.
 
 ```sh
 lockstep config compare --left-addr https://vault-staging --right-addr https://vault-prod
@@ -385,7 +508,12 @@ Vault 1.21.4 ⇄ Vault 2.2.2  (versions differ)
 different   secrets engine app-config/ (kv)
               config.max_lease_ttl: 3600 → 7200
 left only   auth method k8s-staging/ (kubernetes)
+different   password policy password-policy/app-passwords (password policy)
+              policy: length = 20 rule "charset" { charset = "abcdefghijklmnopqrs… → length = 32 rule "charset" { charset = "abcdefghijklmnopqrs…
+Warning (left): No audit device: requests to this Vault aren't logged.
 ```
+
+Lists longer than Lockstep reads at once (200 engine objects, 500 system objects) are cut off and named in `Cut off (left): …` lines.
 
 `--include-system` adds `sys/`, `identity/`, `cubbyhole/` and `token/`; `--show-equal` lists equal ones; `--json` prints everything. **Exit codes:** 0 the same, 1 differences, 2 couldn't compare.
 
@@ -412,6 +540,10 @@ A report and a web UI [sync plan](usage.md#sync-plans) are related, but they're 
 
 **A sync plan:**
 - is signed by the server.
-- is all or nothing.
+- is checked all or nothing: if any secret changed since the plan was made, nothing is written.
+- stops at the first write that's refused while it's being applied (a secret that changed in that
+  moment). The writes before it stay, and the result says "partially applied".
 
 Neither one holds values.
+
+`lockstep plan-key` prints a new Ed25519 key pair for signing plans that are made on one Lockstep server and applied on another. See [plans between installations](configuration.md#plans-between-installations).

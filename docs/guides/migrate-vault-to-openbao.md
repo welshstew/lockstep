@@ -16,10 +16,10 @@ Every command below was run against Vault 1.21 and OpenBao 2.7.
 ## Install Lockstep
 
 ```sh
-pipx install "git+https://github.com/welshstew/lockstep@v0.10.1#subdirectory=backend"
+pipx install "git+https://github.com/welshstew/lockstep@v0.11.0#subdirectory=backend"
 ```
 
-Or run the CLI from the image: `docker run --rm -it --entrypoint lockstep ghcr.io/welshstew/lockstep:0.10.1 --help`. See [Command line](../cli.md#install).
+Or run the CLI from the image: `docker run --rm -it --entrypoint lockstep ghcr.io/welshstew/lockstep:0.11.0 --help`. See [Command line](../cli.md#install).
 
 Lockstep's commands log in with tokens, userpass, LDAP or JWT. The examples use tokens:
 
@@ -51,6 +51,8 @@ Every `left only` line is something the migration has to create on OpenBao. Chec
 - **Fields only one product reports.** Vault and OpenBao return slightly different settings for the same thing. For example, OpenBao adds a `status` to JWT and OIDC auth configuration, and PKI roles have fields only one product has. In engine roles and auth configuration, Lockstep doesn't count a field that only one server returns as a difference. The web UI lists these fields as "not compared".
 
 ## 2. Copy a KV v2 mount
+
+**From KV v1?** Lockstep reads KV v1 mounts (*KV v1, read-only*) but never writes them, so create a KV v2 mount on OpenBao, compare the KV v1 mount with it, and copy across: a copy from KV v1 into KV v2 goes through the usual review and check-and-set write. **Already have `vault kv get -format=json` output** from your own scripts? Import it as it is: one file per secret, a folder of them, or one object of path to output. See [output of vault kv get](../usage.md#output-of-vault-kv-get).
 
 Create the mount on OpenBao, with the same path:
 

@@ -104,3 +104,19 @@ def test_allowlist_blocks_a_role_vault_would_accept():
     with make_client(k8s_auth_roles=["lockstep-reader"]) as c:
         assert login(c, role="lockstep-admin").status_code == 403
         assert login(c, role="lockstep-reader").status_code == 201
+
+
+@needs_k3s
+@pytest.mark.usefixtures("vaults")
+def test_cli_logs_in_as_the_pods_service_account(vaults, monkeypatch, tmp_path, capsys):
+    """The drift-check CronJob's login: `--left-auth kubernetes` reads the mounted token."""
+    from lockstep.cli import main
+
+    for var in ("VAULT_TOKEN", "LOCKSTEP_LEFT_TOKEN", "LOCKSTEP_RIGHT_TOKEN"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))  # no ~/.vault-token
+    rc = main(["compare", "--left-addr", vaults[0], "--right-addr", vaults[0], "--mount", "app-config",
+               "--prefix", "lockstep-k8s-cli-none", "--left-auth", "kubernetes", "--left-role", "lockstep-admin"])
+    assert rc == 0, capsys.readouterr()
+    assert main(["compare", "--left-addr", vaults[0], "--mount", "app-config", "--left-auth", "kubernetes"]) == 2
+    assert "--left-role is required for kubernetes login" in capsys.readouterr().err

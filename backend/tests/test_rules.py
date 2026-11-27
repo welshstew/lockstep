@@ -94,7 +94,7 @@ def test_diff_counts_keys_equal_after_rewrites():
     from lockstep.diff import SideInfo, diff_secret
     here = SideInfo(state="present", version=1)
     d = diff_secret("x", here, {"url": "logs.test.internal", "port": "1"}, here, {"url": "logs.dev.internal", "port": "2"},
-                    rewrite=ENVS.rewrite)
+                    rules=ENVS)
     keys = {k.key: k for k in d.keys}
     assert keys["url"].status == "equal" and keys["url"].rewritten
     assert keys["port"].status == "different" and d.status == "different" and d.rewritten_keys == 1

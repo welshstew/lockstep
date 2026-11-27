@@ -32,6 +32,7 @@ FROM ${PY_BUILDER} AS test
 USER 0
 COPY backend /src/backend
 COPY schemas /src/schemas
+COPY action.yml /src/action.yml
 RUN python3 -m venv /opt/venv && /opt/venv/bin/pip install --no-cache-dir "/src/backend[dev]"
 ENV PATH=/opt/venv/bin:$PATH
 WORKDIR /src/backend

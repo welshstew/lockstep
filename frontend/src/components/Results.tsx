@@ -11,7 +11,7 @@ type Side = "left" | "right";
 type Filter = "changes" | "all" | SecretStatus;
 type Grouping = "none" | "folder" | "staged";
 
-const CHANGE_STATUSES: SecretStatus[] = ["different", "left_only", "right_only", "no_access", "error"];
+const CHANGE_STATUSES: SecretStatus[] = ["different", "left_only", "right_only", "not_compared", "no_access", "error"];
 const PAGE = 200;
 const GROUP_KEY = "lockstep.group";
 
@@ -79,7 +79,9 @@ export function Results({ result, reveal, leftLabel, rightLabel, changeset, onCh
   const [folded, setFolded] = useState<Set<string>>(new Set()); // collapsed group headers
   const s = result.summary;
   const changes = CHANGE_STATUSES.reduce((n, st) => n + s[st], 0);
-  const writable = { left: !readOnly && result.left.kind !== "file", right: !readOnly && result.right.kind !== "file" };
+  // Never write an export file or a KV v1 mount (copies go from KV v1 into KV v2 only)
+  const writable = { left: !readOnly && result.left.kind !== "file" && result.left.kv_version !== "1" && result.left.writes !== "none",
+                     right: !readOnly && result.right.kind !== "file" && result.right.kv_version !== "1" && result.right.writes !== "none" };
 
   const setGrouping = (g: Grouping) => {
     setGroupingState(g);
@@ -112,8 +114,8 @@ export function Results({ result, reveal, leftLabel, rightLabel, changeset, onCh
 
   const chips: { id: Filter; label: string; n: number }[] = [
     { id: "changes", label: "All changes", n: changes },
-    ...(["different", "left_only", "right_only", "no_access", "error", "equal"] as SecretStatus[])
-      .filter((st) => s[st] > 0)
+    ...(["different", "left_only", "right_only", "not_compared", "no_access", "error", "equal"] as SecretStatus[])
+      .filter((st) => (s[st] ?? 0) > 0)
       .map((st) => ({ id: st as Filter, label: STATUS_LABEL[st], n: s[st] })),
     { id: "all", label: "Everything", n: s.total },
   ];

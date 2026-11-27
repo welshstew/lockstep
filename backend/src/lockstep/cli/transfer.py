@@ -14,11 +14,13 @@ import os
 import stat
 import sys
 from pathlib import Path
+from typing import Any
 
 import yaml
 from pydantic import ValidationError
 
 from .. import exports as ex
+from .. import kvdump
 from ..api.compare import FileSide, Side, side_connection
 from ..api.connections import client_for
 from ..api.exports import ImportScopeError, import_changes, plan_import
@@ -28,13 +30,15 @@ from ..vault import VaultError
 from .connect import CliError, add_side_args, add_tls_args, cli_settings, connect, default_name, revoke
 
 KEY_ENV = "LOCKSTEP_EXPORT_KEY"
+PASSPHRASE_ENV = "LOCKSTEP_EXPORT_PASSPHRASE"
 
 
 def add_parsers(sub) -> None:
     e = sub.add_parser("export", help="export a KV v2 mount (or prefix) with its values to a file",
                        description="Export every secret under a mount (and prefix), with values and versions, to "
-                                   "a JSON file. It's encrypted with a one-time key unless you pass --no-encrypt; "
-                                   "the key is printed once (or written to --key-file).")
+                                   "a JSON file. It's encrypted with a one-time key, printed once (or written to "
+                                   "--key-file), unless you choose a passphrase (--passphrase), age public keys "
+                                   "(--recipient, --recipients-file) or --no-encrypt.")
     e.add_argument("--mount", required=True, help="KV v2 mount")
     e.add_argument("--prefix", default="", help="only export under this path")
     _rule_args(e)
@@ -42,6 +46,12 @@ def add_parsers(sub) -> None:
     e.add_argument("--profile-name", metavar="NAME", help="which profile, when the --profile file holds several")
     e.add_argument("--no-encrypt", action="store_true", help="write values in plain text (anyone with the file can read them)")
     e.add_argument("--key-file", metavar="FILE", help="write the key to this file (mode 600) instead of printing it")
+    e.add_argument("--passphrase", action="store_true",
+                   help=f"encrypt with a passphrase instead (from ${PASSPHRASE_ENV}, or asked twice)")
+    e.add_argument("-r", "--recipient", metavar="AGE_KEY", action="append", default=[],
+                   help="encrypt to this age public key (age1…) instead; repeatable. Open with lockstep or age -d")
+    e.add_argument("-R", "--recipients-file", metavar="FILE", action="append", default=[],
+                   help="encrypt to the age public keys in this file, one per line (repeatable)")
     e.add_argument("-o", "--output", metavar="FILE", required=True, help="the export file ('-' for stdout)")
     add_side_args(e, "vault", locations=False)
     add_tls_args(e)
@@ -52,10 +62,13 @@ def add_parsers(sub) -> None:
                                    "check-and-set; keys only on the target are kept and nothing is deleted, unless "
                                    "--delete-missing makes the target match the file. "
                                    f"An encrypted file's key comes from --key-file, ${KEY_ENV}, or a prompt.")
-    i.add_argument("file", help="the export file")
+    i.add_argument("file", help="the export file; or `vault kv get -format=json` output: one file, a JSON object of "
+                                "path: output, or a folder of such files (paths from the file names)")
     i.add_argument("--mount", required=True, help="KV v2 mount to import into")
     i.add_argument("--prefix", default="", help="import under this path")
-    i.add_argument("--key-file", metavar="FILE", help="the export key (default: $LOCKSTEP_EXPORT_KEY, or ask)")
+    i.add_argument("--key-file", metavar="FILE",
+                   help="the export key, the passphrase, or an age identity file, whichever the file needs "
+                        f"(default: ${KEY_ENV}, ${PASSPHRASE_ENV} for a passphrase, or ask)")
     i.add_argument("--rules", metavar="FILE", help="import rules: YAML/JSON with ignore_paths, ignore_keys, transforms "
                                                    "(the web UI's Save rules writes one)")
     _rule_args(i)
@@ -118,39 +131,57 @@ async def run_export(args, load_profile) -> int:
         if prof_rules:
             rules.ignore_paths += prof_rules.ignore_paths
             rules.ignore_keys += prof_rules.ignore_keys
+    recipients, passphrase = _export_protection(args)
     t = _vault(args)
+    to_stdout = args.output == "-"
+    out = _Output(args.output) if args.no_encrypt else None  # a plain export goes straight to the file
+    packer = None if args.no_encrypt else ex.Packer()
     conn = await connect(t, settings, default_name(t.addr))
     try:
         source = ex.ExportSource(vault=conn.name, url=t.addr, namespace=t.namespace, mount=args.mount.strip("/"),
                                  identity=conn.display_name)
         async with client_for(conn, settings) as v:
             try:
-                doc = await ex.build(v, mount=args.mount.strip("/"), prefix=args.prefix, rules=rules, source=source,
-                                     max_secrets=settings.max_tree_secrets, tool=f"lockstep {_ver()}")
+                built = await ex.stream(v, mount=args.mount.strip("/"), prefix=args.prefix, rules=rules, source=source,
+                                        write=out.write if out else packer.write,
+                                        max_secrets=settings.max_tree_secrets, tool=f"lockstep {_ver()}")
             except VaultError as e:
                 raise CliError(f"Export failed: {e}") from e
+    except BaseException:
+        if out:
+            out.abandon()
+        raise
     finally:
         await revoke(conn, settings)
 
     key = None
-    if args.no_encrypt:
-        data = doc.dump()
+    if out:
+        await out.write(b"\n")
+        out.close()
     else:
-        env, key = ex.encrypt(doc)
-        data = env.dump()
-    text = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
-    to_stdout = args.output == "-"
-    if to_stdout:
-        sys.stdout.write(text)
-    else:
-        _write_private(Path(args.output), text)
+        packed = packer.done(built)
+        try:
+            if recipients:
+                data = ex.seal_age(packed, recipients).dump()
+            elif passphrase is not None:
+                data = ex.seal_passphrase(packed, passphrase).dump()
+            else:
+                env, key = ex.seal_key(packed)
+                data = env.dump()
+        except ex.ExportError as e:
+            raise CliError(str(e)) from e
+        text = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+        if to_stdout:
+            sys.stdout.write(text)
+        else:
+            _write_private(Path(args.output), text)
     log = sys.stderr if to_stdout else sys.stdout
-    n_keys = sum(len(s.data or {}) for s in doc.secrets)
-    where = f"{args.mount.strip('/')}" + (f"/{doc.source.prefix}" if doc.source.prefix else "")
-    print(f"Exported {len(doc.secrets)} secret{'s' if len(doc.secrets) != 1 else ''} ({n_keys} keys) from "
+    n_keys = built.keys
+    where = f"{args.mount.strip('/')}" + (f"/{built.source.prefix}" if built.source.prefix else "")
+    print(f"Exported {built.secrets} secret{'s' if built.secrets != 1 else ''} ({n_keys} keys) from "
           f"{t.addr} {where}{'' if to_stdout else f' to {args.output}'}"
-          f"{' (encrypted)' if key else ' in PLAIN TEXT: anyone with the file can read the values'}.", file=log)
-    sk = doc.skipped
+          f"{_protection(args, recipients, passphrase)}.", file=log)
+    sk = built.skipped
     if sk.ignored_paths or sk.ignored_keys:
         print(f"Left out by the rules: {sk.ignored_paths} secret(s), {sk.ignored_keys} key(s).", file=log)
     for label, items in (("unreadable", sk.unreadable), ("deleted (latest version)", sk.deleted),
@@ -166,6 +197,79 @@ async def run_export(args, load_profile) -> int:
         else:
             print(f"Key (shown once, keep it apart from the file): {key}", file=sys.stderr)
     return 0
+
+
+def _export_protection(args) -> tuple[list[str], str | None]:
+    """The age public keys and the passphrase to encrypt with (checked before connecting)."""
+    keys = list(args.recipient)
+    for f in args.recipients_file:
+        try:
+            keys.append(Path(f).read_text())
+        except OSError as e:
+            raise CliError(f"Can't read the recipients file {f}: {e}") from e
+    chosen = [n for n, on in (("--no-encrypt", args.no_encrypt), ("--passphrase", args.passphrase),
+                              ("--recipient", bool(keys))) if on]
+    if len(chosen) > 1:
+        raise CliError(f"Choose one of {', '.join(chosen)}.")
+    try:
+        recipients = ex.parse_recipients(keys) if keys else []
+        passphrase = None
+        if args.passphrase:
+            passphrase = os.environ.get(PASSPHRASE_ENV)
+            if passphrase is None:
+                if not sys.stdin.isatty():
+                    raise CliError(f"--passphrase: set ${PASSPHRASE_ENV}, or run in a terminal to be asked.")
+                passphrase = getpass.getpass("Passphrase for the export: ")
+                if getpass.getpass("The same passphrase again: ") != passphrase:
+                    raise CliError("The passphrases don't match.")
+            ex.check_passphrase(passphrase)
+    except ex.ExportError as e:
+        raise CliError(str(e)) from e
+    return recipients, passphrase
+
+
+def _protection(args, recipients: list[str], passphrase: str | None) -> str:
+    if args.no_encrypt:
+        return " in PLAIN TEXT: anyone with the file can read the values"
+    if recipients:
+        return f" (encrypted to {len(recipients)} age key{'s' if len(recipients) != 1 else ''})"
+    return " (encrypted with your passphrase)" if passphrase is not None else " (encrypted)"
+
+
+class _Output:
+    """Where a plain export is written as it's read: stdout, or a new file readable by its owner
+    only, written beside the target and renamed into place when complete."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        if name == "-":
+            self._f = sys.stdout.buffer
+            self._tmp = None
+            return
+        target = Path(name)
+        self._tmp = target.with_name(f".{target.name}.{os.getpid()}.part")
+        try:
+            fd = os.open(self._tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, stat.S_IRUSR | stat.S_IWUSR)
+        except OSError as e:
+            raise CliError(f"Can't write {name}: {e}") from e
+        self._f = os.fdopen(fd, "wb")
+
+    async def write(self, b: bytes) -> None:
+        self._f.write(b)
+
+    def close(self) -> None:
+        self._f.flush()
+        if self._tmp:
+            self._f.close()
+            try:
+                os.replace(self._tmp, self.name)
+            except OSError as e:
+                raise CliError(f"Can't write {self.name}: {e}") from e
+
+    def abandon(self) -> None:
+        if self._tmp:
+            self._f.close()
+            self._tmp.unlink(missing_ok=True)
 
 
 def _write_private(path: Path, text: str) -> None:
@@ -209,29 +313,61 @@ def _load_rules(args) -> ex.ImportRules:
     return rules
 
 
-def _key(args) -> str | None:
+def _key(args, scheme: str = "key") -> str | None:
+    """What opens the file: the one-time key, the passphrase or an age identity."""
     if args.key_file:
         try:
-            return Path(args.key_file).read_text().strip()
+            text = Path(args.key_file).read_text()
         except OSError as e:
             raise CliError(f"Can't read the key file: {e}") from e
-    if k := os.environ.get(KEY_ENV):
+        return text.rstrip("\r\n") if scheme == "passphrase" else text.strip()
+    if k := os.environ.get(PASSPHRASE_ENV if scheme == "passphrase" else KEY_ENV):
         return k
     if sys.stdin.isatty():
-        return getpass.getpass("Export key: ")
+        return getpass.getpass({"key": "Export key: ", "passphrase": "Passphrase: ",
+                                "age": "age identity (AGE-SECRET-KEY-1…): "}.get(scheme, "Export key: "))
     return None
 
 
-async def run_import(args) -> int:
+def _read_json(path: Path) -> Any:
     try:
-        raw = json.loads(Path(args.file).read_text())
+        return json.loads(path.read_text())
     except (OSError, ValueError) as e:
-        raise CliError(f"Can't read {args.file} as JSON: {e}") from e
-    encrypted = isinstance(raw, dict) and raw.get("format") == ex.ENCRYPTED_FORMAT
+        raise CliError(f"Can't read {path} as JSON: {e}") from e
+
+
+def _load_source(args) -> ex.ExportDoc:
+    """The export to import: a Lockstep export (plain or encrypted), `vault kv get -format=json`
+    output, or a folder of such files."""
+    src = Path(args.file)
+    if src.is_dir():
+        files = [(p.relative_to(src).as_posix(), _read_json(p)) for p in sorted(src.rglob("*.json"))]
+        if not files:
+            raise CliError(f"{src} has no .json files.")
+        return _from_kv_get(files, src.name)
+    raw = _read_json(src)
+    if not (isinstance(raw, dict) and str(raw.get("format", "")).startswith(ex.FORMAT)):
+        return _from_kv_get([(src.name, raw)], src.name)
+    encrypted = raw.get("format") == ex.ENCRYPTED_FORMAT
     try:
-        doc = ex.load(raw, _key(args) if encrypted else None)
+        return ex.load(raw, _key(args, raw.get("scheme", "key")) if encrypted else None)
     except ex.ExportError as e:
-        raise CliError(f"{args.file}: {e}" + (f" (use --key-file or ${KEY_ENV})" if encrypted and "enter its key" in str(e) else "")) from e
+        hint = {"passphrase": f" Use --key-file or ${PASSPHRASE_ENV}.",
+                "age": " Use --key-file with your age identity file."}.get(raw.get("scheme"), f" Use --key-file or ${KEY_ENV}.")
+        raise CliError(f"{args.file}: {e}" + (hint if encrypted and "This export is encrypted" in str(e) else "")) from e
+
+
+def _from_kv_get(files: list[tuple[str, Any]], name: str) -> ex.ExportDoc:
+    try:
+        return kvdump.convert(files, name, f"lockstep {_ver()}")
+    except ex.ExportError as e:
+        raise CliError(str(e)) from e
+    except ValidationError as e:
+        raise CliError(f"Couldn't read {name}: {e.errors()[0]['msg']}") from e
+
+
+async def run_import(args) -> int:
+    doc = _load_source(args)
     rules = _load_rules(args)
     prep = ex.prepare(doc, rules)
     if not (args.yes or args.dry_run) and not sys.stdin.isatty():

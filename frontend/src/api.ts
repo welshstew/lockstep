@@ -1,4 +1,4 @@
-import type {
+import type { MatrixResult, NamespacesResponse, UndoApplyResult, UndoCheck, UndoPlan,
   ProfileSuggestions, Rewrite,
   AuthUserMount, AuthUsersCompare, AuthUsersList,
   AnalyzeOptions, AnalyzeResult, ApiChange, PasswordSearch, ExportDoc, ExportResult, ImportPreview, ImportRules, AppConfig, ApplyResult, ChangePlan, CompareResult, Connection, AccessChanges, AccessCompareResult, ConfigCompare, MfaChallenge, MfaConstraint, AccessItem, AccessPlanInfo, AuthMount, BrowseDiff, BrowseEdit, BrowseEditResult, BrowseList, BrowseSecret, DestroyOut, ExpiryResult, ExplainResult, PolicyBuildRule, PolicyCompareResult, PolicyProfile, RoleDraft, RoleFinding, RoleKind, RolePair, RolesList, RoleTemplate, SuggestResult, TerraformOptions, KeyHistory, Locator, Mount, MountsResponse, PlanApplyResult, PlanCheck, Profile, ProfileRules, SecretValues, SyncPlan,
@@ -51,6 +51,51 @@ async function parseJson(res: Response): Promise<any> {
   const text = await res.text();
   if (!text) return {};
   try { return JSON.parse(text); } catch { throw notJson(res); }
+}
+
+/** An export, streamed (NDJSON): progress lines, then one result line, which for a plain export
+ * is written as the server reads. Only new text is searched for line ends, so a big result line
+ * costs no more than reading it. */
+async function exportStream(side: VaultSide, rules: { ignore_paths: string[]; ignore_keys: { key: string; path: string }[] },
+                            encrypt: boolean, protect: { passphrase?: string; recipients?: string[]; teams?: string[] },
+                            onProgress: (p: { done: number; total: number }) => void): Promise<ExportResult> {
+  const res = await fetch("/api/exports/stream", {
+    method: "POST", credentials: "same-origin",
+    headers: { "X-Requested-With": "lockstep", "Content-Type": "application/json" },
+    body: JSON.stringify({ side, rules, encrypt, ...protect }),
+  });
+  if (!res.ok || !res.body) {
+    const j = await parseJson(res);
+    throw new ApiError(res.status, j?.detail?.message ?? res.statusText, j?.detail ?? {});
+  }
+  const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+  let parts: string[] = [];
+  const handle = (line: string): ExportResult | null => {
+    if (!line.trim()) return null;
+    let ev;
+    try { ev = JSON.parse(line); } catch { throw notJson(res); }
+    if (ev.progress) onProgress(ev.progress);
+    if (ev.error) throw new ApiError(ev.error.status ?? 500, ev.error.message ?? "The export failed.", ev.error);
+    return ev.result ? ev.result as ExportResult : null;
+  };
+  for (;;) {
+    const { value, done } = await reader.read();
+    let chunk = value ?? "";
+    let nl;
+    while ((nl = chunk.indexOf("\n")) >= 0) {
+      const line = parts.join("") + chunk.slice(0, nl);
+      parts = [];
+      chunk = chunk.slice(nl + 1);
+      const r = handle(line);
+      if (r) return r;
+    }
+    if (chunk) parts.push(chunk);
+    if (done) {
+      const r = handle(parts.join(""));
+      if (r) return r;
+      throw new ApiError(502, "The export stopped before it finished (the connection was cut). Try again, or export a narrower path.");
+    }
+  }
 }
 
 export interface ExpiryProgress { side: "left" | "right"; stage: "listing" | "reading" | "scanning" | "pki" | "done";
@@ -139,9 +184,17 @@ export const api = {
   answerMfa: (payload: Record<string, string>) => call<Connection>("POST", "/api/connections/mfa", { payload }),
   disconnect: (id: string) => call<void>("DELETE", `/api/connections/${id}`),
   renew: (id: string) => call<Connection & { capped: boolean }>("POST", `/api/connections/${id}/renew`),
-  mounts: (id: string) => call<MountsResponse>("GET", `/api/connections/${id}/mounts`),
-  describeMount: (id: string, path: string) =>
-    call<Mount>("GET", `/api/connections/${id}/mounts/${encodeURIComponent(path).replace(/%2F/g, "/")}`),
+  namespaces: (id: string) => call<NamespacesResponse>("GET", `/api/connections/${id}/namespaces`),
+  openNamespace: (id: string, namespace: string) => call<Connection>("POST", `/api/connections/${id}/namespaces`, { namespace }),
+  mounts: (id: string, kv1 = false) => call<MountsResponse>("GET", `/api/connections/${id}/mounts${kv1 ? "?kv1=true" : ""}`),
+  describeMount: (id: string, path: string, kv1 = false) =>
+    call<Mount>("GET", `/api/connections/${id}/mounts/${encodeURIComponent(path).replace(/%2F/g, "/")}${kv1 ? "?kv1=true" : ""}`),
+  matrix: (baselineName: string, baseline: VaultSide, environments: { name: string; side: VaultSide; rules?: ProfileRules | null }[],
+           includeEqual = false) =>
+    call<MatrixResult>("POST", "/api/matrix", {
+      baseline_name: baselineName, baseline, include_equal: includeEqual,
+      environments: environments.map((e) => ({ name: e.name, side: e.side, ...(e.rules ? { rules: e.rules } : {}) })),
+    }),
   compare: (left: SideRef, right: SideRef, rules?: ProfileRules | null, customMetadata = false) =>
     call<CompareResult>("POST", "/api/compare", { left, right, ...(rules ? { rules } : {}), ...(customMetadata ? { custom_metadata: true } : {}) }),
   profiles: () => call<Profile[]>("GET", "/api/profiles"),
@@ -290,7 +343,14 @@ export const api = {
     call<DestroyOut>("POST", "/api/destroy", { side, secrets, confirm: true }),
   planCreate: (left: VaultSide, right: VaultSide, changes: ApiChange[], note: string, profile: string | null, rewrites: Rewrite[] = []) =>
     call<SyncPlan>("POST", "/api/plans", { left, right, changes, note, profile, rewrites }),
-  planVerify: (plan: unknown) => call<{ plan: SyncPlan }>("POST", "/api/plans/verify", { plan }),
+  planApprove: (plan: SyncPlan, left_conn_id: string, right_conn_id: string, values: Record<string, Record<string, string>> = {}) =>
+    call<{ plan: SyncPlan }>("POST", "/api/plans/approve", { plan, left_conn_id, right_conn_id, values }),
+  undoCreate: (writes: { conn_id: string; mount: string; path: string; action: "write" | "delete"; old_version: number | null; new_version: number | null }[],
+               undoes?: string) => call<UndoPlan>("POST", "/api/undo", { writes, ...(undoes ? { undoes } : {}) }),
+  undoCheck: (plan: UndoPlan, conn_ids: string[]) => call<UndoCheck>("POST", "/api/undo/check", { plan, conn_ids }),
+  undoApply: (plan: UndoPlan, conn_ids: string[]) => call<UndoApplyResult>("POST", "/api/undo/apply", { plan, conn_ids, confirm: true }),
+  /** `local`: made by this installation, so typed values are checked against the creator's here */
+  planVerify: (plan: unknown) => call<{ plan: SyncPlan; local: boolean }>("POST", "/api/plans/verify", { plan }),
   planReport: async (plan: SyncPlan) => {
     const res = await fetch("/api/plans/report", {
       method: "POST", credentials: "same-origin",
@@ -300,12 +360,14 @@ export const api = {
     if (!res.ok) throw new ApiError(res.status, (await parseJson(res))?.detail?.message ?? res.statusText);
     return res.text();
   },
-  planCheck: (plan: SyncPlan, left_conn_id: string, right_conn_id: string) =>
-    call<PlanCheck>("POST", "/api/plans/check", { plan, left_conn_id, right_conn_id }),
-  planApply: (plan: SyncPlan, left_conn_id: string, right_conn_id: string) =>
-    call<PlanApplyResult>("POST", "/api/plans/apply", { plan, left_conn_id, right_conn_id, confirm: true }),
-  exportCreate: (side: VaultSide, rules: { ignore_paths: string[]; ignore_keys: { key: string; path: string }[] }, encrypt: boolean) =>
-    call<ExportResult>("POST", "/api/exports", { side, rules, encrypt }),
+  /** `values`: the typed values entered again, {"<change index>": {"<key>": value}} */
+  planCheck: (plan: SyncPlan, left_conn_id: string, right_conn_id: string, values: Record<string, Record<string, string>> = {}) =>
+    call<PlanCheck>("POST", "/api/plans/check", { plan, left_conn_id, right_conn_id, values }),
+  planApply: (plan: SyncPlan, left_conn_id: string, right_conn_id: string, values: Record<string, Record<string, string>> = {}) =>
+    call<PlanApplyResult>("POST", "/api/plans/apply", { plan, left_conn_id, right_conn_id, confirm: true, values }),
+  exportStream,
+  exportFromKvGet: (files: { name: string; content: unknown }[], name: string) =>
+    call<{ export: ExportDoc; encrypted: boolean }>("POST", "/api/exports/from-kv-get", { files, name }),
   exportOpen: (file: unknown, key?: string) =>
     call<{ export: ExportDoc; encrypted: boolean }>("POST", "/api/exports/open", { file, ...(key ? { key } : {}) }),
   importPreview: (exp: ExportDoc, name: string, rules: ImportRules, target: VaultSide, reveal: boolean, deleteMissing: boolean) =>

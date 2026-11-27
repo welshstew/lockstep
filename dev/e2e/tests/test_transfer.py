@@ -33,6 +33,14 @@ def test_export_compare_against_the_file_and_import(page, sandbox, vault_a, vaul
     expect(exp).to_contain_text("2 secrets, 3 keys")
     exp.get_by_role("button", name=re.compile("saved the key")).click()
     expect(exp.get_by_label("Export key")).to_have_count(0)
+    # Vault A allows plain exports (its preset says "export": "any"); Vault B follows the default
+    plain = exp.get_by_role("radio", name=re.compile("Nothing \\(plain text\\)"))
+    expect(plain).to_be_enabled()
+    exp.get_by_label("Export from").select_option(index=1)
+    expect(plain).to_be_disabled()
+    expect(exp.get_by_role("radio", name=re.compile("A one-time key"))).to_be_checked()
+    expect(exp).to_contain_text("this Lockstep server requires encryption")
+    exp.get_by_label("Export from").select_option(index=0)
 
     # ---- the file as the left side of a comparison
     page.get_by_role("tab", name="Compare").click()
@@ -137,3 +145,80 @@ def test_import_that_deletes_what_isnt_in_the_file(page, sandbox, vault_a, vault
     assert vault_b.get("app-config", f"{sandbox}/app") == {"k": "new"}
     assert vault_b.get("app-config", f"{sandbox}/stale") is None
     assert vault_b.get("app-config", f"{sandbox}/precious") == {"p": "1"}
+
+
+def test_export_with_a_passphrase_and_age_keys(page, sandbox, vault_a, tmp_path):
+    vault_a.put("app-config", f"{sandbox}/db", {"password": "pass-phrase-secret"})
+    sign_in_userpass(page, "left", "alice", vault="Vault A")
+    choose_mount(page, "left", "app-config", sandbox)
+    page.get_by_role("tab", name="Export & import").click()
+    exp = page.locator("section[aria-label=Export]")
+
+    # age: a key that isn't one is refused with the reason
+    exp.get_by_role("radio", name=re.compile("age public keys")).check()
+    button = exp.get_by_role("button", name="Export and download")
+    expect(button).to_be_disabled()
+    exp.get_by_role("textbox", name="age public keys").fill("age1notakey")
+    button.click()
+    expect(exp.locator(".notice.error")).to_contain_text("isn't an age public key")
+
+    # a passphrase: typed twice, at least 12 characters
+    exp.get_by_role("radio", name=re.compile("A passphrase")).check()
+    exp.get_by_label("Passphrase", exact=True).fill("correct horse battery")
+    exp.get_by_label("Passphrase again").fill("correct horse")
+    expect(button).to_be_disabled()
+    exp.get_by_label("Passphrase again").fill("correct horse battery")
+    with page.expect_download() as dl:
+        button.click()
+    path = tmp_path / dl.value.suggested_filename
+    dl.value.save_as(path)
+    f = json.loads(path.read_text())
+    assert f["scheme"] == "passphrase" and f["kdf"]["name"] == "argon2id" and "pass-phrase-secret" not in path.read_text()
+    expect(exp).to_contain_text("Encrypted with your passphrase")
+    expect(exp.get_by_label("Export key")).to_have_count(0)  # no one-time key to show
+
+    # open it as a comparison side: the prompt asks for the passphrase
+    page.get_by_role("tab", name="Compare").click()
+    left = side(page, "left")
+    left.get_by_role("button", name="Export file").click()
+    left.get_by_label("Export file").set_input_files(str(path))
+    left.get_by_label("Export passphrase").fill("wrong passphrase!!")
+    left.get_by_role("button", name="Open").click()
+    expect(left.locator(".notice.error")).to_contain_text("Wrong passphrase")
+    left.get_by_label("Export passphrase").fill("correct horse battery")
+    left.get_by_role("button", name="Open").click()
+    expect(left.locator(".file-chip")).to_contain_text(f"Vault A · app-config/{sandbox} · 1 secret")
+
+
+def _kv_get(data):
+    return {"request_id": "r", "lease_id": "", "lease_duration": 0, "renewable": False, "warnings": None, "mount_type": "kv",
+            "data": {"data": data, "metadata": {"version": 2, "created_time": "2026-11-01T10:00:00Z", "deletion_time": "",
+                                                "destroyed": False, "custom_metadata": None}}}
+
+
+def test_vault_kv_get_output_as_a_comparison_side(page, sandbox, vault_b, tmp_path):
+    vault_b.put("app-config", f"{sandbox}/db", {"user": "app", "password": "B"})
+    sign_in_userpass(page, "right", "alice", vault="Vault B")
+    choose_mount(page, "right", "app-config", sandbox)
+    left = side(page, "left")
+
+    # One file: the path is the file name
+    one = tmp_path / "db.json"
+    one.write_text(json.dumps(_kv_get({"user": "app", "password": "A"})))
+    left.get_by_role("button", name="Export file", exact=True).click()
+    left.get_by_label("Export file", exact=True).set_input_files(str(one))
+    expect(left.locator(".file-chip")).to_contain_text("db.json · vault kv get · 1 secret")
+    compare(page)
+    expect(row(page, "db").locator(".badge").last).to_have_text("Different")
+
+    # A folder: paths from where the files sit in it
+    folder = tmp_path / "dump"
+    (folder / "nested").mkdir(parents=True)
+    (folder / "db.json").write_text(json.dumps(_kv_get({"user": "app", "password": "B"})))
+    (folder / "nested" / "extra.json").write_text(json.dumps(_kv_get({"k": "v"})))
+    left.locator(".file-chip").get_by_role("button", name="Close").click()
+    left.get_by_label("Folder of vault kv get files").set_input_files(str(folder))
+    expect(left.locator(".file-chip")).to_contain_text("dump · vault kv get · 2 secrets")
+    compare(page)
+    expect(row(page, "nested/extra").locator(".badge").last).to_have_text("Left only")
+    expect(row(page, "db")).to_have_count(0)  # the same now, so hidden by the default filter

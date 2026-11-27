@@ -5,7 +5,7 @@ import re
 
 from playwright.sync_api import expect
 
-from conftest import choose_mount, compare, expand, key_row, row, set_reveal, sign_in_userpass
+from conftest import choose_mount, compare, expand, key_row, set_reveal, sign_in_userpass
 
 
 def connect_both(page, prefix, user="alice"):
@@ -131,14 +131,30 @@ def test_plan_with_typed_values(page, sandbox, vault_a, vault_b, tmp_path):
     r.get_by_role("button", name="Set value").click()
     page.get_by_role("button", name="Review & apply…").click()
     dialog = page.locator("dialog.review")
-    save = dialog.get_by_role("button", name="Save as plan")
-    expect(save).to_be_disabled()
-    dialog.get_by_label("The plan file will hold the values I typed").check()
+    expect(dialog).to_contain_text("whoever applies it types them again")
     with page.expect_download() as dl:
-        save.click()
+        dialog.get_by_role("button", name="Save as plan").click()
     path = tmp_path / dl.value.suggested_filename
     dl.value.save_as(path)
     plan = json.loads(path.read_text())
-    assert plan["holds_values"] and plan["changes"][0]["set"] == {"pw": "typed-in-plan"}
-    expect(dialog.get_by_role("status")).to_contain_text("It holds the values you typed")
-    assert row(page, "svc").count() == 1
+    assert "typed-in-plan" not in path.read_text()  # the typed value stays out of the file
+    assert not plan["holds_values"] and set(plan["changes"][0]["typed"]) == {"pw"}
+    expect(dialog.get_by_role("status")).to_contain_text("The values you typed aren't in it")
+    dialog.get_by_role("button", name="Cancel").click()
+
+    # Applying it: the value is typed again, and has to match
+    page.get_by_role("tab", name="Sync plans").click()
+    page.get_by_label("Plan file").set_input_files(path)
+    box = page.get_by_label(f"Value for {sandbox}/svc pw")
+    page.get_by_role("button", name="Check plan").click()
+    page.get_by_label(re.compile("Write 1 secret")).check()
+    expect(page.get_by_role("button", name="Apply plan")).to_be_disabled()  # the value isn't typed yet
+    box.fill("typed-in-plam")
+    page.get_by_role("button", name="Check plan").click()
+    expect(page.get_by_role("alert")).to_contain_text("don't match what the plan's creator typed")
+    box.fill("typed-in-plan")
+    page.get_by_role("button", name="Check plan").click()
+    page.get_by_label(re.compile("Write 1 secret")).check()
+    page.get_by_role("button", name="Apply plan").click()
+    expect(page.get_by_role("status")).to_contain_text("Plan applied")
+    assert vault_b.get("app-config", f"{sandbox}/svc") == {"pw": "typed-in-plan"}

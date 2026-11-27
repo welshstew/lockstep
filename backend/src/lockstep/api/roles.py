@@ -29,6 +29,7 @@ from ..session import SessionData, load_session
 from ..vault import VaultClient, VaultError
 from .connections import client_for, get_connection, vault_http_error
 from .guard import require_writable
+from .. import writepolicy
 from .policies import ExplainError, ExplainOut, run_explain
 
 router = APIRouter(prefix="/api/roles", tags=["roles"])
@@ -217,6 +218,7 @@ async def issue_secret_id(body: SecretIdRequest, session: Sess, settings: Conf):
     require_writable(settings)
     conn = get_connection(session, body.conn_id)
     mount = body.mount.strip("/")
+    writepolicy.check(settings, conn, f"auth/{mount}/role/{body.role}/secret-id", event="approle.secret_id")
     async with client_for(conn, settings) as v:
         try:
             if _kind(await auth_mounts(v), mount) != "approle":
@@ -229,7 +231,7 @@ async def issue_secret_id(body: SecretIdRequest, session: Sess, settings: Conf):
             raise vault_http_error(e) from e
     wrap = res["wrap_info"]
     audit.info(json.dumps({"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "event": "approle.secret_id",
-                           "outcome": "applied", "actor": {"identity": conn.display_name, "auth": conn.auth_method},
+                           "outcome": "applied", "actor": {"identity": conn.display_name, "auth": conn.auth_method, "entity_id": conn.entity_id, "accessor": conn.accessor},
                            "target": {"vault": conn.name, "url": conn.url, "mount": mount, "role": body.role},
                            "wrapping_accessor": wrap.get("accessor"), "ttl": body.ttl}, sort_keys=True))
     return {"role_id": role_id, "wrapping_token": wrap["token"], "ttl": wrap["ttl"]}

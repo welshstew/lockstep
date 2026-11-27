@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, type SideRef } from "../api";
-import { downloadPlan, downloadReport, planFileName } from "../plans";
+import { downloadPlan, downloadReport, downloadUndoPlan, planFileName } from "../plans";
 import { type Changeset, hasOverrides, secretFor, toApiChanges, unstageChange, unstageKey } from "../staging";
 import type { ApplyResult, ChangePlan, CompareResult, PlanStatus, ResultStatus, Rewrite, SyncPlan } from "../types";
 import { formatValue } from "./ValueCell";
@@ -25,7 +25,7 @@ const PLAN_LABEL: Record<PlanStatus, string> = {
 };
 const RESULT_LABEL: Record<ResultStatus, string> = {
   applied: "Written", noop: "No change needed", conflict: "Conflict: not written",
-  denied: "Denied: not written", invalid: "Skipped", error: "Failed",
+  denied: "Denied: not written", invalid: "Skipped", error: "Failed", skipped: "Not attempted",
 };
 const tone = (s: string) =>
   s === "ready" || s === "applied" ? "equal" : s === "noop" ? "unknown" : s === "conflict" ? "different" : "error";
@@ -41,6 +41,8 @@ export function ReviewDialog({ result, changeset, onChangeset, reveal, profile, 
   const [confirmed, setConfirmed] = useState(false);
   const [applying, setApplying] = useState(false);
   const [applied, setApplied] = useState<ApplyResult | null>(null);
+  const [undoing, setUndoing] = useState(false);
+  const [undoFile, setUndoFile] = useState<string | null>(null);
   const [planning, setPlanning] = useState(false);
   const [note, setNote] = useState("");
   const [saved, setSaved] = useState<SyncPlan | null>(null);
@@ -65,9 +67,8 @@ export function ReviewDialog({ result, changeset, onChangeset, reveal, profile, 
   const writeDenied = (p: ChangePlan) => p.status === "denied" && p.keys.length > 0;
   const plannable = plans?.filter((p) => p.status === "ready" || writeDenied(p)) ?? [];
   const unplannable = plans?.filter((p) => !["ready", "noop"].includes(p.status) && !writeDenied(p)) ?? [];
-  // A plan holds typed values (overrides) as they are: anyone with the file can read them.
+  // Typed values (overrides) aren't saved in a plan: whoever applies it types them again
   const overrides = hasOverrides(changeset);
-  const [valuesOk, setValuesOk] = useState(false);
   const secretOf = (p: ChangePlan) => secretFor(result, p.path, p.right_path);
   const dropKey = (p: ChangePlan, key: string) => {
     const s = secretOf(p);
@@ -116,11 +117,17 @@ export function ReviewDialog({ result, changeset, onChangeset, reveal, profile, 
 
       <div className="review-body">
         {error && <div className="notice error" role="alert">{error}</div>}
+        {undoFile && (
+          <div className="notice info" role="status">
+            Undo plan saved as <span className="mono">{undoFile}</span>. To put the old versions back, open it in
+            the <strong>Sync plans</strong> tab. It works while nobody has written these secrets since.
+          </div>
+        )}
         {saved && (
           <div className="notice info" role="status">
             Plan saved as <span className="mono">{planFileName(saved, "json")}</span>. Pass it to someone with write access:
             they open it in the <strong>Sync plans</strong> tab, check it and apply it.
-            {saved.holds_values && " It holds the values you typed, in plain text: share it only with people who may see them."}{" "}
+            {saved.changes.some((c) => c.typed) && " The values you typed aren't in it: tell whoever applies it what to type (Lockstep checks they match yours)."}{" "}
             <button type="button" className="btn ghost small" onClick={() => downloadReport(saved).catch((e) => setError(e.message))}>
               Download report
             </button>
@@ -209,6 +216,18 @@ export function ReviewDialog({ result, changeset, onChangeset, reveal, profile, 
               {applied.summary.conflict + applied.summary.denied + applied.summary.error > 0 &&
                 `, ${applied.summary.conflict + applied.summary.denied + applied.summary.error} not written`}
             </span>
+            {applied.summary.applied > 0 && (
+              <button type="button" className="btn ghost" disabled={undoing || Boolean(undoFile)}
+                      title="Download a plan that puts back the versions these writes replaced (read from Vault's history when applied)"
+                      onClick={async () => {
+                        setUndoing(true);
+                        setError(null);
+                        try { setUndoFile(await downloadUndoPlan(applied.results)); } catch (e) { setError((e as Error).message); }
+                        finally { setUndoing(false); }
+                      }}>
+                {undoing && <span className="spinner" />} {undoFile ? "Undo plan saved" : "Make an undo plan"}
+              </button>
+            )}
             <button type="button" className="btn primary" onClick={() => ref.current?.close()}>Done, compare again</button>
           </>
         ) : (
@@ -223,18 +242,16 @@ export function ReviewDialog({ result, changeset, onChangeset, reveal, profile, 
             {blocked.length > 0 && ready.length > 0 && <span className="subtle">{blocked.length} item(s) will be skipped</span>}
             <span className="spacer" />
             {plans && plannable.length > 0 && !saved && overrides && !fileSide && (
-              <label className="inline-check subtle plan-values-ok" title="The plan file will contain the values you typed, in plain text">
-                <input type="checkbox" checked={valuesOk} onChange={(e) => setValuesOk(e.target.checked)} />
-                The plan file will hold the values I typed: keep it safe
-              </label>
+              <span className="subtle plan-values-ok" title="The plan keeps a check code for each typed value, never the value">
+                A plan doesn't keep the values you typed: whoever applies it types them again.
+              </span>
             )}
             {plans && plannable.length > 0 && !saved && !fileSide && (
               <input type="text" className="plan-note-input" placeholder="Note for the plan (optional)" value={note}
                      maxLength={2000} onChange={(e) => setNote(e.target.value)} aria-label="Plan note" />
             )}
-            <button type="button" className="btn ghost" disabled={!plans || plannable.length === 0 || unplannable.length > 0 || (overrides && !valuesOk) || fileSide || planning || applying || Boolean(saved)}
+            <button type="button" className="btn ghost" disabled={!plans || plannable.length === 0 || unplannable.length > 0 || fileSide || planning || applying || Boolean(saved)}
                     title={fileSide ? "A plan needs a Vault on both sides, not an export file"
-                      : overrides && !valuesOk ? "This plan would hold the values you typed: tick the box to confirm"
                       : unplannable.length > 0 ? "Some changes conflict or can't be read: compare again first" : "Download these changes as a plan for someone else to apply"}
                     onClick={savePlan}>
               {planning && <span className="spinner" />} {saved ? "Plan saved" : "Save as plan"}

@@ -29,6 +29,7 @@ from ..vault import VaultError
 from .compare import Side
 from .connections import client_for, get_connection
 from .guard import require_writable
+from .. import writepolicy
 
 router = APIRouter(prefix="/api", tags=["destroy"])
 audit = logging.getLogger("lockstep.audit")
@@ -82,6 +83,10 @@ async def destroy(body: DestroyRequest, session: Sess, settings: Conf):
         raise HTTPException(400, detail={"message": "Destroying secrets requires confirm=true"})
     conn = get_connection(session, body.side.conn_id)
     mount, prefix = body.side.norm()
+    writepolicy.check(settings, conn, [f"{mount}/{prefix}{i.path}" for i in body.secrets], "destroy", "destroy")
+    if why := writepolicy.needs_plan(settings, conn):
+        writepolicy.log_refusal(conn, f"{mount}/{prefix}", "destroy", "destroy", why)
+        raise HTTPException(403, detail={"message": why, "write_policy": True})
     sem = asyncio.Semaphore(8)
 
     async with client_for(conn, settings) as v:
@@ -123,7 +128,7 @@ def _audit(conn, mount: str, path: str, res: DestroyResult) -> None:
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "event": "destroy",
         "outcome": res.status,
-        "actor": {"identity": conn.display_name, "auth": conn.auth_method},
+        "actor": {"identity": conn.display_name, "auth": conn.auth_method, "entity_id": conn.entity_id, "accessor": conn.accessor},
         "target": {"vault": conn.name, "url": conn.url, "mount": mount,
                    "path": path, "version": res.version, "versions": res.versions},
         "message": res.message,

@@ -6,14 +6,18 @@
 Each side (left in blue, right in orange) needs:
 
 - **a connection:** a Vault and a sign-in. See [authentication](authentication.md).
-- **a KV v2 secrets engine.** Mounts are listed from `sys/mounts`. If the token can't read that, the list comes from what the token can access, and you're told it may be incomplete. You can always type a mount path, which is checked before use. KV v1 mounts are not offered.
+- **a KV v2 secrets engine.** Mounts are listed from `sys/mounts`. If the token can't read that, the list comes from what the token can access, and you're told it may be incomplete. You can always type a mount path, which is checked before use. KV v1 mounts are offered too, for comparing only (below).
 - **an optional path prefix.** Paths are compared relative to each side's prefix, so `app-config/payments` can be compared with `app-config-staging/payments`.
 
 Both sides can be the same Vault with different mounts or prefixes. ⇄ swaps the sides.
 
 **▸ Left / source** and **▸ Right / target** collapse a side to one line: the account signed in, how (userpass, OIDC…), on which Vault and namespace, its policies and token expiry, and the mount and prefix. Click the line to open the side again. Each side remembers whether it was collapsed.
 
-**Or an export file.** Switch a side from **Vault** to **Export file** and open a [secret-engine export](#6-export-and-import) (with its key if it's encrypted) to compare a Vault against it: a backup, or another environment's export. *Show values* reads the file's values in the page. An export is read-only: you can copy values **from** it into a Vault, never into it, and it has no version history or value inspector. It's held in the page's memory only and is gone when you reload.
+**KV v1 mounts** show as *KV v1, read-only* in the list. Lockstep compares them like KV v2, and you can copy **from** one into a KV v2 mount, which is how a migration off KV v1 usually goes. It never writes a KV v1 mount: copies, edits, deletes and sync plans toward one are refused, and the results offer no arrows into it. KV v1 keeps no versions, history or metadata, so those columns stay empty for that side. The other tabs (Browse, Policies, Expiry, Export) need a KV v2 mount and leave a KV v1 side out.
+
+**Namespaces** (Vault Enterprise, OpenBao 2.3 and later): a side signed in to a Vault with namespaces shows a **Namespace** list of the child namespaces it can see. Picking one moves the side there with the same sign-in, so comparing the same path in two namespaces takes one sign-in. ↑ goes back up. A side opened this way says **Close** instead of **Sign out**: closing it keeps the sign-in it came from. Signing out of that sign-in closes its namespaces too. To sign in to a namespace directly, give it in the sign-in form.
+
+**Or an export file.** Switch a side from **Vault** to **Export file** and open a [secret-engine export](#6-export-and-import) (with its key if it's encrypted), or [`vault kv get -format=json` output](#output-of-vault-kv-get), to compare a Vault against it: a backup, or another environment's export. *Show values* reads the file's values in the page. An export is read-only: you can copy values **from** it into a Vault, never into it, and it has no version history or value inspector. It's held in the page's memory only and is gone when you reload.
 
 ## Browse
 
@@ -59,6 +63,7 @@ Press **Compare**. The server lists both trees, reads every secret on both sides
 | **Equal** | Same keys, same values |
 | **Different** | At least one key differs, or exists on one side only |
 | **Left only / Right only** | The secret exists on one side only (a soft-deleted latest version counts as absent, shown as *deleted*) |
+| **Not compared** | Both sides are there and nothing else differs, but a key couldn't be compared: a keystore with a password that isn't stored in the secret, or a JKS private key that can't be decrypted. It isn't called different or equal. The key can still be copied |
 | **No access** | One side can't list or read it. Its keys show as *unknown*, never as "only on the other side", so nobody copies over data they couldn't see |
 | **Error** | Vault returned something else; the message is shown |
 
@@ -66,7 +71,27 @@ What counts as a difference:
 
 - Only **values** count. Versions, timestamps and metadata are shown but ignored.
 - Values are compared as canonical JSON: key order inside nested JSON doesn't matter.
-- `5432` (a number) and `"5432"` (a string) are different. The row says **type differs: number vs string**, and values are shown with their types.
+- **Keystores are compared by their entries.** A PKCS#12 that opens without a password, or a JKS or JCEKS (whose certificates are readable without one), stored as base64, is compared as its aliases, certificates and keys. Saving it again (new timestamps, MAC salt, entry order) doesn't make it different: "equal as JKS keystores (same 2 certificates; entry order differs)". A difference is named: entries only on one side, which entry's certificates changed and how, or a different private key. A keystore with a password is opened with a password stored next to it in the same secret (a key whose name has `pass`, `pwd`, `pin` or `secret` in it, such as `keystore.password`), or with Java's default, `changeit`. This happens on the server, and the reason says which key opened it, never the password. When nothing opens it, the key is **not compared**, and the reason says so. The same goes for a JKS private key that can't be decrypted and is encrypted differently on each side.
+- **Certificates, PEM and wrapped base64 are compared by what they hold.** Two texts with the same certificate, key or data are **equal** when they differ only in line endings, line wrapping or the spacing around PEM blocks, and the reason says how the text differs. Everything a service could read differently still counts: the PEM label (`BEGIN X509 CERTIFICATE` against `BEGIN CERTIFICATE`), a key in another format (PKCS#1 against PKCS#8), PEM against base64 DER, the order of certificates in a chain, base64 padding or alphabet, and a trailing newline on a one-line value. PEM with text outside its blocks (OpenSSL's `Bag Attributes`) or with `Proc-Type` headers is compared as text. To compare a key as text anyway, add it to the profile's **Compared as text** rules.
+- `5432` (a number) and `"5432"` (a string) are different, and values are shown with their types.
+- **Every key says why** it has its status, under its name, without showing a value:
+
+  | Reason | When |
+  |---|---|
+  | different at `config.db.host` | The value is JSON or YAML on both sides (an object, or text holding one), and these fields inside it differ. Up to three are named; hover for the rest |
+  | differs only in line endings (CRLF and LF), … in spaces or newlines at the start or end, … in upper and lower case | Two texts that look the same at a glance |
+  | same content, written differently (spacing, key order or quoting) | Two texts holding the same JSON or YAML. They still count as different for now |
+  | different type: number on the left, text on the right | `5432` against `"5432"` |
+  | equal after rewrite `test → dev` | Equal once the profile's rewrites are applied, naming the ones used |
+  | …; ignored by profile rule `log_level` | The difference doesn't count |
+  | differs only in ignored fields | Every field that differs is ignored by a field rule (below) |
+  | equal as certificates (same fingerprint; line endings differ) | The same certificate, written differently. Also *equal as private keys*, *equal as PEM* (a chain, or other blocks) and *equal as base64 (same 2048 bytes; line breaks differ)* |
+  | renewed: new validity (same subject, issuer and names) | Two certificates for the same names: only the dates and serial changed (*and key* when the key did too) |
+  | PKCS#12 keystore with a password on both sides: no key in the secret opens it … | **Not compared**: store the keystore's password next to it to compare it |
+  | different certificate: subject, names (SANs) | Two certificates, naming the fields that changed: subject, issuer, names (SANs), validity, key, serial |
+  | same private key, but PKCS#1 on the left and PKCS#8 on the right | The same thing in a form a service may not read the same way. Also a different PEM label, PEM against base64 DER, a chain in another order, and base64 with another alphabet |
+
+  Values more than 8 levels deep, or with more than 1,000 fields, are compared whole past that point, and the reason says the list is incomplete. The CLI report carries the same `reason` and `paths`.
 
 Filters (*All changes*, *Different*, *Left only*…, *Everything*) and the path/key search narrow the list. Folders a side couldn't list are named above the results.
 
@@ -92,8 +117,12 @@ A profile tells Lockstep how the two sides relate, when they aren't laid out ide
 |---|---|---|
 | **Path mapping** | `services/*/prod/**` ⇄ `services/*/staging/**` | Pairs `services/billing/prod/db` (left) with `services/billing/staging/db` (right). The row shows both paths |
 | **Ignored key** | `host` under `services/**` | `host` is still shown, marked *ignored*, but its difference doesn't make the secret **Different** |
+| **Ignored field** | `config` field `db.password` | For a key holding JSON or YAML: a difference in that field (and anything under it) doesn't count, but any other field that differs still does. `*` matches anything (`tls.*`), and list items are written `hosts[0]` |
 | **Ignored path** | `legacy/**` | Matching secrets are left out of the comparison |
-| **Value rewrite** | `test` ⇄ `dev` | Values are compared with each left word read as its right word: `logs.test.internal` matches `logs.dev.internal`, a different host still doesn't. The key is marked *equal after rewrite* |
+| **Compared as text** | `tls_*` under `apps/**` | No certificate, PEM or base64 comparison for these keys: a value written differently counts as different, and the reason says it would otherwise be equal |
+| **Value rewrite** | `test` ⇄ `dev` | Values are compared with each left word read as its right word: `logs.test.internal` matches `logs.dev.internal`, a different host still doesn't. The key is marked *equal after rewrite*. A rewrite can be limited to keys (`*host*`) and secrets (`apps/**`), so it never changes a word inside a password or token; copies follow the same limits. A rewrite can be a **pattern** with placeholders: `{app}-test-db` ⇄ `{app}-dev-db` reads `billing-test-db` as `billing-dev-db`, and copies the other way read it back. A placeholder stands for one word (letters and digits) and sits next to a `-`, `.`, `_`, `/` or the end |
+| **Unordered list** | `allowed_hosts`, or `config` field `tls.sans`, or `domains` split on `,` | The same items in another order are equal ("same items in a different order"); duplicates count. For a list inside JSON or YAML, name the *field*; for a list in plain text, the *separator*. A list that differs is named as a whole (`tls.sans`), not item by item |
+| **Volatile pattern** | `\d{4}-\d{2}-\d{2}T[0-9:.]+Z` in `*` under `apps/**` | Text matching the regex is blanked on both sides before comparing. A key that differs only there is shown, marked *ignored*, with the pattern as the reason. A pattern that matches empty text, or repeats a group that repeats inside (`(a+)+`), is refused |
 
 How the rules work:
 - **Patterns:** `*` matches within one path segment and `**` across any depth. Both sides of a mapping need the same wildcards in the same order, and what they match is carried across. The first matching mapping wins. Paths no mapping matches are compared as they are.
@@ -112,6 +141,8 @@ How the rules work:
 With a mount chosen on both sides, **＋ New** (or **Edit**) and then **Read both sides** lists every secret on each side and suggests rules, each with the reason it was made:
 - **A mapping** for a folder that's only on one side and holds secrets with the same names as a folder only on the other: a rename, such as `enterprise-logging-app/**` ⇄ `ELP/**`. When the folders differ in an environment segment under a varying parent, the mapping uses a wildcard (`services/*/prod/**` ⇄ `services/*/staging/**`).
 - **A rewrite** for a word that differs between values and makes them equal once read as its counterpart, with how many keys it fixes. Words come only from paths and common environment names (`dev`, `test`, `staging`, `prod`…), so a suggestion never reveals any other part of a value.
+- **An unordered list** for a key whose two values hold the same items in another order: a JSON or YAML list, or text with items separated by commas.
+- **A volatile pattern** for a key whose two values differ only in a timestamp, a date or a UUID. Only these three fixed patterns are suggested. Think before adding one for a date that matters, such as an expiry date.
 
 **Add** or **Add all** puts them in the editor. The **What this profile does** panel explains each rule in plain words against the secrets actually there (which pairs a mapping makes, what's still one-sided), and **Preview the comparison** runs it before you save. Ignored keys are left to you: deciding a difference doesn't matter is a judgement, not a pattern. The guide [Comparing environments after an application is renamed](guides/compare-environments-after-a-rename.md) walks through it.
 
@@ -133,6 +164,25 @@ Each pick is struck through straight away and listed in the bar above the result
   <source media="(prefers-color-scheme: dark)" srcset="images/15-pick-ignore-dark.png">
   <img alt="Ignore mode: a secret, a folder and a key picked, listed as unsaved rules" src="images/15-pick-ignore-light.png">
 </picture>
+
+## Environment matrix
+
+The **Matrix** tab compares one baseline with several environments at once, for example prod against staging, dev, test and preview environments. The left side is the baseline. Add an environment for each place to compare with it: a name, a signed-in connection, a KV mount, a path prefix and, optionally, the comparison profile for that pair. The right side is offered as the first environment. To add a Vault you aren't signed in to yet, sign in to it on the right side: every signed-in connection is offered.
+
+**Compare all** compares the baseline with each environment, up to 12, and shows a grid. There's a row per secret and per key, and a column per environment:
+
+| Cell | Means |
+|---|---|
+| = | the same as the baseline (or equal under that pair's profile) |
+| ≠ | differs from the baseline |
+| missing | the baseline has it, this environment doesn't |
+| extra | this environment has it, the baseline doesn't |
+| ? | couldn't be compared: unreadable, a keystore without its password, or the comparison failed |
+| · | neither has it |
+
+Rows that differ in only one environment come first, marked on the left: one environment out of line is the likeliest mistake. Rows where every environment differs come last, because those are usually meant to differ. Hover over a cell for the reason. **Open in Compare** under an environment's name opens that pair side by side, with its profile, to look closer or copy values. **Download CSV** saves the grid. Values are never shown or saved. The environments you set up are remembered in this browser, without tokens.
+
+`lockstep matrix` does the same from a file, for scripts and CI. See [Command line](cli.md#environment-matrix).
 
 ## 3. Copy values between the sides
 
@@ -210,6 +260,17 @@ Every attempted write, applied or not, produces one JSON line on the server's st
 
 Values are never logged: `keys` lists every key written and `overridden` the ones set from typed values. Outcomes are `applied`, `conflict`, `denied`, `invalid` and `error`.
 
+**Who saw which values.** With `LOCKSTEP_AUDIT_REVEALS=on`, every response that carries secret values adds a `secret.reveal` line. Responses with values are Browse **Show**, version diffs and edit previews with values, values shown in Compare, revealed sync and import previews, **Inspect** and its downloads, and unwrapping a shared secret. There's one line per request, listing the secrets and the key names, never the values:
+
+```json
+{"event": "secret.reveal", "how": "browse.show", "request_id": "3f9a1c2e", "ts": "2026-11-26T09:00:00Z",
+ "actor": [{"vault": "Vault A", "identity": "oidc-alice@example.com", "auth": "oidc"}],
+ "secrets": [{"vault": "Vault A", "url": "http://vault-a:8200", "mount": "app-config", "path": "payments/db",
+              "version": 4, "keys": ["password", "username"]}], "more": 0}
+```
+
+`request_id` matches the [server log](configuration.md#logging) line for the same request. A request that shows more than 200 secrets lists the first 200 and counts the rest in `more`. It's off by default because showing values is routine; turn it on when you need to answer "who looked at this production secret?".
+
 ### Sync plans
 
 A plan is a reviewed set of changes saved as a file, so one person can prepare the changes and
@@ -225,15 +286,26 @@ target already has the same value are left out.
 
 A plan records, for each secret: the source and target paths, the keys and whether each is
 added, updated or removed, and the version of the source and target at the time. **Copied
-values are never in it**: they're read from the source when the plan is applied. Values you
-typed are the exception: to save a review that has some, tick *The plan file will hold the
-values I typed*. They're stored in the file as they are, so anyone with the file can read
-them; treat it like a secret. The plan says so (`holds_values`), and the report marks those
-keys *typed* without showing their values. It also records who created
-it on each side, the comparison profile (if any) and the note. The file is signed by the
-Lockstep server (with a key derived from `LOCKSTEP_SESSION_KEY`), so any edit to it is
-detected and the plan is refused. A plan made by one Lockstep server can't be applied on
-another with a different session key, and changing the session key invalidates existing plans.
+values are never in it**: they're read from the source when the plan is applied. **Values you
+typed aren't in it either.** For each typed key the plan keeps a check code, made with the
+server's secret key, which can't be turned back into the value. Whoever applies the plan types
+the values again under **Values typed by hand** in **Sync plans**, so tell them what to type.
+Lockstep checks each one against the code before anything is written, and refuses one that
+doesn't match: a typo never reaches Vault. **Check plan** works before the values are typed.
+The report marks those keys *typed*. Plans saved by earlier versions, which held the typed
+values (`holds_values`), still apply as they are. A plan also records who created
+it on each side, with their Vault entity ID and token accessor (identifiers a token can't
+choose, to match against Vault's audit log), the comparison profile (if any) and the note.
+The file is signed, so any edit to it is detected and the plan is refused. A plan can be
+applied for 7 days by default, and **Valid until** shows when it expires.
+
+By default a plan is signed with a key derived from `LOCKSTEP_SESSION_KEY`, so it applies
+only on a Lockstep with the same session key, and changing that key invalidates existing
+plans. To make a plan on one installation (dev) and apply it on another (prod), give the
+installations an Ed25519 key pair: see [plans between installations](configuration.md#plans-between-installations).
+A plan can also name the installations that may apply it (`audience` in the API).
+**Made on** shows which installation made it. A plan from another installation
+can't check typed values against its creator's, so you type each of them twice.
 
 **Apply a plan.** Connect both sides to the Vaults the plan names (any identity with write
 access to the targets), open the **Sync plans** tab and choose **Open a plan file…**. Check
@@ -247,8 +319,36 @@ the report, then **Check plan**: Lockstep reads every source and target now.
   comparison.
 - If you lack write access to any target, nothing is written either.
 
-The check runs again when you apply. If a secret changes in the moment between that check and
-its write, that one write is refused (check-and-set) and the result says so.
+The check runs again when you apply. If a source or target changes in the moment between that
+check and its write, that write is refused: a target by check-and-set, a source because the
+version being copied must be the one in the plan. Applying then **stops**: the secrets after it
+aren't attempted, and the result says **Partially applied: N of M written** (or **Not
+applied**), naming the secret it stopped at. Writes that already happened stay; compare again
+and make a new plan for what's left.
+
+**Approvals.** Where the server asks for them (see [four-eyes approvals](configuration.md#four-eyes-approvals)),
+**Check plan** shows whether the plan is approved, and **Apply plan** waits until someone other
+than its creator has approved it. To approve, open the plan, **Check plan**, then **Approve**:
+the approved file downloads, ready to pass on to whoever applies it.
+
+### Undo an apply
+
+After copies or a plan are applied, **Make an undo plan** (in the review dialog, or under a
+plan's result in **Sync plans**) downloads a signed file that undoes them. For each secret
+written, it records the version the apply replaced and the version it left. It holds no values.
+
+Open it in **Sync plans**, **Check undo plan**, tick the confirmation and **Apply undo plan**:
+
+- **A secret that was overwritten** gets its old version back: Lockstep reads that version from
+  Vault's KV history and writes it again as a new version, with check-and-set.
+- **A secret the apply created** is soft-deleted, and **one it soft-deleted** is undeleted.
+- **Nothing is undone** for a secret someone has written since the apply, or whose old version
+  has been deleted or destroyed (KV v2 keeps 10 versions by default). Like a plan, the check is
+  all or nothing, and applying stops at the first secret that isn't put back.
+
+Undo plans are signed and expire like sync plans, and travel between installations the same
+way. Each secret put back is audit-logged as `undo.apply`, with the undo plan's ID and the
+plan it undoes.
 
 ## 4. Value tools
 
@@ -331,17 +431,43 @@ The **Export & import** tab moves a whole secret engine, values included, throug
 
 1. **Export from:** the left or right side's Vault, mount and prefix.
 2. **Leave out** secrets (globs such as `legacy/**`) and keys (a key pattern under a path glob), or start from a comparison profile's ignore rules.
-3. **Encrypt with a one-time key** is on by default. **Export and download** saves the file and shows the key **once**: copy it, keep it apart from the file, then hide it. It's never stored, so without it the file can't be opened. Unencrypted exports hold every value in plain text, and the tool says so before you export one.
+3. **Protect the file with:**
+   - **A one-time key** (the default). **Export and download** saves the file and shows the key **once**: copy it, keep it apart from the file, then hide it. It's never stored, so without it the file can't be opened.
+   - **A passphrase** you choose, typed twice, at least 12 characters. Share it apart from the file.
+   - **age public keys** (`age1…`): pick teams the admin set up, or paste keys. Whoever holds a matching age key opens the file, in Lockstep or with the `age` tool, so no key or passphrase has to be passed around.
+   - **Nothing (plain text)**, only where the admin allows plain exports. The file then holds every value in plain text, and the tool says so before you export one.
 
 The file (`lockstep-export-<vault>-<mount>-<prefix>-<time>[.encrypted].json`) holds each secret's current data, version and update time, plus where it came from, the rules used, and what was left out or couldn't be read. Its format is described by a [JSON Schema](https://getlockstep.cloud/schemas/lockstep-export-v1.json).
 
-**Encryption:** AES-256-GCM with a random 256-bit key, the content zlib-compressed. The key looks like `lsk1.` followed by 43 characters. The envelope's header (Vault name, mount, prefix, number of secrets, time) stays readable so files can be told apart, and is authenticated: changing it makes the file fail to open.
+**Encryption:** the envelope's header (Vault name, mount, prefix, number of secrets, time) stays readable so files can be told apart. Changing it makes the file fail to open.
+- **One-time key:** AES-256-GCM with a random 256-bit key, the content zlib-compressed. The key looks like `lsk1.` followed by 43 characters.
+- **Passphrase:** the same, with the key derived from the passphrase by Argon2id (64 MiB, 3 passes, 4 lanes). The salt and cost are in the header. Lockstep won't open a file that asks for more than 256 MiB.
+- **age:** the `ciphertext` is a standard armored [age](https://age-encryption.org) file of the plain export, and `recipients` lists the public keys it's for. `jq -r .ciphertext file.json | age -d -i key.txt > export.json` opens it without Lockstep. age can't authenticate the readable header, so Lockstep checks it against the decrypted contents instead.
 
-Exporting reads every secret with your token, so you only export what you can read. Each export is [audit-logged](#audit-log) (`"event": "export"`: who, from where, how many secrets, whether encrypted, the rules), never with values. Admins can allow only encrypted exports, or turn exporting off, with `LOCKSTEP_EXPORT_MODE` ([configuration](configuration.md)).
+**Big mounts:** the export is written as secrets are read, a few dozen at a time, so the server never holds the whole export. A plain export streams straight to your browser; an encrypted one holds only its compressed bytes until it's sealed, and the page shows how many secrets it has read. The listing limit (`LOCKSTEP_MAX_TREE_SECRETS`) still applies. API: `POST /api/exports/stream` (NDJSON: progress lines, then the result); `POST /api/exports` returns the same in one response.
+
+To open an encrypted file, Lockstep asks for what it needs: the key, the passphrase, or your age identity (the `AGE-SECRET-KEY-1…` line). It's sent with that one request, used in memory and never stored. If you'd rather not give Lockstep your age identity, decrypt the file with `age` and open the plain result.
+
+Exporting reads every secret with your token, so you only export what you can read. Each export is [audit-logged](#audit-log) (`"event": "export"`: who, from where, how many secrets, whether and how it was encrypted, the age keys and teams, the rules), never with values. Exports are encrypted unless an admin allows plain ones, with `LOCKSTEP_EXPORT_MODE=any` or a preset's `export` setting. Exporting can also be turned off, for the server or for one Vault ([configuration](configuration.md)).
+
+#### Output of `vault kv get`
+
+Wherever Lockstep opens an export, as a comparison side or to import, it also reads `vault kv get -format=json` output (and `vault read -format=json`), for migrations from scripts that already use the `vault` CLI:
+- **One file** of that output: the secret's path is the file name without `.json`.
+- **A folder** of them (**Open a folder of vault kv get files…**, or `lockstep import FOLDER`): each path is the file's path in the folder.
+- **One JSON object** of `{"<path>": <that output>, …}`, as a shell loop writes it:
+
+```sh
+for p in $(vault kv list -format=json secret/app | jq -r '.[]'); do
+  vault kv get -format=json "secret/app/$p" | jq --arg p "$p" '{($p): .}'
+done | jq -s add > app.json
+```
+
+KV v2 output keeps each secret's version and time; KV v1 output works too. A secret whose latest version is deleted or destroyed has no data, so it's listed as not exported. The opened file is then like a plain export: it holds values, nothing is kept on the server, and import rules apply.
 
 ### Import
 
-1. **File:** open an export (or pick one already opened in the page).
+1. **File:** open an export or `vault kv get` output (or pick one already opened in the page).
 2. **Target:** the left or right side's Vault, mount and prefix. Exported paths are written under it.
 3. **Rules** (optional), applied in this order:
    - **Leave out** secrets and keys, as when exporting.
@@ -410,7 +536,7 @@ Each secret gets six columns. KV v2 keeps values and everything else under diffe
 | **Destroy** | `delete` on `<mount>/metadata/<path>`: every version and the metadata |
 | **History** | `read` on `<mount>/metadata/<path>`: versions and dates |
 
-✓ is allowed, · is not allowed (nothing grants it), ✗ is refused by a `deny` rule. Click a secret to see, for each column, the rule that decided it, with the policy and line it came from. When several rules match a path, Vault uses the most specific one. Its rules for that are subtle: for example, `data/payments/*` beats `data/+/dev/*` for `data/payments/dev/db`, because its first wildcard comes later in the path. Lockstep follows the same rules, and its tests check every answer against Vault's own (`sys/capabilities`). Vault 2.2.2 changed some details: exact rules ignore a trailing slash, a listing considers rules for both slash forms, and `deny` rules also match whatever the case. Lockstep reads each Vault's version and matches the way that version does, and the result says which rules it used.
+✓ is allowed, · is not allowed (nothing grants it), ✗ is refused by a `deny` rule. Click a secret to see, for each column, the rule that decided it, with the policy and line it came from. When several rules match a path, Vault uses the most specific one. Its rules for that are subtle: for example, `data/payments/*` beats `data/+/dev/*` for `data/payments/dev/db`, because its first wildcard comes later in the path. Lockstep follows the same rules, and its tests check every answer against Vault's own (`sys/capabilities`). Vault 2.2.2 changed some details: exact rules ignore a trailing slash, a listing considers rules for both slash forms, and `deny` rules also match whatever the case. OpenBao has rules of its own: it tries the path as written before the path without its trailing slash, and its `deny` rules match case as written. Lockstep reads which server it's talking to and its version, matches the way that server does, and the result says which rules it used. If it can't tell, it says so and assumes Vault 2.2.2 or later; **Try for real** in Build policies then asks the server itself.
 
 **Findings** point out mistakes and risky grants:
 - errors Vault would refuse, such as `+*` or an unknown capability;
@@ -574,7 +700,7 @@ The **Configuration** tab compares the two Vaults' setup, read-only:
   - type, plugin version (built-in plugins show as `builtin`, so a version upgrade isn't drift), tuning (default and max lease TTL, listing visibility, audit settings, passthrough headers) and options such as the KV version;
   - for auth methods, their configuration (for example a JWT method's issuer and discovery URL, or a Kubernetes method's host).
 
-  Open one to see the settings that differ. Fields that look sensitive (secrets, passwords, private keys) are left out even if Vault returns them, and identifiers that differ on every cluster (accessors, UUIDs) are ignored. **Built-in mounts** (`sys/`, `identity/`, `cubbyhole/`, `token/`) are hidden unless you ask.
+  Open one to see the settings that differ. Fields that hold secrets (passwords, bind passwords, client secrets, private keys, service account tokens) are never compared, shown or copied, even if Vault returns them: they're listed by name as "not compared". Settings whose names only sound secret, such as `password_policy`, `credential_type` or GCP's `secret_type`, are compared. A field Lockstep doesn't know whose name looks secret is hidden to be safe, and marked "the name looks secret". A `false` or `0` counts as a setting, except where it's the default (a mount that isn't `local`, a TTL of `0`). Identifiers that differ on every cluster (accessors, UUIDs) are ignored. **Built-in mounts** (`sys/`, `identity/`, `cubbyhole/`, `token/`) are hidden unless you ask.
 - **Engine roles and keys:** for secrets engines that both Vaults have at the same path with the same type, their roles and keys compared one by one:
   - PKI roles;
   - database connections (URL without any inline password), roles and static roles;
@@ -583,7 +709,17 @@ The **Configuration** tab compares the two Vaults' setup, read-only:
   - GCP rolesets, static accounts and impersonated accounts;
   - the LDAP secrets engine's dynamic roles, static roles and library sets.
 
-  For example, `transit/keys/app-key` is *Different* when only one side allows deletion. Values that change on their own (key versions, last rotation) are ignored. Fields only one server returns (Vault and OpenBao, or two versions, add different ones) are set aside and listed as "not compared" instead of counting as differences.
+  - generically, for engines Lockstep has no special handling for: TOTP keys (their settings, never the key), Consul, Nomad and RabbitMQ roles, Transform roles, transformations, templates and alphabets, and Terraform, KMIP, MongoDB Atlas, AliCloud and AD objects. For any other plugin, whatever it lists under `roles/`, `role/` or `keys/`. Each object's fields are compared, with the same handling of secret fields.
+
+  For example, `transit/keys/app-key` is *Different* when only one side allows deletion. Values that change on their own (key versions, last rotation) are ignored. Fields only one server returns (Vault and OpenBao, or two versions, add different ones) are set aside and listed as "not compared" instead of counting as differences. Up to 200 objects are read per list, and a list that was cut off is named above the results.
+- **System settings:** what lives outside the mounts, paired by name rather than by cluster-specific IDs:
+  - **audit devices**, with a warning when a Vault has none (its requests aren't logged);
+  - **password policies** (their rules, compared line by line), **token roles**, and **rate-limit and lease-count quotas** with the quota settings;
+  - **MFA methods**, by their name, and **login enforcements**, with the methods, auth methods, groups and entities they name;
+  - **registered plugins** (not built-in ones), with each version's SHA-256;
+  - **identity entities** that carry configuration: their policies, metadata and aliases (`userpass/alice`). An entity Vault created at sign-in is paired by its aliases, and one with no policies or metadata is left out: it's just someone who signed in. Identity groups are compared in **Policies**.
+
+  Reading them needs `sudo` on `sys/audit` and `sys/plugins/catalog` and `read` on the rest. What a sign-in can't read is listed under **missing rights**.
 
 **Copy to the other side:** open a row that differs and use **Copy tuning to …** (a mount's or auth method's TTLs, description, listing visibility and audit and header settings) or, for an engine role, **Copy to …**. It goes through the same review as policies (a diff against what's there, a conflict check, audit) and can be saved as an access plan for someone else to apply. What's copied:
 - roles of PKI, database (dynamic roles), SSH, Kubernetes, AWS, Azure and the LDAP secrets engine (dynamic roles), whole;

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://getlockstep.cloud/schemas/lockstep-export-v1.json",
   "title": "Lockstep secret-engine export",
-  "description": "A KV v2 secret engine exported by Lockstep, either as plain JSON with values or encrypted with a one-time key. Plain exports hold secret values.",
+  "description": "A KV v2 secret engine exported by Lockstep, either as plain JSON with values or encrypted with a one-time key, a passphrase or age public keys. Plain exports hold secret values.",
   "oneOf": [
     {
       "$ref": "#/$defs/ExportDoc"
@@ -272,6 +272,49 @@
       "title": "EncryptedSource",
       "type": "object"
     },
+    "Kdf": {
+      "additionalProperties": false,
+      "description": "How a passphrase becomes the key (RFC 9106 Argon2id).",
+      "properties": {
+        "name": {
+          "const": "argon2id",
+          "default": "argon2id",
+          "title": "Name",
+          "type": "string"
+        },
+        "salt": {
+          "description": "base64, 16 bytes",
+          "title": "Salt",
+          "type": "string"
+        },
+        "memory_kib": {
+          "maximum": 262144,
+          "minimum": 8192,
+          "title": "Memory Kib",
+          "type": "integer"
+        },
+        "iterations": {
+          "maximum": 10,
+          "minimum": 1,
+          "title": "Iterations",
+          "type": "integer"
+        },
+        "lanes": {
+          "maximum": 16,
+          "minimum": 1,
+          "title": "Lanes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "salt",
+        "memory_kib",
+        "iterations",
+        "lanes"
+      ],
+      "title": "Kdf",
+      "type": "object"
+    },
     "ExportDoc": {
       "additionalProperties": false,
       "description": "A secret-engine export with values. Treat it like the secrets themselves.",
@@ -336,7 +379,7 @@
     },
     "EncryptedExport": {
       "additionalProperties": false,
-      "description": "An encrypted export: open it with the one-time key shown when it was made.",
+      "description": "An encrypted export: open it with the one-time key shown when it was made, the\npassphrase it was made with, or an age identity for one of its recipients.",
       "properties": {
         "$schema": {
           "anyOf": [
@@ -357,8 +400,11 @@
           "type": "string"
         },
         "version": {
-          "const": 1,
           "default": 1,
+          "enum": [
+            1,
+            2
+          ],
           "title": "Version",
           "type": "integer"
         },
@@ -366,28 +412,65 @@
           "title": "Created At",
           "type": "string"
         },
+        "scheme": {
+          "default": "key",
+          "enum": [
+            "key",
+            "passphrase",
+            "age"
+          ],
+          "title": "Scheme",
+          "type": "string"
+        },
         "cipher": {
-          "const": "AES-256-GCM",
           "default": "AES-256-GCM",
+          "enum": [
+            "AES-256-GCM",
+            "age"
+          ],
           "title": "Cipher",
           "type": "string"
         },
         "compression": {
-          "const": "zlib",
           "default": "zlib",
+          "enum": [
+            "zlib",
+            "none"
+          ],
           "title": "Compression",
           "type": "string"
+        },
+        "kdf": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Kdf"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "scheme passphrase: how the key is derived"
+        },
+        "recipients": {
+          "description": "scheme age: the age public keys it's for",
+          "items": {
+            "type": "string"
+          },
+          "title": "Recipients",
+          "type": "array"
         },
         "source": {
           "$ref": "#/$defs/EncryptedSource"
         },
         "nonce": {
-          "description": "base64, 12 bytes",
+          "default": "",
+          "description": "base64, 12 bytes (not used by age)",
           "title": "Nonce",
           "type": "string"
         },
         "ciphertext": {
-          "description": "base64: the zlib-compressed export document, encrypted",
+          "description": "base64: the zlib-compressed export, encrypted; for age, an armored age file of the plain export",
           "title": "Ciphertext",
           "type": "string"
         }
@@ -395,7 +478,6 @@
       "required": [
         "created_at",
         "source",
-        "nonce",
         "ciphertext"
       ],
       "title": "Lockstep secret-engine export (encrypted)",

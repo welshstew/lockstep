@@ -7,7 +7,7 @@ import { FileLoader, FileSummary } from "./FileLoader";
 import { formatValue } from "./ValueCell";
 
 type VaultSide = { conn_id: string; mount: string; prefix: string };
-export interface SideOption { side: "left" | "right"; label: string; ref: VaultSide | null }
+export interface SideOption { side: "left" | "right"; label: string; ref: VaultSide | null; exportMode?: "any" | "encrypted" | "off" }
 
 interface Props {
   config: AppConfig;
@@ -80,16 +80,22 @@ function ExportPanel({ config, sides, profiles }: Props) {
   const [from, setFrom] = useState<"left" | "right">(usable[0]?.side ?? "left");
   const [paths, setPaths] = useState("");
   const [keys, setKeys] = useState<KeyRule[]>([]);
-  const [encrypt, setEncrypt] = useState(true);
+  const [protect, setProtect] = useState<"key" | "passphrase" | "age" | "none">("key");
+  const [pass, setPass] = useState("");
+  const [pass2, setPass2] = useState("");
+  const [teams, setTeams] = useState<string[]>([]);
+  const [ageKeys, setAgeKeys] = useState("");
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<ExportResult | null>(null);
   const [copied, setCopied] = useState(false);
   const source = usable.find((s) => s.side === from) ?? usable[0];
-  const mode = config.export_mode ?? "any";
+  const mode = source?.exportMode ?? config.export_mode ?? "encrypted";
+  const offEverywhere = usable.length > 0 ? usable.every((s) => (s.exportMode ?? config.export_mode) === "off") : config.export_mode === "off";
 
-  if (mode === "off") {
-    return <section className="card transfer-card"><h2>Export</h2><p className="subtle">Exporting is turned off on this server.</p></section>;
+  if (offEverywhere) {
+    return <section className="card transfer-card"><h2>Export</h2><p className="subtle">Exporting is turned off on this Lockstep server.</p></section>;
   }
 
   async function run() {
@@ -98,13 +104,19 @@ function ExportPanel({ config, sides, profiles }: Props) {
     setError(null);
     setDone(null);
     try {
-      const r = await api.exportCreate(source.ref, { ignore_paths: lines(paths), ignore_keys: keyRules(keys) }, encrypt || mode === "encrypted");
+      const how = mode === "encrypted" && protect === "none" ? "key" : protect;
+      setProgress(null);
+      const r = await api.exportStream(source.ref, { ignore_paths: lines(paths), ignore_keys: keyRules(keys) }, how !== "none",
+        how === "passphrase" ? { passphrase: pass } : how === "age" ? { teams, recipients: lines(ageKeys) } : {}, setProgress);
       download(r.filename, r.file);
       setDone(r);
+      setPass("");
+      setPass2("");
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setBusy(false);
+      setProgress(null);
     }
   }
 
@@ -135,20 +147,59 @@ function ExportPanel({ config, sides, profiles }: Props) {
             </label>
           )}
           <IgnoreInputs id="Export" paths={paths} keys={keys} onPaths={setPaths} onKeys={setKeys} />
-          <label className="inline-check">
-            <input type="checkbox" checked={encrypt || mode === "encrypted"} disabled={mode === "encrypted"}
-                   onChange={(e) => setEncrypt(e.target.checked)} />
-            Encrypt with a one-time key {mode === "encrypted" && <span className="subtle">(required by this server)</span>}
-          </label>
-          {!encrypt && mode !== "encrypted" && (
+          <fieldset className="field protect" disabled={mode === "off"}>
+            <legend>Protect the file with</legend>
+            {([["key", "A one-time key", "shown once after the export"],
+               ["passphrase", "A passphrase", "that you choose and share yourself"],
+               ["age", "age public keys", "whoever holds a matching age key opens it, in Lockstep or with age -d"],
+               ["none", "Nothing (plain text)", mode === "any" ? "" : "this Lockstep server requires encryption"]] as const).map(([v, l, hint]) => (
+              <label className="inline-check" key={v}>
+                <input type="radio" name="export-protect" value={v} checked={(mode === "encrypted" && protect === "none" ? "key" : protect) === v}
+                       disabled={v === "none" && mode !== "any"} onChange={() => setProtect(v)} />
+                {l} {hint && <span className="subtle">({hint})</span>}
+              </label>
+            ))}
+          </fieldset>
+          {protect === "passphrase" && (
+            <div className="row">
+              <label className="field grow"><span>Passphrase <span className="subtle">(at least 12 characters)</span></span>
+                <input type="password" value={pass} onChange={(e) => setPass(e.target.value)} autoComplete="new-password" aria-label="Passphrase" /></label>
+              <label className="field grow"><span>The same again</span>
+                <input type="password" value={pass2} onChange={(e) => setPass2(e.target.value)} autoComplete="new-password" aria-label="Passphrase again" /></label>
+            </div>
+          )}
+          {protect === "age" && (
+            <>
+              {(config.export_teams ?? []).length > 0 && (
+                <div className="field"><span>Teams</span>
+                  {(config.export_teams ?? []).map((t) => (
+                    <label className="inline-check" key={t.name}>
+                      <input type="checkbox" checked={teams.includes(t.name)}
+                             onChange={(e) => setTeams(e.target.checked ? [...teams, t.name] : teams.filter((n) => n !== t.name))} />
+                      {t.name} <span className="subtle">({t.keys} key{t.keys === 1 ? "" : "s"})</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+              <label className="field"><span>{(config.export_teams ?? []).length ? "More age public keys" : "age public keys"} <span className="subtle">(one per line, age1…)</span></span>
+                <textarea className="mono" rows={2} value={ageKeys} onChange={(e) => setAgeKeys(e.target.value)} aria-label="age public keys" placeholder="age1…" /></label>
+            </>
+          )}
+          {mode === "off" && <div className="notice info">Exporting from {source?.label} is turned off on this Lockstep server.</div>}
+          {protect === "none" && mode === "any" && (
             <div className="notice warn" role="alert">
               Without encryption the file holds every value in plain text. Anyone who gets the file can read them.
             </div>
           )}
           {error && <div className="notice error" role="alert">{error}</div>}
-          <div className="row"><button type="button" className="btn primary" disabled={busy || !source} onClick={run}>
+          <div className="row"><button type="button" className="btn primary" onClick={run}
+            disabled={busy || !source || mode === "off" || (protect === "passphrase" && (pass.length < 12 || pass !== pass2))
+                      || (protect === "age" && !teams.length && !lines(ageKeys).length)}>
             {busy && <span className="spinner" />} Export and download
-          </button></div>
+          </button>
+          {busy && progress && progress.total > 0 && (
+            <span className="subtle" role="status">Read {progress.done} of {progress.total} secrets…</span>
+          )}</div>
         </>
       )}
       {done && (
@@ -163,6 +214,10 @@ function ExportPanel({ config, sides, profiles }: Props) {
                               done.skipped.denied_folders.length && `folders you can't list (${done.skipped.denied_folders.join(", ")})`,
                               done.skipped.truncated && "secrets beyond the listing limit"].filter(Boolean).join("; ")}.
             </div>
+          )}
+          {done.scheme === "passphrase" && <div className="subtle">Encrypted with your passphrase. Share it apart from the file.</div>}
+          {done.scheme === "age" && (
+            <div className="subtle">Encrypted to {(done.file.recipients as string[] | undefined)?.length ?? 0} age key(s). Their holders open it in Lockstep, or with <code>jq -r .ciphertext {done.filename} | age -d -i key.txt</code>.</div>
           )}
           {done.key && (
             <div className="key-box">
@@ -382,7 +437,7 @@ function ImportPanel({ reveal, files, onFile, sides }: Props) {
             {applied.results.map((r) => (
               <li key={r.path} className="plan"><div className="plan-head"><span className="mono">{r.target}</span>
                 <span className={`badge ${r.status === "applied" ? "equal" : r.status === "noop" ? "unknown" : r.status === "conflict" ? "different" : "error"}`}>
-                  {r.action === "delete" && r.status === "applied" ? "Deleted" : { applied: "Written", noop: "No change", conflict: "Conflict: not written", denied: "Denied", invalid: "Skipped", error: "Failed" }[r.status]}
+                  {r.action === "delete" && r.status === "applied" ? "Deleted" : { applied: "Written", noop: "No change", conflict: "Conflict: not written", denied: "Denied", invalid: "Skipped", error: "Failed", skipped: "Not attempted" }[r.status]}
                 </span></div>
                 <div className="subtle">{r.status !== "applied" ? r.message : r.action === "delete" ? `v${r.old_version} deleted` : `v${r.old_version ?? "—"} → v${r.new_version} · ${r.keys.join(", ")}`}</div></li>
             ))}

@@ -2,9 +2,19 @@
 # can't clash. Everything talks over the compose network; the e2e browser maps
 # localhost/dex.localhost to the services itself.
 #   docker compose -f compose.yaml -f compose.ci.yaml -p lockstep-ci-<run> ...
+#
+# Built images get fixed names, so each build replaces the last one instead of leaving an
+# image per run (compose would name them <project>-<service>, and the project name carries the
+# run ID). pull_policy: build makes every `up` and `run` build from this checkout (cached
+# layers make that quick), so a run never starts a container from another run's image.
+x-ci-image: &ci {pull_policy: build}
 services:
   vault-a: {ports: !reset []}
   vault-b: {ports: !reset []}
   openbao: {ports: !reset []}
-  dex: {ports: !reset []}
-  app: {ports: !reset []}
+  dex: {<<: *ci, image: lockstep-ci/dex:ci, ports: !reset []}
+  app: {<<: *ci, image: lockstep-ci/app:ci, ports: !reset []}
+  seed: {<<: *ci, image: lockstep-ci/seed:ci}
+  k8s-vault: {<<: *ci, image: lockstep-ci/seed:ci}
+  tests: {<<: *ci, image: lockstep-ci/tests:ci}
+  e2e: {<<: *ci, image: lockstep-ci/e2e:ci}

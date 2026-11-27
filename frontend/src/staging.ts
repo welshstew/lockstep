@@ -26,7 +26,7 @@ export function canCopyKey(s: SecretDiff, k: KeyDiff, d: Direction): boolean {
   if (s.status === "no_access" || s.status === "error") return false;
   const src = d === "left_to_right" ? s.left : s.right;
   if (src.state !== "present") return false;
-  return k.status === "different" || k.status === (d === "left_to_right" ? "left_only" : "right_only");
+  return k.status === "different" || k.status === "not_compared" || k.status === (d === "left_to_right" ? "left_only" : "right_only");
 }
 
 /** Can the whole secret be copied in this direction? */

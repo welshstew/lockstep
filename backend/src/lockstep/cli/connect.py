@@ -6,7 +6,8 @@ Per side (left/right), first match wins:
   token      LOCKSTEP_LEFT_TOKEN, --left-token-file, VAULT_TOKEN, ~/.vault-token
              (or --left-auth userpass/ldap: logs in and prompts for the password, or reads
              LOCKSTEP_LEFT_PASSWORD; or --left-auth jwt: logs in with the JWT in
-             LOCKSTEP_LEFT_JWT or --left-jwt-file, e.g. a CI job's OIDC token, and --left-role.
+             LOCKSTEP_LEFT_JWT or --left-jwt-file, e.g. a CI job's OIDC token, and --left-role;
+             or --left-auth kubernetes: the same with the pod's service account token, auth/kubernetes.
              A token from a login is revoked when the command ends)
 TLS follows the vault CLI too: VAULT_CACERT / --ca-cert, VAULT_SKIP_VERIFY / --tls-skip-verify.
 
@@ -32,7 +33,8 @@ from ..session import Connection
 from ..vault import VaultClient, VaultError
 
 SIDES = ("left", "right")
-AUTH_METHODS = ("token", "userpass", "ldap", "jwt")
+AUTH_METHODS = ("token", "userpass", "ldap", "jwt", "kubernetes")
+K8S_TOKEN = "/var/run/secrets/kubernetes.io/serviceaccount/token"
 
 
 class CliError(Exception):
@@ -75,7 +77,7 @@ def add_side_args(p: argparse.ArgumentParser, which: str, *, locations: bool) ->
                                                                  f"(after ${env(which, 'TOKEN')})")
     g.add_argument(f"--{which}-jwt-file", metavar="FILE", help=f"jwt login: read the JWT from this file "
                                                                f"(after ${env(which, 'JWT')})")
-    g.add_argument(f"--{which}-role", metavar="ROLE", help="jwt login: Vault role (default: the mount's default_role)")
+    g.add_argument(f"--{which}-role", metavar="ROLE", help="jwt or kubernetes login: Vault role (jwt default: the mount's default_role)")
 
 
 def env(which: str, name: str) -> str:
@@ -168,9 +170,10 @@ def _read_token(t: Target) -> str:
 def _read_jwt(t: Target) -> str:
     if jwt := os.environ.get(env(t.which, "JWT")):
         return jwt.strip()
-    if t.jwt_file:
+    path = t.jwt_file or (K8S_TOKEN if t.auth == "kubernetes" else None)
+    if path:
         try:
-            return Path(t.jwt_file).expanduser().read_text().strip()
+            return Path(path).expanduser().read_text().strip()
         except OSError as e:
             raise CliError(f"Can't read the {t.which} JWT file: {e}") from e
     raise CliError(f"No JWT for the {t.which} side: set {env(t.which, 'JWT')} or use --{t.which}-jwt-file.")
@@ -191,12 +194,14 @@ async def connect(t: Target, settings: Settings, name: str) -> Connection:
         minted = False
         if t.auth == "token":
             token = _read_token(t)
-        elif t.auth == "jwt":
-            mount = t.auth_mount or "jwt"
-            try:
+        elif t.auth in ("jwt", "kubernetes"):
+            mount = t.auth_mount or t.auth
+            if t.auth == "kubernetes" and not t.role:
+                raise CliError(f"--{t.which}-role is required for kubernetes login.")
+            try:  # kubernetes auth takes the same {jwt, role} login as jwt auth
                 token = await _second_factor(anon, t, await anon.login_jwt(_read_jwt(t), t.role, mount=mount))
             except VaultError as e:
-                raise CliError(f"jwt login to {t.addr} (auth/{mount}) failed: {e.message}") from e
+                raise CliError(f"{t.auth} login to {t.addr} (auth/{mount}) failed: {e.message}") from e
             minted = True
         else:
             if not t.user:
@@ -216,7 +221,8 @@ async def connect(t: Target, settings: Settings, name: str) -> Connection:
                 raise CliError(f"Can't reach the {t.which} Vault: {e.message}") from e
             raise CliError(f"The {t.which} Vault ({t.addr}) rejected the token: {e.message}") from e
     return connection_from_token(token=token, info=info, url=t.addr, namespace=t.namespace, name=name,
-                                 preset_id=None, method=t.auth, minted=minted)
+                                 preset_id=None, method=t.auth, minted=minted,
+                                 custom=False)  # the CLI runs as its user: any address
 
 
 async def _second_factor(anon: VaultClient, t: Target, auth: dict) -> str:

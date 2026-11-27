@@ -25,6 +25,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Remove what cancelled runs left behind
+        run: ./scripts/ci-cleanup.sh
+
       - name: Which Vault
         id: v
         env:

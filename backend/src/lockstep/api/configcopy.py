@@ -27,7 +27,7 @@ from ..config import Settings, get_settings
 from ..session import SessionData, load_session
 from ..vault import VaultClient, VaultError, _q
 from .connections import client_for, get_connection, vault_http_error
-from .vaultconfig import SENSITIVE
+from .vaultconfig import sensitive
 
 router = APIRouter(prefix="/api/config", tags=["config"])
 
@@ -73,7 +73,7 @@ class EngineObjectChange(BaseModel):
     @model_validator(mode="after")
     def _check(self):
         self.mount = self.mount.strip("/")
-        if any(SENSITIVE.search(k) for k in self.body):
+        if any(sensitive(k) for k in self.body):
             raise ValueError("secret fields can't be copied")
         if self.kind == "keys" and set(self.body) - set(TRANSIT_FIELDS):
             raise ValueError(f"only {', '.join(TRANSIT_FIELDS)} can be copied for a Transit key")
@@ -123,7 +123,7 @@ async def mount_types(v: VaultClient) -> dict[str, str]:
 
 
 def _clean_role(d: dict) -> dict:
-    return {k: x for k, x in d.items() if k not in READ_ONLY and not SENSITIVE.search(k) and x is not None}
+    return {k: x for k, x in d.items() if k not in READ_ONLY and not sensitive(k) and x is not None}
 
 
 class CopyRequest(BaseModel):

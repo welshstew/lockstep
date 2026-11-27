@@ -28,6 +28,7 @@ from ..session import SessionData, load_session
 from ..vault import VaultError
 from .connections import client_for, get_connection, vault_http_error
 from .guard import require_writable
+from .. import writepolicy
 from .policies import MAX_TEXT, ExplainError, PastedPolicy, _from_vault, run_explain
 
 router = APIRouter(prefix="/api/policies", tags=["policies"])
@@ -61,6 +62,7 @@ async def try_policy(body: TryRequest, session: Sess, settings: Conf):
         raise HTTPException(400, detail={"message": f"The draft can't be parsed: {e}"}) from e
     conn = get_connection(session, body.conn_id)
     temp = f"lockstep-try-{secrets.token_hex(4)}"
+    writepolicy.check(settings, conn, f"sys/policies/acl/{temp}", event="policy.try")
     async with client_for(conn, settings) as v:
         try:
             # Lockstep's prediction, from the policy texts
@@ -105,7 +107,7 @@ async def try_policy(body: TryRequest, session: Sess, settings: Conf):
     disagree = [{"path": p, "column": c, "predicted": guess[(p, c)], "vault": ok}
                 for (p, c), ok in sorted(actual.items()) if (p, c) in guess and guess[(p, c)] != ok]
     audit.info(json.dumps({"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "event": "policy.try",
-                           "outcome": "applied", "actor": {"identity": conn.display_name, "auth": conn.auth_method},
+                           "outcome": "applied", "actor": {"identity": conn.display_name, "auth": conn.auth_method, "entity_id": conn.entity_id, "accessor": conn.accessor},
                            "target": {"vault": conn.name, "url": conn.url, "mount": predicted["mount"]},
                            "temporary_policy": temp, "token_accessor": accessor}, sort_keys=True))
     return {**predicted, "mode": "vault", "complete": True, "temporary_policy": temp, "disagreements": disagree,
